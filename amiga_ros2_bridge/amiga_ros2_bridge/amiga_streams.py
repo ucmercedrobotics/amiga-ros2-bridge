@@ -31,7 +31,7 @@ from farm_ng.core.events_file_reader import proto_from_json_file
 from .farmng_ros_pipelines import create_ros_publisher
 
 
-async def run(service_config: Path) -> None:
+async def run(node, service_config: Path) -> None:
     # config with all the configs
     config_list: EventServiceConfigList = proto_from_json_file(
         service_config, EventServiceConfigList()
@@ -53,7 +53,7 @@ async def run(service_config: Path) -> None:
     for subscription in subscriptions:
         service_name = subscription.uri.query.split("=")[-1]
         service_tasks = asyncio.create_task(
-            create_ros_publisher(clients[service_name], subscription)
+            create_ros_publisher(node, clients[service_name], subscription)
         )
         tasks.append(service_tasks)
 
@@ -68,24 +68,17 @@ def main(args=None):
 
     # HACK: Force the config we know is there
     service_config = (
-        Path(__file__).resolve().parent.parent / "include" / "service_config.json"
+        Path("/amiga_ros2_bridge/install/amiga_ros2_bridge/share/amiga_ros2_bridge/include/service_config.json")
     )
 
-    try:
-        # start the ros node
-        loop = asyncio.get_event_loop()
-        rclpy.init(args=args)
-        #initialize node, name of node 
-        node = Node("amiga_streams_node")
-        #node = rclpy.create_node("amiga_streams_node")
-        node.get_logger().info("amiga_streams_node started!")
-        loop.run_until_complete(run(service_config))
-
-    except:
-        node.get_logger().info("failed!")
-
-    finally:
-        rclpy.shutdown() #shutdown ros2 comm dima mawjouda 
+    # start the ros node
+    loop = asyncio.get_event_loop()
+    rclpy.init(args=args)
+    #initialize node, name of node 
+    node = Node("amiga_streams_node")
+    #node = rclpy.create_node("amiga_streams_node")
+    node.get_logger().info("amiga_streams_node started!")
+    loop.run_until_complete(run(node, service_config))
 
 
 if __name__== "__main__": 
