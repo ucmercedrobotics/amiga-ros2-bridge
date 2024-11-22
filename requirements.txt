@@ -1,0 +1,8 @@
+numpy
+opencv-python
+pyyaml
+rospkg
+protobuf==5.27.2
+# NOTE: I added these because I can't build from source, but these work...
+farm-ng-amiga
+farm-ng-core

@@ -1,8 +1,8 @@
 network:
 	docker network create ros
 
-build:
-	docker build -t noetic .
+build-image:
+	docker build --build-arg UID=$(shell id -u) --build-arg GID=$(shell id -g) . -t humble --target base
 
 vnc:
 	docker run -d --rm --net=ros \
@@ -12,5 +12,17 @@ vnc:
 	--name=novnc -p=8080:8080 \
 	theasp/novnc:latest
 
-ros-bridge:
-	docker run -it --net=ros -v ~/.ssh:/root/.ssh:ro noetic bash
+bash:
+	docker run -it --rm \
+	--net=ros \
+	--user $(shell id -u):$(shell id -g) \
+	-v ./amiga_ros2_bridge:/amiga_ros2_bridge/amiga_ros2_bridge:Z \
+	-v ./Makefile:/amiga_ros2_bridge/Makefile:Z \
+	-v ~/.ssh:/home/appuser/.ssh:ro \
+	humble bash
+
+clean: 
+	rm -rf build/ install/ log/
+
+amiga-streams:
+	ros2 launch amiga_ros2_bridge amiga_streams.launch.py

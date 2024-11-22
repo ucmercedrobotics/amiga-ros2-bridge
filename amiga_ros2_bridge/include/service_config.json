@@ -1,0 +1,64 @@
+{
+    "configs": [
+        {
+            "name": "canbus",
+            "port": 6001,
+            "host": "localhost"
+        },
+        {
+            "name": "gps",
+            "port": 3001,
+            "host": "localhost"
+        },
+        {
+            "name": "oak0",
+            "port": 50010,
+            "host": "localhost"
+        },
+        {
+            "name": "filter",
+            "port": 20001,
+            "host": "localhost"
+        },
+        {
+            "name": "amiga_subscriptions",
+            "subscriptions": [
+                {
+                    "uri": {
+                        "path": "/twist",
+                        "query": "service_name=canbus"
+                    },
+                    "every_n": 1
+                },
+                {
+                    "uri": {
+                        "path": "/state",
+                        "query": "service_name=filter"
+                    },
+                    "every_n": 1
+                },
+                {
+                    "uri": {
+                        "path": "/pvt",
+                        "query": "service_name=gps"
+                    },
+                    "every_n": 1
+                },
+                {
+                    "uri": {
+                        "path": "/imu",
+                        "query": "service_name=oak0"
+                    },
+                    "every_n": 1
+                },
+                {
+                    "uri": {
+                        "path": "/left",
+                        "query": "service_name=oak0"
+                    },
+                    "every_n": 1
+                }
+            ]
+        }
+    ]
+}

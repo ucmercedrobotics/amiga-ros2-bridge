@@ -1,18 +1,27 @@
-FROM osrf/ros:noetic-desktop-full AS base
+FROM osrf/ros:humble-desktop-full AS base 
+# TODO: downgrade this image in production
 
+ARG UID
+ARG GID
+
+# any utilities you want
 RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat
 
-RUN mkdir -p /root/catkin_ws/src
-RUN git clone --recursive https://github.com/farm-ng/amiga-ros-bridge.git /root/catkin_ws/src/amiga-ros-bridge
+WORKDIR /amiga_ros2_bridge
 
+COPY amiga_ros2_bridge /amiga_ros2_bridge/amiga_ros2_bridge
+COPY requirements.txt /amiga_ros2_bridge/requirements.txt
+
+RUN pip install -r requirements.txt
+
+# configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0
 
-RUN /bin/bash -c "cd /root/catkin_ws && \
-                    source /opt/ros/noetic/setup.bash && catkin_make && \
-                    ./src/amiga-ros-bridge/setup_venv.sh"
+# # # build artifacts to run by default
+RUN /bin/bash -c "cd /amiga_ros2_bridge && \
+                    colcon build"
 
-WORKDIR /root/catkin_ws
+RUN adduser -u ${UID} --disabled-password --gecos "" appuser && chown -R appuser /amiga_ros2_bridge
+USER appuser
 
-RUN echo "export DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"" >> /root/.bashrc
-RUN echo "source \$DIR/src/amiga-ros-bridge/source_venv.sh >> devel/setup.bash" >> /root/.bashrc
-RUN echo "source /root/catkin_ws/devel/setup.bash" >> /root/.bashrc
+RUN echo "source /amiga_ros2_bridge/install/setup.bash" >> /home/appuser/.bashrc
