@@ -8,7 +8,7 @@ make network
 
 After, build your ROS1 container:
 ```bash
-make build
+make build-image
 ```
 
 Next, standup the VNC container to forward X11 to your web browser. You can see this at `localhost:8080`.
