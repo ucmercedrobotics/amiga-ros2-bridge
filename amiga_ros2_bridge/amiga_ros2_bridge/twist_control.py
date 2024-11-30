@@ -14,6 +14,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+from rclpy.qos import QoSProfile
 
 
 import asyncio
@@ -29,7 +30,7 @@ from farm_ng.core.event_client import EventClient
 from farm_ng.core.event_service_pb2 import EventServiceConfigList
 from farm_ng.core.event_service_pb2 import SubscribeRequest
 from farm_ng.core.events_file_reader import proto_from_json_file
-from farmng_ros_pipelines import create_ros_publisher
+from .farmng_ros_pipelines import create_ros_publisher
 from geometry_msgs.msg import TwistStamped
 
 
@@ -78,11 +79,16 @@ async def run(service_config: Path) -> None:
         #lambda data: cmd_vel_callback(data, clients.get("canbus"), queue),
     #)
 
+    #queue_size=10 is invalid in ros2, replace with QoSProfile(depth=10)
+    qos_profile = QoSProfile(
+    depth=10  
+    )
     #ROS2 subscriber 
     node.create_subscription(
         TwistStamped,
         "/amiga/cmd_vel",
         lambda data: cmd_vel_callback(data, clients.get("canbus"), queue),
+    qos_profile=qos_profile
     )
 
     # create a publisher for the /canbus/twist stream
@@ -99,7 +105,7 @@ async def run(service_config: Path) -> None:
             tasks.append(
                 asyncio.create_task(
                     create_ros_publisher(
-                        clients[service_name], subscription, publish_topic="/amiga/vel"
+                        node, clients[service_name], subscription, publish_topic="/amiga/vel"
                     )
                 )
             )
@@ -121,23 +127,16 @@ def main(args=None):
         Path(__file__).resolve().parent.parent / "include" / "service_config.json"
     )
 
-    try:
-        # start the ros node
-        loop = asyncio.get_event_loop()
-        rclpy.init(args=args)
-        #initialize node, name of node 
-        node = Node("twist_control_node")
-        #node = rclpy.create_node("amiga_twist_control")
-        node.get_logger().info("amiga_twist_control started!")
-        loop.run_until_complete(run(service_config))
+    # start the ros node
+    loop = asyncio.get_event_loop()
+    rclpy.init(args=args)
+    #initialize node, name of node 
+    node = Node("twist_control_node")
+    #node = rclpy.create_node("amiga_twist_control")
+    node.get_logger().info("amiga_twist_control started!")
+    loop.run_until_complete(run(service_config))
+    rclpy.shutdown() #shutdown ros2 comm dima mawjouda 
 
-        
-
-    except rclpy.ROSInterruptException:
-        node.get_logger().info("failed!")
-
-    finally:
-        rclpy.shutdown() #shutdown ros2 comm dima mawjouda 
 
 
     if __name__== "__main__": 

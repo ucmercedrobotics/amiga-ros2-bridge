@@ -24,6 +24,9 @@ from farm_ng.core.event_service_pb2 import SubscribeRequest
 from .farmng_ros_conversions import farmng_path_to_ros_type
 from .farmng_ros_conversions import farmng_to_ros_msg
 
+from rclpy.qos import QoSProfile
+
+
 # public symbols
 __all__ = [
     "create_ros_publisher",
@@ -51,7 +54,8 @@ async def create_ros_publisher(
 
     ros_msg_type = farmng_path_to_ros_type(subscribe_request.uri)
     #swapping the args in publisher 
-    ros_publisher = node.create_publisher(ros_msg_type, topic, queue_size=10)
+    #queue_size=10 is invalid in ros2, replace with QoSProfile(depth=10)
+    ros_publisher = node.create_publisher(ros_msg_type, topic, QoSProfile(depth=10))
 
     async for event, message in client.subscribe(subscribe_request, decode=True):
         # print(f"Got reply: {message}")

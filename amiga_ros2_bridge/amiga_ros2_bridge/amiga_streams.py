@@ -79,6 +79,7 @@ def main(args=None):
     #node = rclpy.create_node("amiga_streams_node")
     node.get_logger().info("amiga_streams_node started!")
     loop.run_until_complete(run(node, service_config))
+    rclpy.shutdown()
 
 
 if __name__== "__main__": 
