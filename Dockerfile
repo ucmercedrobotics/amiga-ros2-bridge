@@ -24,4 +24,5 @@ RUN /bin/bash -c "cd /amiga_ros2_bridge && \
 RUN adduser -u ${UID} --disabled-password --gecos "" appuser && chown -R appuser /amiga_ros2_bridge
 USER appuser
 
+RUN echo "source /opt/ros/humble/setup.bash" >> /home/appuser/.bashrc
 RUN echo "source /amiga_ros2_bridge/install/setup.bash" >> /home/appuser/.bashrc

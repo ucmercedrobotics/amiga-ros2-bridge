@@ -68,7 +68,11 @@ def main(args=None):
 
     # HACK: Force the config we know is there
     service_config = (
+<<<<<<< HEAD
         Path("/amiga_ros2_bridge/install/amiga_ros2_bridge/share/amiga_ros2_bridge/include/service_config.json")
+=======
+        Path("/amiga_ros2_bridge/amiga_ros2_bridge/include/service_config.json")
+>>>>>>> b48cb1a (removing duplicate node in twist)
     )
 
     # start the ros node

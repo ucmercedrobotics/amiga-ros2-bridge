@@ -55,7 +55,7 @@ async def command_task(client: EventClient, queue: asyncio.Queue) -> None:
         await client.request_reply("/twist", twist)
 
 
-async def run(service_config: Path) -> None:
+async def run(node, service_config: Path) -> None:
     # config with all the configs
     config_list: EventServiceConfigList = proto_from_json_file(
         service_config, EventServiceConfigList()
@@ -124,7 +124,7 @@ def main(args=None):
 
     # HACK: Force the config we know is there
     service_config = (
-        Path("/home/fritta013/ros2_ws/install/amiga_ros2_bridge/share/amiga_ros2_bridge/include/service_config.json")
+        Path("/amiga_ros2_bridge/amiga_ros2_bridge/include/service_config.json")
     )
 
     # start the ros node
@@ -134,7 +134,7 @@ def main(args=None):
     node = Node("twist_control_node")
     #node = rclpy.create_node("amiga_twist_control")
     node.get_logger().info("amiga_twist_control started!")
-    loop.run_until_complete(run(service_config))
+    loop.run_until_complete(run(node, service_config))
     rclpy.shutdown() #shutdown ros2 comm dima mawjouda 
 
 

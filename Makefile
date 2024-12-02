@@ -26,3 +26,6 @@ clean:
 
 amiga-streams:
 	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
+
+twist:
+	ros2 launch amiga_ros2_bridge twist_control.launch.py
