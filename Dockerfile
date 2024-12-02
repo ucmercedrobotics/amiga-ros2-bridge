@@ -1,5 +1,14 @@
+FROM python:3.10.12 AS builder
+COPY requirements.txt /requirements.txt
+
+RUN pip install -r requirements.txt
+
 FROM osrf/ros:humble-desktop-full AS base 
 # TODO: downgrade this image in production
+
+# copy over all python files from builder stage
+# TODO: figure out why Farm-NG libs don't go to /usr/local
+# COPY --from=builder /usr/local /usr/local
 
 ARG UID
 ARG GID
@@ -7,12 +16,13 @@ ARG GID
 # any utilities you want
 RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat
 
+# TODO: remove once you figure out why farm-ng isn't in /usr/local
+COPY requirements.txt /amiga_ros2_bridge/requirements.txt
+RUN pip install -r /amiga_ros2_bridge/requirements.txt
+
 WORKDIR /amiga_ros2_bridge
 
 COPY amiga_ros2_bridge /amiga_ros2_bridge/amiga_ros2_bridge
-COPY requirements.txt /amiga_ros2_bridge/requirements.txt
-
-RUN pip install -r requirements.txt
 
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0

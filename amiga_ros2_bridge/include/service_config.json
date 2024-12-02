@@ -3,22 +3,22 @@
         {
             "name": "canbus",
             "port": 6001,
-            "host": "localhost"
+            "host": "100.100.101.105"
         },
         {
             "name": "gps",
             "port": 3001,
-            "host": "localhost"
+            "host": "100.100.101.105"
         },
         {
             "name": "oak0",
             "port": 50010,
-            "host": "localhost"
+            "host": "100.100.101.105"
         },
         {
             "name": "filter",
             "port": 20001,
-            "host": "localhost"
+            "host": "100.100.101.105"
         },
         {
             "name": "amiga_subscriptions",
