@@ -124,7 +124,7 @@ def main(args=None):
 
     # HACK: Force the config we know is there
     service_config = (
-        Path(__file__).resolve().parent.parent / "include" / "service_config.json"
+        Path("/home/fritta013/ros2_ws/install/amiga_ros2_bridge/share/amiga_ros2_bridge/include/service_config.json")
     )
 
     # start the ros node
