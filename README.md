@@ -1,3 +1,26 @@
+Topics published by amigra_streams node: 
+
+/canbus/twist
+
+/filter/state
+
+/gps/pvt
+
+/oak0/imu
+
+/oak0/left
+
+
+Topics published by twist_control node: 
+
+/amiga/cmd_vel
+
+/amiga/vel
+
+
+important: change the path to service_config.json in amiga_streams node to your local path. 
+
+
 To setup the environment, you'll be working in Docker on your local machine. In theory, this should also work on the Amiga, but I haven't tested it yet.
 It will communicate to the Amiga via Tailscale using gRPC.
 
