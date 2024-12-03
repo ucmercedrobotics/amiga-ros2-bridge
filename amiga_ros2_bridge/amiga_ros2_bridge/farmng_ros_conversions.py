@@ -14,13 +14,12 @@
 from __future__ import annotations
 
 
-
 import numpy as np
 import logging
 
-#added libraries for ros2
+# added libraries for ros2
 import rclpy
-from rclpy.node import Node 
+from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 
 from farm_ng.canbus.canbus_pb2 import Twist2d
@@ -75,7 +74,7 @@ def farmng_stamp_to_ros_time(event: Event) -> rclpy.time.Time:
         raise ValueError(
             f"Could not find appropriate timestamp for event with path: {event.uri.path}"
         )
-    
+
     return rclpy.time.Time(seconds=stamp)
 
 
