@@ -18,9 +18,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-#added libraries for ros2
+# added libraries for ros2
 import rclpy
-from rclpy.node import Node 
+from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 
 
@@ -60,28 +60,27 @@ async def run(node, service_config: Path) -> None:
     await asyncio.gather(*tasks)
 
 
-def main(args=None): 
+def main(args=None):
     # TODO: Get the arg as required from the roslaunch file
     # parser = argparse.ArgumentParser(description='Amiga ROS Bridge')
     # parser.add_argument('--service-config', type=Path, required=True, help='Path to config file')
     # args = parser.parse_args()
 
     # HACK: Force the config we know is there
-    service_config = (
-        Path("/amiga_ros2_bridge/install/amiga_ros2_bridge/share/amiga_ros2_bridge/include/service_config.json")
+    service_config = Path(
+        "/amiga_ros2_bridge/amiga_ros2_bridge/include/service_config.json"
     )
 
     # start the ros node
     loop = asyncio.get_event_loop()
     rclpy.init(args=args)
-    #initialize node, name of node 
+    # initialize node, name of node
     node = Node("amiga_streams_node")
-    #node = rclpy.create_node("amiga_streams_node")
+    # node = rclpy.create_node("amiga_streams_node")
     node.get_logger().info("amiga_streams_node started!")
     loop.run_until_complete(run(node, service_config))
+    rclpy.shutdown()
 
 
-if __name__== "__main__": 
+if __name__ == "__main__":
     main()
-
-    

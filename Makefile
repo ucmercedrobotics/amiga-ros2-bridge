@@ -1,3 +1,7 @@
+repo-init:
+	python3 -m pip install pre-commit && \
+	pre-commit install
+
 network:
 	docker network create ros
 
@@ -14,15 +18,18 @@ vnc:
 
 bash:
 	docker run -it --rm \
-	--net=ros \
+	--net=host \
 	--user $(shell id -u):$(shell id -g) \
 	-v ./amiga_ros2_bridge:/amiga_ros2_bridge/amiga_ros2_bridge:Z \
 	-v ./Makefile:/amiga_ros2_bridge/Makefile:Z \
 	-v ~/.ssh:/home/appuser/.ssh:ro \
 	humble bash
 
-clean: 
+clean:
 	rm -rf build/ install/ log/
 
 amiga-streams:
 	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
+
+twist:
+	ros2 launch amiga_ros2_bridge twist_control.launch.py

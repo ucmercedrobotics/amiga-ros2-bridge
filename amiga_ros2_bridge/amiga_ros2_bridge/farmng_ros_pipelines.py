@@ -14,9 +14,9 @@
 from __future__ import annotations
 
 
-#added libraries for ros2
+# added libraries for ros2
 import rclpy
-from rclpy.node import Node 
+from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 
 from farm_ng.core.event_client import EventClient
@@ -24,14 +24,20 @@ from farm_ng.core.event_service_pb2 import SubscribeRequest
 from .farmng_ros_conversions import farmng_path_to_ros_type
 from .farmng_ros_conversions import farmng_to_ros_msg
 
+from rclpy.qos import QoSProfile
+
+
 # public symbols
 __all__ = [
     "create_ros_publisher",
 ]
 
 
-async def create_ros_publisher( 
-    node : Node, client: EventClient, subscribe_request: SubscribeRequest, publish_topic: str = ""
+async def create_ros_publisher(
+    node: Node,
+    client: EventClient,
+    subscribe_request: SubscribeRequest,
+    publish_topic: str = "",
 ):
     """Create a ROS publisher for a given gRPC EventClient subscribe request.
 
@@ -50,8 +56,9 @@ async def create_ros_publisher(
     )
 
     ros_msg_type = farmng_path_to_ros_type(subscribe_request.uri)
-    #swapping the args in publisher 
-    ros_publisher = node.create_publisher(ros_msg_type, topic, queue_size=10)
+    # swapping the args in publisher
+    # queue_size=10 is invalid in ros2, replace with QoSProfile(depth=10)
+    ros_publisher = node.create_publisher(ros_msg_type, topic, QoSProfile(depth=10))
 
     async for event, message in client.subscribe(subscribe_request, decode=True):
         # print(f"Got reply: {message}")
