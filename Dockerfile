@@ -5,29 +5,35 @@ FROM osrf/ros:humble-desktop-full AS base
 # TODO: figure out why Farm-NG libs don't go to /usr/local
 # COPY --from=builder /usr/local /usr/local
 
-ARG UID
-ARG GID
-
 # any utilities you want
-RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat
-
-WORKDIR /amiga_ros2_bridge
+RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat build-essential cmake
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
-COPY requirements.txt /amiga_ros2_bridge/requirements.txt
-RUN pip install -r /amiga_ros2_bridge/requirements.txt
+COPY requirements.txt /requirements.txt
+RUN pip install -r /requirements.txt
+
+RUN git clone https://github.com/farm-ng/farm-ng-core.git && \
+    cd farm-ng-core && \
+    git checkout lock_req_versions && \
+    git submodule update --init --recursive && \
+    pip install . && \
+    cd .. && \
+    git clone https://github.com/farm-ng/farm-ng-amiga.git && \
+    cd farm-ng-amiga && \
+    git checkout lock_req_versions && \
+    pip install .
+
+
+WORKDIR /amiga_ros2_bridge
 
 COPY amiga_ros2_bridge /amiga_ros2_bridge/amiga_ros2_bridge
 
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0
 
-# # # build artifacts to run by default
+# build artifacts to run by default
 RUN /bin/bash -c "cd /amiga_ros2_bridge && \
                     colcon build"
 
-RUN adduser -u ${UID} --disabled-password --gecos "" appuser && chown -R appuser /amiga_ros2_bridge
-USER appuser
-
-RUN echo "source /opt/ros/humble/setup.bash" >> /home/appuser/.bashrc
-RUN echo "source /amiga_ros2_bridge/install/setup.bash" >> /home/appuser/.bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
+RUN echo "source /amiga_ros2_bridge/install/setup.bash" >> /root/.bashrc

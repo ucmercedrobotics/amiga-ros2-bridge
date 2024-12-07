@@ -6,7 +6,7 @@ network:
 	docker network create ros
 
 build-image:
-	docker build --build-arg UID=$(shell id -u) --build-arg GID=$(shell id -g) . -t humble --target base
+	docker build . -t humble --target base
 
 vnc:
 	docker run -d --rm --net=ros \
@@ -19,10 +19,9 @@ vnc:
 bash:
 	docker run -it --rm \
 	--net=host \
-	--user $(shell id -u):$(shell id -g) \
 	-v ./amiga_ros2_bridge:/amiga_ros2_bridge/amiga_ros2_bridge:Z \
 	-v ./Makefile:/amiga_ros2_bridge/Makefile:Z \
-	-v ~/.ssh:/home/appuser/.ssh:ro \
+	-v ~/.ssh:/root/.ssh:ro \
 	humble bash
 
 clean:
