@@ -29,7 +29,7 @@ class TwistToAmigaCmdVel(Node):
         twist_msg.header.stamp = self.get_clock().now().to_msg()
         twist_msg.header.frame_id = "robot"
 
-        twist_msg.twist.linear.x = 1.0  
+        twist_msg.twist.linear.x = 0.5 
         twist_msg.twist.angular.z = 0.0  
 
         self.velocity_pub.publish(twist_msg)
