@@ -31,6 +31,8 @@ setup(
         "console_scripts": [
             "amiga_streams = amiga_ros2_bridge.amiga_streams:main",
             "twist_control = amiga_ros2_bridge.twist_control:main",
+            "twist_wasd = amiga_ros2_bridge.twist_wasd:main",
+            "clock = amiga_ros2_bridge.clock:main",
         ],
     },
 )

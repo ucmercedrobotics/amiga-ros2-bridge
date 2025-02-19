@@ -12,18 +12,6 @@ RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netc
 COPY requirements.txt /requirements.txt
 RUN pip install -r /requirements.txt
 
-RUN git clone https://github.com/farm-ng/farm-ng-core.git && \
-    cd farm-ng-core && \
-    git checkout lock_req_versions && \
-    git submodule update --init --recursive && \
-    pip install . && \
-    cd .. && \
-    git clone https://github.com/farm-ng/farm-ng-amiga.git && \
-    cd farm-ng-amiga && \
-    git checkout lock_req_versions && \
-    pip install .
-
-
 WORKDIR /amiga_ros2_bridge
 
 COPY amiga_ros2_bridge /amiga_ros2_bridge/amiga_ros2_bridge

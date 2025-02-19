@@ -24,7 +24,7 @@ make repo-init
 make network
 ``` -->
 
-After, build your ROS1 container:
+After, build your ROS2 container:
 ```bash
 make build-image
 ```
