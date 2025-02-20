@@ -73,7 +73,7 @@ $ ros2 topic list
 /amiga/cmd_vel
 /amiga/vel
 ```
-To test the twist_control node and run the robot, you can publish TwistStamped commands to the ROS2 bridge on the /amiga/cmd_vel topic with the <twist_wasd.py> example. This node will send a linear velocity command of 0.5 m/s along the x-axis, also make sure to set the robot on <autocontrolL> mode: 
+To test the twist_control node and run the robot, you can publish TwistStamped commands to the ROS2 bridge on the /amiga/cmd_vel topic with the <twist_wasd.py> example. This node will send a linear velocity command of 0.5 m/s along the x-axis, also make sure to set the robot on AUTO CONTROL mode: 
 ```bash
 $ ros2 launch amiga_ros2_bridge twist_wasd.launch.py
 ```
