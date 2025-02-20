@@ -74,8 +74,7 @@ def farmng_stamp_to_ros_time(event: Event) -> rclpy.time.Time:
         raise ValueError(
             f"Could not find appropriate timestamp for event with path: {event.uri.path}"
         )
-
-    return rclpy.time.Time(seconds=stamp)
+    return rclpy.time.Time(seconds=stamp).to_msg()
 
 
 def farmng_path_to_ros_type(uri: uri_pb2.Uri):
@@ -217,7 +216,9 @@ def OakImuPacket_to_Imu(oak_imu_packet: OakImuPacket, event: Event) -> Imu:
 
     imu_ros: Imu = Imu()
     # Unpack the stamp and frame_id data
-    imu_ros.header.stamp = rclpy.time.Time(seconds=oak_imu_packet.gyro_packet.timestamp)
+    imu_ros.header.stamp = rclpy.time.Time(
+        seconds=oak_imu_packet.gyro_packet.timestamp
+    ).to_msg()
     imu_ros.header.frame_id = f"{service_name}{event.uri.path}"
     # Unpack the gyroscope data
     imu_ros.angular_velocity.x = oak_imu_packet.gyro_packet.gyro.x
@@ -285,7 +286,7 @@ def FilterState_to_Odometry(filter_state: FilterState, event: Event) -> Odometry
     """
     odometry: Odometry = Odometry()
     # Unpack the stamp and frame_id data
-    odometry.header.stamp = farmng_stamp_to_ros_time(event).to_msg()
+    odometry.header.stamp = farmng_stamp_to_ros_time(event)
     odometry.header.frame_id = filter_state.pose.frame_b
     odometry.child_frame_id = filter_state.pose.frame_b
     # Unpack the Pose and Twist data
