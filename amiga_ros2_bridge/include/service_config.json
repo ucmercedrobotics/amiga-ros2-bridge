@@ -3,27 +3,32 @@
         {
             "name": "canbus",
             "port": 6001,
-            "host": "100.100.101.105"
+            "host": "000.000.000.000"
         },
         {
             "name": "gps",
             "port": 50010,
-            "host": "100.100.101.105"
+            "host": "000.000.000.000"
         },
         {
             "name": "oak0",
             "port": 50010,
-            "host": "100.100.101.105"
-        },
-        {
-            "name": "oak1",
-            "port": 50010,
-            "host": "100.100.101.105"
+            "host": "000.000.000.000"
         },
         {
             "name": "filter",
             "port": 20001,
-            "host": "100.100.101.105"
+            "host": "000.000.000.000"
+        },
+        {
+            "name": "track_follower",
+            "port": 20101,
+            "host": "000.000.000.000"
+        },
+        {
+            "name": "system_monitor",
+            "port": 20201,
+            "host": "000.000.000.000"
         },
         {
             "name": "amiga_subscriptions",
@@ -58,22 +63,8 @@
                 },
                 {
                     "uri": {
-                        "path": "/imu",
-                        "query": "service_name=oak1"
-                    },
-                    "every_n": 1
-                },
-                {
-                    "uri": {
                         "path": "/left",
                         "query": "service_name=oak0"
-                    },
-                    "every_n": 1
-                }, 
-                {
-                    "uri": {
-                        "path": "/left",
-                        "query": "service_name=oak1"
                     },
                     "every_n": 1
                 }
