@@ -40,7 +40,7 @@ Collaboration and PRs are welcome and will be evaluated by UC Merced and Farm-ng
 
 1. Clone this repo and open the directory:
 ```bash
-git clone  https://github.com/ucmercedrobotics/amiga-ros2-bridge.git
+git clone https://github.com/ucmercedrobotics/amiga-ros2-bridge.git
 cd amiga-ros2-bridge
 ```
 
@@ -53,15 +53,10 @@ pip install --upgrade pip
 
 From now on, we will be using Makefile in this repo to make chain commands, feel free to modify and/or use your own commands.
 
-2. Initialize the repo with the repo pre-commits:
-```bash
-make repo-init
-```
-
-<!-- To start, make your local Docker network to connect your VNC client, local machine, and Amiga together. You'll use this later when remote controlling the Amiga.
+2. [Optional, for application requiring GUIs] Make your local Docker network to connect your VNC client, local machine, and Amiga together. You'll use this later when remote controlling the Amiga.
 ```bash
 make network
-``` -->
+```
 
 3. After, build your ROS2 container:
 ```bash
@@ -70,13 +65,13 @@ make build-image
 
 <!-- TODO: options for images based on arm platforms -->
 
-<!-- Next, standup the VNC container to forward X11 to your web browser. You can see this at `localhost:8080`.
+4. [Optional, for application requiring GUIs] Next, standup the VNC container to forward X11 to your web browser. You can see this at `localhost:8080`. We use `localhost` here assuming the container is running locally.
 ```bash
 make vnc
-``` -->
+```
 ## Execution (every time you start the node):
 
-4. Configure and Spin-up your docker container:
+5. Configure and spin up your docker container:
 
 This step assumes you have installed Tailscale and properly [configured your access](https://amiga.farm-ng.com/docs/ssh/) to the Brain with farm-ng's [support team](mailto:support@farm-ng.com).
 
@@ -107,7 +102,7 @@ root@docker-desktop:/amiga_ros2_bridge#
 > Feel free to modify Makefile to change your container's startup command based
 > on what you need adding port forwarding, displays, different volumes, etc.
 
-5. Expose your Amiga gRPC servers as ROS2 topics:
+6. Expose your Amiga gRPC servers as ROS2 topics:
 
 ```bash
 make amiga-streams
@@ -150,6 +145,7 @@ To test the twist_control node and run the robot, you can publish TwistStamped c
 ```bash
 ros2 launch amiga_ros2_bridge twist_wasd.launch.py
 ```
+NOTE: running this example app requires an `open-cv` GUI, so you'll have to execute steps 2 and 4 to access the app via a browser GUI app.
 
 Now you should see your commands getting to the robot. You can confirm this on the AUTO page from the dashboard:
 
