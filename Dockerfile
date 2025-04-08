@@ -1,4 +1,4 @@
-FROM osrf/ros:humble-desktop-full AS base
+FROM ghcr.io/sloretz/ros:humble-desktop-full AS base
 # TODO: downgrade this image in production
 
 # copy over all python files from builder stage
