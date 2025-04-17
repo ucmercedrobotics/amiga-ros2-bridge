@@ -1,4 +1,8 @@
-FROM osrf/ros:humble-desktop-full AS base
+FROM ghcr.io/sloretz/ros:humble-desktop-full AS base
+
+ARG WORKSPACE_ROOT="/amiga-ros2-bridge"
+ARG PACKAGE_NAME="amiga_ros2_bridge"
+
 # TODO: downgrade this image in production
 
 # copy over all python files from builder stage
@@ -12,16 +16,16 @@ RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netc
 COPY requirements.txt /requirements.txt
 RUN pip install -r /requirements.txt
 
-WORKDIR /amiga_ros2_bridge
+WORKDIR ${WORKSPACE_ROOT}
 
-COPY amiga_ros2_bridge /amiga_ros2_bridge/amiga_ros2_bridge
+COPY ${PACKAGE_NAME} ${WORKSPACE_ROOT}/${PACKAGE_NAME}
 
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0
 
 # build artifacts to run by default
-RUN /bin/bash -c "cd /amiga_ros2_bridge && \
-                    colcon build"
+RUN /bin/bash -c "cd ${WORKSPACE_ROOT} && \
+    colcon build"
 
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
-RUN echo "source /amiga_ros2_bridge/install/setup.bash" >> /root/.bashrc
+RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
