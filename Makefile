@@ -33,9 +33,11 @@ vnc:
 bash:
 	docker run -it --rm \
 	--net=host \
+	--privileged \
 	-v ./${PACKAGE}:/${WORKSPACE}/${PACKAGE}:Z \
 	-v ./Makefile:/${WORKSPACE}/Makefile:Z \
 	-v ~/.ssh:/root/.ssh:ro \
+	-v /dev/input:/dev/input \
 	${IMAGE} bash
 
 clean:
@@ -46,3 +48,6 @@ amiga-streams:
 
 twist:
 	ros2 launch ${PACKAGE} twist_control.launch.py
+	
+joy:
+	ros2 launch ${PACKAGE} joy.launch.py
