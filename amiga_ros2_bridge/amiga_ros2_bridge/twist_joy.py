@@ -11,9 +11,9 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 qos_profile = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
 
-class Controller(Node):
+class TwistJoy(Node):
     def __init__(self):
-        super().__init__("twist_to_amiga_cmd_vel")
+        super().__init__("twist_joy")
 
         # Publish to /amiga/cmd_vel
         self.vel_pub = self.create_publisher(
@@ -21,8 +21,8 @@ class Controller(Node):
         )
         
         # Subscribe to Controller topics /joy /cmd_vel
-        self.joy_sub = self.create_subscription(Joy, "/joy", self.joy_callback)
-        self.vel_sub = self.create_subscription(Twist, "/cmd_vel", self.twist_callback)
+        self.joy_sub = self.create_subscription(Joy, "/joy", self.joy_callback, qos_profile)
+        self.vel_sub = self.create_subscription(Twist, "/cmd_vel", self.vel_callback, qos_profile)
         
     def joy_callback(self, msg: Joy):
         self.get_logger().info(f"Got command from /joy: {msg}")
@@ -40,7 +40,7 @@ class Controller(Node):
         twist_msg.header.frame_id = "robot"
 
         # TODO: Publish to amiga once we verify the timestamp works as intended
-        # self.velocity_pub.publish(twist_msg)
+        self.vel_pub.publish(twist_msg)
         self.get_logger().info(
             f"publishing to /amiga/cmd_vel: linear.x={twist_msg.twist.linear.x}, angular.z={twist_msg.twist.angular.z}, timestamp={twist_msg.header.stamp}"
         )
@@ -48,7 +48,7 @@ class Controller(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Controller()
+    node = TwistJoy()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
