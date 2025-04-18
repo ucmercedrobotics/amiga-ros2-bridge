@@ -44,10 +44,10 @@ clean:
 	rm -rf build/ install/ log/
 
 amiga-streams:
-	ros2 launch ${PACKAGE} amiga_streams.launch.py
+	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
 
 twist:
-	ros2 launch ${PACKAGE} twist_control.launch.py
+	ros2 launch amiga_ros2_bridge twist_control.launch.py
 	
 joy:
-	ros2 launch ${PACKAGE} joy.launch.py
+	ros2 launch amiga_ros2_teleop joy.launch.py
