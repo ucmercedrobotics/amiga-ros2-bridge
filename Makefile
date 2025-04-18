@@ -33,16 +33,21 @@ vnc:
 bash:
 	docker run -it --rm \
 	--net=host \
+	--privileged \
 	-v ./${PACKAGE}:/${WORKSPACE}/${PACKAGE}:Z \
 	-v ./Makefile:/${WORKSPACE}/Makefile:Z \
 	-v ~/.ssh:/root/.ssh:ro \
+	-v /dev/input:/dev/input \
 	${IMAGE} bash
 
 clean:
 	rm -rf build/ install/ log/
 
 amiga-streams:
-	ros2 launch ${PACKAGE} amiga_streams.launch.py
+	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
 
 twist:
-	ros2 launch ${PACKAGE} twist_control.launch.py
+	ros2 launch amiga_ros2_bridge twist_control.launch.py
+	
+joy:
+	ros2 launch amiga_ros2_teleop joy.launch.py
