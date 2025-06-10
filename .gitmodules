@@ -1,0 +1,3 @@
+[submodule "amiga-ros2-nav"]
+	path = amiga-ros2-nav
+	url = git@github.com:ucmercedrobotics/amiga-ros2-nav.git
