@@ -18,7 +18,8 @@ RUN pip install -r /requirements.txt
 
 WORKDIR ${WORKSPACE_ROOT}
 
-COPY ${PACKAGE_NAME} ${WORKSPACE_ROOT}/${PACKAGE_NAME}
+# Copy everything into the workspace (except what's in .dockerignore)
+COPY . ${WORKSPACE_ROOT}
 
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0

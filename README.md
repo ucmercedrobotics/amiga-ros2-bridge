@@ -140,13 +140,6 @@ ros2 topic list
 /amiga/vel
 ```
 
-To test the twist_control node and run the robot, you can publish TwistStamped commands to the ROS2 bridge on the /amiga/cmd_vel topic with the <twist_wasd.py> example. This node will send a linear velocity command of 0.5 m/s along the x-axis (forward)
-
-```bash
-ros2 launch amiga_ros2_bridge twist_wasd.launch.py
-```
-NOTE: running this example app requires an `open-cv` GUI, so you'll have to execute steps 2 and 4 to access the app via a browser GUI app.
-
 Now you should see your commands getting to the robot. You can confirm this on the AUTO page from the dashboard:
 
 ![dashboard in auto page](https://github.com/farm-ng/amiga-dev-kit/assets/133177230/9a8dcddf-cb5d-4e3c-95e0-0224f521ae6d)
