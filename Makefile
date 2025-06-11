@@ -1,6 +1,5 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
-PACKAGE:=amiga_ros2_bridge
 NOVNC:=theasp/novnc:latest
 
 repo-init:
@@ -34,7 +33,8 @@ bash:
 	docker run -it --rm \
 	--net=host \
 	--privileged \
-	-v ./${PACKAGE}:/${WORKSPACE}/${PACKAGE}:Z \
+	-v ./amiga_ros2_bridge:/${WORKSPACE}/amiga_ros2_bridge:Z \
+	-v ./amiga_ros2_teleop:/${WORKSPACE}/amiga_ros2_teleop:Z \
 	-v ./Makefile:/${WORKSPACE}/Makefile:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input:/dev/input \

@@ -33,7 +33,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "twist_joy = amiga_ros2_bridge.twist_joy:main",
+            "twist_joy = amiga_ros2_teleop.twist_joy:main",
         ],
     },
 )

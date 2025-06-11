@@ -6,24 +6,25 @@ from geometry_msgs.msg import TwistStamped, Twist
 from sensor_msgs.msg import Joy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
-QOS_PROFILE = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
 
 class TwistJoy(Node):
     def __init__(self):
         super().__init__("twist_joy")
 
+        qos_profile = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
+
         # Publish to /amiga/cmd_vel
         self.vel_pub = self.create_publisher(
-            TwistStamped, "/amiga/cmd_vel", QOS_PROFILE
+            TwistStamped, "/amiga/cmd_vel", qos_profile
         )
 
         # Subscribe to Controller topics /joy /cmd_vel
         self.joy_sub = self.create_subscription(
-            Joy, "/joy", self.joy_callback, QOS_PROFILE
+            Joy, "/joy", self.joy_callback, qos_profile
         )
         self.vel_sub = self.create_subscription(
-            Twist, "/cmd_vel", self.vel_callback, QOS_PROFILE
+            Twist, "/cmd_vel", self.vel_callback, qos_profile
         )
 
     def joy_callback(self, msg: Joy):
