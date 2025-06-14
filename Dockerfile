@@ -10,7 +10,8 @@ ARG PACKAGE_NAME="amiga_ros2_bridge"
 # COPY --from=builder /usr/local /usr/local
 
 # any utilities you want
-RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat build-essential cmake
+RUN apt-get update && apt-get install -y git wget python3-pip vim net-tools netcat build-essential cmake \
+    ros-humble-foxglove-bridge ros-humble-depthai-ros
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
 COPY requirements.txt /requirements.txt

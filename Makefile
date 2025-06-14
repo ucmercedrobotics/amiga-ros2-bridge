@@ -33,9 +33,7 @@ bash:
 	docker run -it --rm \
 	--net=host \
 	--privileged \
-	-v ./amiga_ros2_bridge:/${WORKSPACE}/amiga_ros2_bridge:Z \
-	-v ./amiga_ros2_teleop:/${WORKSPACE}/amiga_ros2_teleop:Z \
-	-v ./Makefile:/${WORKSPACE}/Makefile:Z \
+	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input:/dev/input \
 	${IMAGE} bash
@@ -51,3 +49,9 @@ twist:
 	
 joy:
 	ros2 launch amiga_ros2_teleop joy.launch.py
+
+foxglove:
+	ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766
+
+oakd:
+	ros2 launch depthai_ros_driver rgbd_pcl.launch.py
