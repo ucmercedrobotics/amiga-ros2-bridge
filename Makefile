@@ -36,6 +36,7 @@ bash:
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input:/dev/input \
+	-v /dev/ttyACM1:/dev/ttyACM1 \
 	${IMAGE} bash
 
 clean:
