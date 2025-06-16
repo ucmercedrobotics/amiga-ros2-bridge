@@ -1,5 +1,7 @@
 numpy
 opencv-python
+cv_bridge
+depthai
 pyyaml
 rospkg
 protobuf==5.27.2
