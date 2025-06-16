@@ -1,6 +1,5 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
-PACKAGE:=amiga_ros2_bridge
 NOVNC:=theasp/novnc:latest
 
 repo-init:
@@ -33,16 +32,22 @@ vnc:
 bash:
 	docker run -it --rm \
 	--net=host \
-	-v ./${PACKAGE}:/${WORKSPACE}/${PACKAGE}:Z \
+	--privileged \
+	-v ./amiga_ros2_bridge:/${WORKSPACE}/amiga_ros2_bridge:Z \
+	-v ./amiga_ros2_teleop:/${WORKSPACE}/amiga_ros2_teleop:Z \
 	-v ./Makefile:/${WORKSPACE}/Makefile:Z \
 	-v ~/.ssh:/root/.ssh:ro \
+	-v /dev/input:/dev/input \
 	${IMAGE} bash
 
 clean:
 	rm -rf build/ install/ log/
 
 amiga-streams:
-	ros2 launch ${PACKAGE} amiga_streams.launch.py
+	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
 
 twist:
-	ros2 launch ${PACKAGE} twist_control.launch.py
+	ros2 launch amiga_ros2_bridge twist_control.launch.py
+	
+joy:
+	ros2 launch amiga_ros2_teleop joy.launch.py

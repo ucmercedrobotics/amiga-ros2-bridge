@@ -140,7 +140,7 @@ def main(args=None):
 
     # HACK: Force the config we know is there
     service_config = Path(
-        "/amiga_ros2_bridge/amiga_ros2_bridge/include/service_config.json"
+        "/amiga-ros2-bridge/amiga_ros2_bridge/include/service_config.json"
     )
     node.get_logger().info(f"Service config set to {service_config}")
 
