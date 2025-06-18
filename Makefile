@@ -38,6 +38,10 @@ bash:
 	-v /dev/input:/dev/input \
 	${IMAGE} bash
 
+shell:
+	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}) && \
+	docker exec -it $${CONTAINER_PS} bash
+
 clean:
 	rm -rf build/ install/ log/
 
