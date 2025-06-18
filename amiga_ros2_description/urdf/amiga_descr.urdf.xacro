@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<robot name="amiga_base" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Include macros -->
+  <xacro:include filename="$(find amiga_ros2_description)/urdf/base.urdf.xacro" />
+  <xacro:include filename="$(find amiga_ros2_description)/urdf/wheel.urdf.xacro" />
+  <xacro:include filename="$(find amiga_ros2_description)/urdf/gps.urdf.xacro"/>
+  <xacro:include filename="$(find amiga_ros2_description)/urdf/oak_d_w_poe.urdf.xacro"/>
+
+  <!-- Base -->
+  <xacro:base 
+    wheel_radius="0.21717"
+    wheel_joint_z_offset_from_base_link="-0.4341"/>
+
+  <!-- Front Right Wheel -->
+  <xacro:wheel
+    wheel_name="front_right_wheel_link"
+    parent_link="base_link"
+    joint_origin_xyz="0.352875765322685 -0.562186930189418 -0.43410291085732"
+    joint_origin_rpy="0 0 0"
+    joint_axis_xyz="0 -1 0"/>
+
+  <!-- Front Left Wheel -->
+  <xacro:wheel
+    wheel_name="front_left_wheel_link"
+    parent_link="base_link"
+    joint_origin_xyz="0.30508 0.56219 -0.4341"
+    joint_origin_rpy="0 0 0"
+    joint_axis_xyz="0 1 0"/>
+
+  <!-- Rear Right Wheel -->
+  <xacro:wheel
+    wheel_name="rear_right_wheel_link"
+    parent_link="base_link"
+    joint_origin_xyz="-0.30507 -0.56219 -0.4341"
+    joint_origin_rpy="0 0 0"
+    joint_axis_xyz="0 -1 0"/>
+
+  <!-- Rear Left Wheel -->
+  <xacro:wheel
+    wheel_name="rear_left_wheel_link"
+    parent_link="base_link"
+    joint_origin_xyz="-0.35312 0.56219 -0.43414"
+    joint_origin_rpy="0 0 0"
+    joint_axis_xyz="0 1 0"/>
+
+  <!-- GPS -->
+  <xacro:gps
+    parent_link="base_link"
+    gps_link_name="GPS_link"
+    joint_origin_xyz="-0.343 0.27301 1.0163"
+    joint_origin_rpy="0 0 0"/>
+
+  <!-- Cameras -->
+  <!-- Front -->
+  <xacro:oak_d_w_poe 
+    camera_name="oak0"
+    parent_link="base_link"
+    mount_origin_xyz="-0.24835 0.27301 0.95145"
+    mount_origin_rpy="3.1416 0.2618 0"/>
+  
+  <!-- Back -->
+  <xacro:oak_d_w_poe 
+    camera_name="oak1"
+    parent_link="base_link"
+    mount_origin_xyz="-0.43765 0.27301 0.95145"
+    mount_origin_rpy="-3.1416 0.2618 -3.1416"/>
+  
+</robot>

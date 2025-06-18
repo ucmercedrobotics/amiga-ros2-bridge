@@ -5,19 +5,17 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    urdf_path = PathJoinSubstitution(
-        [get_package_share_directory("amiga_ros2_bridge"), "urdf/", "amiga_base.urdf"]
-    )
-    with open(urdf_path, 'r') as f:
-        robot_description_content = f.read()
+    package_dir = get_package_share_directory("amiga_ros2_description")
+    urdf_path = os.path.join(package_dir, "urdf", "amiga_descr.urdf.xacro")
 
     return LaunchDescription([
-        # DeclareLaunchArgument(
-        #     name="urdf", default_value=urdf_path, description="Path to robot URDF"
-        # ),
+        DeclareLaunchArgument(
+            name="urdf", default_value=urdf_path, description="Path to robot URDF"
+        ),
         DeclareLaunchArgument(
             name="publish_joints", default_value="true", description="Publish joint states"
         ),
@@ -35,9 +33,10 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {
-                    # TODO: Convert urdf to xacro for readability
-                    # 'robot_description': Command(['xacro ', LaunchConfiguration('urdf')])
-                    'robot_description': robot_description_content,
+                   'robot_description': ParameterValue(
+                        Command(['xacro ', LaunchConfiguration('urdf')]),
+                        value_type=str
+                    )
                 }
             ]
         ),
