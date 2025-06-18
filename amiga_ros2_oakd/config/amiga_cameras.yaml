@@ -1,0 +1,28 @@
+/oak0:
+  ros__parameters:
+    camera:
+      i_ip: 10.95.76.10
+      i_mx_id: 18443010D1D8920F00
+      i_nn_type: none
+    rgb:
+      i_low_bandwidth: true
+    left:
+      i_low_bandwidth: true
+    right:
+      i_low_bandwidth: true
+    stereo:
+      i_low_bandwidth: true
+/oak1:
+  ros__parameters:
+    camera:
+      i_ip: 10.95.76.11
+      i_mx_id: 18443010F1E8920F00
+      i_nn_type: none
+    rgb:
+      i_low_bandwidth: true
+    left:
+      i_low_bandwidth: true
+    right:
+      i_low_bandwidth: true
+    stereo:
+      i_low_bandwidth: true
