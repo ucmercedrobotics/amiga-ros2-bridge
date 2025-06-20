@@ -4,25 +4,24 @@
       i_ip: 10.95.76.10
       i_mx_id: 18443010D1D8920F00
       i_nn_type: none
-    rgb:
-      i_low_bandwidth: true
-    left:
-      i_low_bandwidth: true
-    right:
-      i_low_bandwidth: true
-    stereo:
-      i_low_bandwidth: true
+    imu:
+      i_enable_rotation: true
+      i_message_type: IMU_WITH_MAG_SPLIT
+      i_rotation_vector_type: ROTATION_VECTOR
+      i_rot_cov: 0.0001
+      i_gyro_mode: GYROSCOPE_CALIBRATED
+      i_mag_mode: MAGNETOMETER_CALIBRATED
+      
 /oak1:
   ros__parameters:
     camera:
       i_ip: 10.95.76.11
       i_mx_id: 18443010F1E8920F00
       i_nn_type: none
-    rgb:
-      i_low_bandwidth: true
-    left:
-      i_low_bandwidth: true
-    right:
-      i_low_bandwidth: true
-    stereo:
-      i_low_bandwidth: true
+    imu:
+      i_enable_rotation: true
+      i_message_type: IMU_WITH_MAG_SPLIT
+      i_rotation_vector_type: ROTATION_VECTOR
+      i_rot_cov: 0.0001
+      i_gyro_mode: GYROSCOPE_CALIBRATED
+      i_mag_mode: MAGNETOMETER_CALIBRATED

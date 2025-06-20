@@ -8,7 +8,7 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
 
 
@@ -18,8 +18,10 @@ def launch_setup(context, *args, **kwargs):
         log_level = "debug"
 
     params_file = LaunchConfiguration("params_file")
+    imu_params_file = LaunchConfiguration("params_file")
     name = LaunchConfiguration("name").perform(context)
 
+    # -- Depthai Nodes
     nodes = [
         ComposableNodeContainer(
             name=name + "_container",
@@ -36,40 +38,6 @@ def launch_setup(context, *args, **kwargs):
             ],
             arguments=["--ros-args", "--log-level", log_level],
             output="both",
-        ),
-        LoadComposableNodes(
-            target_container=name + "_container",
-            composable_node_descriptions=[
-                ComposableNode(
-                    package="image_proc",
-                    plugin="image_proc::RectifyNode",
-                    name=name + "_rectify_color_node",
-                    remappings=[
-                        ("image", "rgb/image_raw"),
-                        ("camera_info", "rgb/camera_info"),
-                        ("image_rect", "rgb/image_rect"),
-                        ("image_rect/compressed", "rgb/image_rect/compressed"),
-                        ("image_rect/compressedDepth", "rgb/image_rect/compressedDepth"),
-                        ("image_rect/theora", "rgb/image_rect/theora"),
-                    ],
-                )
-            ],
-        ),
-        LoadComposableNodes(
-            target_container=name + "_container",
-            composable_node_descriptions=[
-                ComposableNode(
-                    package="depth_image_proc",
-                    plugin="depth_image_proc::PointCloudXyzrgbNode",
-                    name=name + "_point_cloud_xyzrgb_node",
-                    remappings=[
-                        ("depth_registered/image_rect", "stereo/image_raw"),
-                        ("rgb/image_rect_color", "rgb/image_rect"),
-                        ("rgb/camera_info", "rgb/camera_info"),
-                        ("points", "points"),
-                    ],
-                ),
-            ],
         ),
     ]
 
