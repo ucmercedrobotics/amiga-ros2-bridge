@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <!-- Based on: https://github.com/luxonis/depthai-ros/tree/humble/depthai_descriptions -->
 
-  <xacro:macro name="oak_d_w_poe" params="camera_name parent_link mount_origin_xyz mount_origin_rpy">
+  <xacro:macro name="oak_d_w_poe" params="camera_name parent_link mount_origin_xyz mount_origin_rpy imu_rpy">
 
     <!-- Mount link -->
     <link name="${camera_name}_mount_link"/>
@@ -70,7 +70,8 @@
     <joint name="${camera_name}_imu_joint" type="fixed">
       <parent link="${camera_name}_base_link"/>
       <child link="${camera_name}_imu_frame"/>
-      <origin xyz="-0.008 0.04 0.020265" rpy="3.14159265359 1.5708 0"/>
+      <!-- <origin xyz="-0.008 0.04 0.020265" rpy="3.14159265359 1.5708 0"/> -->
+      <origin xyz="-0.008 0.04 0.020265" rpy="${imu_rpy}"/>
     </joint>
 
   </xacro:macro>

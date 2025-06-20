@@ -47,23 +47,28 @@
   <!-- GPS -->
   <xacro:gps
     parent_link="base_link"
-    gps_link_name="GPS_link"
+    gps_link_name="gps_link"
     joint_origin_xyz="-0.343 0.27301 1.0163"
     joint_origin_rpy="0 0 0"/>
 
   <!-- Cameras -->
   <!-- Front -->
+  <!-- imu_rpy="3.14159265359 1.5708 0" -->
+  <xacro:property name="oak0_offset" value="${62.2 * pi / 180}"/>
+
   <xacro:oak_d_w_poe 
     camera_name="oak0"
     parent_link="base_link"
     mount_origin_xyz="-0.24835 0.27301 0.95145"
-    mount_origin_rpy="3.1416 0.2618 0"/>
+    mount_origin_rpy="${pi} 0.2618 0"
+    imu_rpy="${pi} ${pi/2} 0"/>
   
   <!-- Back -->
   <xacro:oak_d_w_poe 
     camera_name="oak1"
     parent_link="base_link"
     mount_origin_xyz="-0.43765 0.27301 0.95145"
-    mount_origin_rpy="-3.1416 0.2618 -3.1416"/>
+    mount_origin_rpy="-${pi} 0.2618 -${pi}"
+    imu_rpy="${pi} ${pi/2} 0"/>
   
 </robot>
