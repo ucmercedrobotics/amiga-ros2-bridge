@@ -25,9 +25,12 @@ COPY . ${WORKSPACE_ROOT}
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=novnc:0.0
 
+# Rosdep get packages
+RUN rosdep update && rosdep install --from-paths . --ignore-src -r -y
+
 # build artifacts to run by default
-RUN /bin/bash -c "cd ${WORKSPACE_ROOT} && \
-    colcon build"
+# RUN /bin/bash -c "cd ${WORKSPACE_ROOT} && \
+#     colcon build"
 
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc

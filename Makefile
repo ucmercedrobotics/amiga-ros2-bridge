@@ -12,6 +12,10 @@ multiarch-builder:
 push:
 	docker buildx build --platform linux/arm64/v8,linux/amd64 -t ${IMAGE} --target base . --push
 
+shell:
+	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}) && \
+	docker exec -it $${CONTAINER_PS} bash
+
 network:
 	docker network create ros
 
@@ -55,4 +59,10 @@ foxglove:
 	ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766
 
 oakd:
-	ros2 launch depthai_ros_driver rgbd_pcl.launch.py
+	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
+	
+description:
+	ros2 launch amiga_ros2_description urdf.launch.py
+
+nav:
+	ros2 launch amiga_localization bringup.launch.py
