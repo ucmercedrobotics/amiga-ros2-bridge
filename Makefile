@@ -1,6 +1,6 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
-NOVNC:=theasp/novnc:latest
+NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
 
 repo-init:
 	python3 -m pip install pre-commit && \
@@ -26,17 +26,15 @@ build-prod:
 	docker buildx build --platform linux/arm64/v8 . -t ${IMAGE} --target base
 
 vnc:
-	docker run -d --rm --net=ros \
-	--env="DISPLAY_WIDTH=3000" \
-	--env="DISPLAY_HEIGHT=1800" \
-	--env="RUN_XTERM=no" \
-	--name=novnc -p=8080:8080 \
+	docker run -d --rm --net=host \
+	--name=novnc \
 	${NOVNC}
 
 bash:
 	docker run -it --rm \
 	--net=host \
 	--privileged \
+	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input:/dev/input \
