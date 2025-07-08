@@ -1,16 +1,18 @@
-#!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped, Twist
 from sensor_msgs.msg import Joy
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+from ament_index_python.packages import get_package_share_directory
+import os
 
-
+from amiga_ros2_teleop.controller_utils import load_controller_config, ControllerMap
 
 class TwistJoy(Node):
-    def __init__(self):
+    def __init__(self, controller_config: dict):
         super().__init__("twist_joy")
+
+        self.controller_config = controller_config
 
         qos_profile = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
@@ -29,6 +31,8 @@ class TwistJoy(Node):
 
     def joy_callback(self, msg: Joy):
         self.get_logger().debug(f"Got command from /joy: {msg}")
+        cmap = ControllerMap(msg, self.controller_config)
+        self.get_logger().debug(f"Got `a` button: {cmap.a}")
 
     def vel_callback(self, msg: Twist):
         self.get_logger().debug(f"Got command from /cmd_vel: {msg}")
@@ -51,7 +55,17 @@ class TwistJoy(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = TwistJoy()
+    
+    # -- Load example controller config
+    config_path = os.path.join(
+        get_package_share_directory("amiga_ros2_teleop"),
+        "config",
+        "ps4.yaml"
+    )
+    controller_config = load_controller_config(config_path)
+    
+    node = TwistJoy(controller_config)
+
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
