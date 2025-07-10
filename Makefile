@@ -62,5 +62,5 @@ oakd:
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 
-nav:
+localization:
 	ros2 launch amiga_localization bringup.launch.py

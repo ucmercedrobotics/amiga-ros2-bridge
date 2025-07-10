@@ -122,10 +122,8 @@ You should now be able to interact with the services from your ROS2 container. A
 Open a new terminal, connect to the container with a shell:
 
 ```bash
-docker exec -it <container_id> bash
+make shell
 ```
-
-You can obtain `<container_id>` from `docker ps`.
 
 Now run our example twist converter
 
@@ -147,6 +145,58 @@ Now you should see your commands getting to the robot. You can confirm this on t
 > [!WARNING]
 > If your Amiga has AUTO CONTROL enabled, the robot will move. Make sure it is safe.
 
+8. Control remotely or autonomously:
+
+```bash
+make joy
+```
+
+This defaults to a PS4 controller, which should be configured via `bluetoothctl`.
+
 Feel free to explore around the code and add functionality. You will see there are a lot of commented sections that are useful to get a better understanding of this repo, ROS2 and the Amiga.
 
 Have fun!
+
+## Nav2
+If you want to build autonomy with ROS2 into your ecosystem, follow these steps.
+
+1. Initialize the Nav2 submodule in this repo with `git submodule update`. This will clone the Nav2 packages for the Amiga.
+
+2. Follow the instructions in the README in [`amiga-ros2-nav`](https://github.com/ucmercedrobotics/amiga-ros2-nav).
+
+3. Build and Start the docker container with `make build-prod` and `make bash`.
+
+4. From within the container, install dependencies
+```bash
+rosdep update; rosdep install --from-paths . --ignore-src -r -y
+```
+
+5. Run `colcon build`
+
+### Foxglove [Optional]
+
+1. Inside the docker container, install the ros2 foxglove node with 
+```bash
+apt install ros-humble-foxglove-bridge
+```
+
+2. Run the foxglove node (Farm-ng uses port `8765` for their foxglove bridge, so use `8766`)
+```bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:="8766"
+```
+
+3. Follow instructions [here](https://docs.foxglove.dev/docs/connecting-to-data/frameworks/ros2) to open foxglove
+
+### Autonomy
+
+1. Bringup the relevant nodes for robot localization (you can `make shell` in new windows as each command will block the shell)
+```bash
+make foxglove # optional
+make amiga-streams
+make twist
+make description
+make oakd
+make localization
+```
+
+This will spawn the robot localization in preparation for Nav2 control.
