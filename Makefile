@@ -34,7 +34,6 @@ bash:
 	docker run -it --rm \
 	--net=host \
 	--privileged \
-	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input:/dev/input \
