@@ -21,19 +21,19 @@ from farm_ng.canbus.canbus_pb2 import Twist2d
 from farm_ng.core.event_client import EventClient
 from farm_ng.core.event_service_pb2 import EventServiceConfigList, SubscribeRequest
 from farm_ng.core.events_file_reader import proto_from_json_file
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import Twist
 
 
 ############convert the msg to twist2d and push to queue#####
 def cmd_vel_callback(
-    node: Node, twist_stamped: TwistStamped, queue: asyncio.Queue
+    node: Node, msg: Twist, queue: asyncio.Queue
 ) -> None:
     """Callback for the /amiga/cmd_vel topic."""
     node.get_logger().info("wouliyee!!!!! cmd_vel_callback triggered")
     twist = Twist2d()
-    twist.linear_velocity_x = twist_stamped.twist.linear.x
-    twist.linear_velocity_y = twist_stamped.twist.linear.y
-    twist.angular_velocity = twist_stamped.twist.angular.z
+    twist.linear_velocity_x = msg.linear.x
+    twist.linear_velocity_y = msg.linear.y
+    twist.angular_velocity = msg.angular.z
     try:
         node.get_logger().info(
             f"converted Twist data: linear_velocity_x={twist.linear_velocity_x}, "
@@ -109,14 +109,14 @@ async def run(node: Node, service_config: Path) -> None:
     # Define QoS profile, should be same as publisher
     qos_profile = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
-    # Subscriber for /amiga/cmd_vel
+    # Subscriber for /cmd_vel
     node.create_subscription(
-        TwistStamped,
-        "/amiga/cmd_vel",
+        Twist,
+        "/cmd_vel",
         lambda msg: cmd_vel_callback(node, msg, queue),
         qos_profile,
     )
-    node.get_logger().info("successfully subscribed to /amiga/cmd_vel")
+    node.get_logger().info("successfully subscribed to /cmd_vel")
 
     tasks = []
     for subscription in subscriptions:
