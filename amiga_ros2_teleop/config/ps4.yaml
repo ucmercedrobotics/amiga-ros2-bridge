@@ -1,0 +1,23 @@
+buttons:
+  a: 0
+  b: 1
+  x: 2
+  y: 3
+  share: 4
+  home: 5
+  options: 6
+  left_stick_button: 7
+  right_stick_button: 8
+  l1: 9
+  r1: 10
+  up: 11
+  down: 12
+  left: 13
+  right: 14
+axes:
+  left_stick_x: 0
+  left_stick_y: 1
+  right_stick_x: 2
+  right_stick_y: 3
+  left_trigger: 4
+  right_trigger: 5
