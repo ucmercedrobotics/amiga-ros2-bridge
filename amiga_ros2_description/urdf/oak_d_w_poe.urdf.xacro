@@ -25,7 +25,8 @@
     <joint name="${camera_name}_rgb_camera_joint" type="fixed">
       <parent link="${camera_name}_base_link"/>
       <child link="${camera_name}_rgb_camera_frame"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <!-- <origin xyz="0 0 0" rpy="0 0 0"/> -->
+      <origin xyz="0 0 0" rpy="3.14159 0 0"/>
     </joint>
 
     <link name="${camera_name}_rgb_camera_optical_frame"/>
@@ -40,7 +41,8 @@
     <joint name="${camera_name}_left_camera_joint" type="fixed">
       <parent link="${camera_name}_base_link"/>
       <child link="${camera_name}_left_camera_frame"/>
-      <origin xyz="0 -0.0375 0" rpy="0 0 0"/>
+      <!-- <origin xyz="0 -0.0375 0" rpy="0 0 0"/> -->
+      <origin xyz="0 -0.0375 0" rpy="3.14159 0 0"/>
     </joint>
 
     <link name="${camera_name}_left_camera_optical_frame"/>
@@ -55,7 +57,8 @@
     <joint name="${camera_name}_right_camera_joint" type="fixed">
       <parent link="${camera_name}_base_link"/>
       <child link="${camera_name}_right_camera_frame"/>
-      <origin xyz="0 0.0375 0" rpy="0 0 0"/>
+      <!-- <origin xyz="0 0.0375 0" rpy="0 0 0"/> -->
+      <origin xyz="0 0.0375 0" rpy="3.14159 0 0"/>
     </joint>
 
     <link name="${camera_name}_right_camera_optical_frame"/>
