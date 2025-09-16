@@ -13,10 +13,10 @@
     <link name="base_link"/>
 
     <!-- Fixed joint from footprint to base_link -->
-    <joint name="base_to_footprint" type="fixed">
-      <parent link="base_footprint"/>
-      <child link="base_link"/>
-      <origin xyz="0 0 ${vertical_offset}" rpy="0 0 0"/>
+    <joint name="base_footprint_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="base_footprint"/>
+      <origin xyz="0 0 -${vertical_offset}" rpy="0 0 0"/>
     </joint>
 
   </xacro:macro>
