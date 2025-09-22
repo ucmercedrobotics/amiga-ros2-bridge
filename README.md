@@ -135,7 +135,7 @@ root@docker-desktop:/amiga_ros2_bridge#
 > Feel free to modify Makefile to change your container's startup command based
 > on what you need adding port forwarding, displays, different volumes, etc.
 
-6. Expose your Amiga gRPC servers as ROS2 topics:
+5. Expose your Amiga gRPC servers as ROS2 topics:
 
 ```bash
 make amiga-streams
@@ -148,7 +148,7 @@ You should see confirmation of the topics exposed:
 ...
 ```
 
-7. Do Stuff:
+6. Do Stuff:
 
 You should now be able to interact with the services from your ROS2 container. An example is to allow twist commands to drive the Amiga:
 
@@ -178,7 +178,7 @@ Now you should see your commands getting to the robot. You can confirm this on t
 > [!WARNING]
 > If your Amiga has AUTO CONTROL enabled, the robot will move. Make sure it is safe.
 
-8. Control remotely or autonomously:
+7. Control remotely or autonomously:
 
 ```bash
 make joy

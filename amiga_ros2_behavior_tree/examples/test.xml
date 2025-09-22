@@ -1,0 +1,22 @@
+<root BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <MoveToGPSLocation action_name="follow_gps_waypoints" latitude="37.4219983" longitude="-122.084"/>
+      <!-- Take thermal picture, output port 'temperature' is written to {temp} -->
+      <TakeThermalPicture numberOfPictures="1" temperature="{temp}"/>
+
+      <!-- Branch: if temp < 30 -> ActionA, else -> ActionB -->
+      <Fallback>
+        <Sequence>
+          <TempBelowThreshold temperature="{temp}" threshold="30.0"/>
+          <ActionA/>
+        </Sequence>
+
+        <Sequence>
+          <TempAboveThreshold temperature="{temp}" threshold="30.0"/>
+          <ActionB/>
+        </Sequence>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+</root>
