@@ -2,19 +2,18 @@
   <BehaviorTree ID="MainTree">
     <Sequence>
       <MoveToGPSLocation action_name="follow_gps_waypoints" latitude="37.4219983" longitude="-122.084"/>
-      <!-- Take thermal picture, output port 'temperature' is written to {temp} -->
-      <TakeThermalPicture numberOfPictures="1" temperature="{temp}"/>
+      <DetectObject object="tree" detected="{result}"/>
 
-      <!-- Branch: if temp < 30 -> ActionA, else -> ActionB -->
+      <!-- Branch: if object detected, else... -->
       <Fallback>
         <Sequence>
-          <TempBelowThreshold temperature="{temp}" threshold="30.0"/>
-          <ActionA/>
+          <BoolCondition value="{result}" expected="true"/>
+          <MoveToGPSLocation action_name="follow_gps_waypoints" latitude="37.55" longitude="-122.084"/>
         </Sequence>
 
         <Sequence>
-          <TempAboveThreshold temperature="{temp}" threshold="30.0"/>
-          <ActionB/>
+          <BoolCondition value="{result}" expected="false"/>
+          <MoveToGPSLocation action_name="follow_gps_waypoints" latitude="37.66" longitude="-122.084"/>
         </Sequence>
       </Fallback>
     </Sequence>

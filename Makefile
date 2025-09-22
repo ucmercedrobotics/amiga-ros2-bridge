@@ -38,8 +38,8 @@ bash:
 	-v /dev/ttyACM1:/dev/ttyACM1 \
 	${IMAGE} bash
 
-depends:
-	rosdep install --from-paths src --ignore-src -r -y
+deps:
+	rosdep install --from-paths . --ignore-src -r -y
 
 clean:
 	rm -rf build/ install/ log/

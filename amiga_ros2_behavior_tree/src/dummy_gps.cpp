@@ -8,7 +8,7 @@ class DummyGPSActionServer : public rclcpp::Node
 {
 public:
     DummyGPSActionServer()
-      : Node("dummy_gps_action_server")
+        : Node("dummy_gps_action_server")
     {
         server_ = rclcpp_action::create_server<FollowGPSWaypoints>(
             this,
@@ -22,15 +22,15 @@ private:
     rclcpp_action::Server<FollowGPSWaypoints>::SharedPtr server_;
 
     rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
+        const rclcpp_action::GoalUUID &uuid,
         std::shared_ptr<const FollowGPSWaypoints::Goal> goal)
     {
         std::string uuid_str = "Received goal request with UUID: ";
         for (auto const &id : uuid)
             uuid_str += std::to_string(id) + " ";
 
-        RCLCPP_INFO(this->get_logger(), "%s", uuid_str.c_str());
-        RCLCPP_INFO(this->get_logger(), "Received goal with %zu waypoints", goal->gps_poses.size());
+        RCLCPP_DEBUG(this->get_logger(), "%s", uuid_str.c_str());
+        RCLCPP_INFO(this->get_logger(), "Received goal with %zu waypoint(s)", goal->gps_poses.size());
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -45,7 +45,8 @@ private:
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowGPSWaypoints>> goal_handle)
     {
         // Run asynchronously
-        std::thread([this, goal_handle]() {
+        std::thread([this, goal_handle]()
+                    {
             auto feedback = std::make_shared<FollowGPSWaypoints::Feedback>();
             auto result = std::make_shared<FollowGPSWaypoints::Result>();
 
@@ -60,19 +61,21 @@ private:
 
                 feedback->current_waypoint = i;
                 goal_handle->publish_feedback(feedback);
-                RCLCPP_INFO(this->get_logger(), "Processing waypoint %zu", i);
+                RCLCPP_INFO(this->get_logger(), "Processing waypoint (%f, %f)",
+                    goal_handle->get_goal()->gps_poses[i].position.latitude,
+                    goal_handle->get_goal()->gps_poses[i].position.longitude);
 
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
 
             result->error_code = FollowGPSWaypoints::Result::NONE;
             goal_handle->succeed(result);
-            RCLCPP_INFO(this->get_logger(), "Goal succeeded!");
-        }).detach();
+            RCLCPP_INFO(this->get_logger(), "Goal succeeded!"); })
+            .detach();
     }
 };
 
-int main(int argc, char ** argv)
+int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<DummyGPSActionServer>();

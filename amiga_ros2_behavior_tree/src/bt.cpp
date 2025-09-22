@@ -15,122 +15,34 @@ using FollowGPSWaypoints = nav2_msgs::action::FollowGPSWaypoints;
 // NOTE: constructors accept (const std::string&, const NodeConfig&, const RosNodeParams&)
 // so factory.registerNodeType<T>("Name", params) can inject the rclcpp::Node.
 
-class TakeThermalPicture : public SyncActionNode
+class DetectObject : public SyncActionNode
 {
 public:
-    TakeThermalPicture(const std::string &name,
-                       const NodeConfig &config,
-                       const RosNodeParams &ros_params)
-        : SyncActionNode(name, config),
-          node_(ros_params.nh) {}
-
+    DetectObject(const std::string &name, const NodeConfig &config)
+        : SyncActionNode(name, config) {}
     static PortsList providedPorts()
     {
-        return {InputPort<int>("numberOfPictures"),
-                OutputPort<double>("temperature")};
+        return {InputPort<std::string>("object"), OutputPort<bool>("detected")};
     }
 
     NodeStatus tick() override
     {
-        int n = 1;
-        getInput("numberOfPictures", n);
+        std::string object;
+        // Simulate object detection
+        bool detected = (std::rand() % 2) == 0;
 
-        // In a real node you would call a sensor/topic/action.
-        // Here we simulate and log with the injected ROS node:
-        double temp = 25.0 + (std::rand() % 1000) / 100.0; // 25.0-35.0
-        RCLCPP_INFO(node_->get_logger(), "Took %d thermal pic(s): temperature=%.2f", n, temp);
+        if (!getInput("object", object))
+        {
+            throw RuntimeError("missing required input [object]");
+        }
+        setOutput("detected", detected);
 
-        setOutput("temperature", temp);
+        RCLCPP_INFO(rclcpp::get_logger("DetectObject"), "Object '%s' detected: %s", object.c_str(), detected ? "true" : "false");
         return NodeStatus::SUCCESS;
     }
-
-private:
-    rclcpp::Node::SharedPtr node_;
 };
 
-class TempBelowThreshold : public ConditionNode
-{
-public:
-    TempBelowThreshold(const std::string &name,
-                       const NodeConfig &config,
-                       const RosNodeParams & /*ros_params*/)
-        : ConditionNode(name, config) {}
-
-    static PortsList providedPorts()
-    {
-        return {InputPort<double>("temperature"),
-                InputPort<double>("threshold")};
-    }
-
-    NodeStatus tick() override
-    {
-        double temp, thr;
-        getInput("temperature", temp);
-        getInput("threshold", thr);
-        return (temp < thr) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
-    }
-};
-
-class TempAboveThreshold : public ConditionNode
-{
-public:
-    TempAboveThreshold(const std::string &name,
-                       const NodeConfig &config,
-                       const RosNodeParams & /*ros_params*/)
-        : ConditionNode(name, config) {}
-
-    static PortsList providedPorts()
-    {
-        return {InputPort<double>("temperature"),
-                InputPort<double>("threshold")};
-    }
-
-    NodeStatus tick() override
-    {
-        double temp, thr;
-        getInput("temperature", temp);
-        getInput("threshold", thr);
-        return (temp >= thr) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
-    }
-};
-
-class ActionA : public SyncActionNode
-{
-public:
-    ActionA(const std::string &name, const NodeConfig &config, const RosNodeParams &ros_params)
-        : SyncActionNode(name, config), node_(ros_params.nh) {}
-
-    static PortsList providedPorts() { return {}; }
-
-    NodeStatus tick() override
-    {
-        RCLCPP_INFO(node_->get_logger(), "Executing ActionA (temp < 30)");
-        return NodeStatus::SUCCESS;
-    }
-
-private:
-    rclcpp::Node::SharedPtr node_;
-};
-
-class ActionB : public SyncActionNode
-{
-public:
-    ActionB(const std::string &name, const NodeConfig &config, const RosNodeParams &ros_params)
-        : SyncActionNode(name, config), node_(ros_params.nh) {}
-
-    static PortsList providedPorts() { return {}; }
-
-    NodeStatus tick() override
-    {
-        RCLCPP_INFO(node_->get_logger(), "Executing ActionB (temp >= 30)");
-        return NodeStatus::SUCCESS;
-    }
-
-private:
-    rclcpp::Node::SharedPtr node_;
-};
-
-class MoveToGPSLocation : public BT::RosActionNode<FollowGPSWaypoints>
+class MoveToGPSLocation : public RosActionNode<FollowGPSWaypoints>
 {
 public:
     MoveToGPSLocation(const std::string &name,
@@ -171,7 +83,7 @@ public:
     BT::NodeStatus onResultReceived(const WrappedResult &result) override
     {
         RCLCPP_INFO(logger(), "Navigation finished with status: %d", int(result.result->error_code));
-        RCLCPP_INFO(logger(), "Number of missed waypoints: %ld", result.result->missed_waypoints.size());
+        RCLCPP_DEBUG(logger(), "Number of missed waypoints: %ld", result.result->missed_waypoints.size());
         return BT::NodeStatus::SUCCESS;
     }
 
@@ -180,6 +92,33 @@ public:
         (void)feedback;
         RCLCPP_INFO(logger(), "Navigating...");
         return BT::NodeStatus::RUNNING;
+    }
+};
+
+class BoolCondition : public ConditionNode
+{
+public:
+    BoolCondition(const std::string &name, const NodeConfig &config)
+        : ConditionNode(name, config) {}
+
+    static PortsList providedPorts()
+    {
+        return {InputPort<bool>("value"), InputPort<bool>("expected")};
+    }
+
+    NodeStatus tick() override
+    {
+        bool value;
+        if (!getInput("value", value))
+        {
+            throw RuntimeError("missing required input [value]");
+        }
+        bool expected;
+        if (!getInput("expected", expected))
+        {
+            throw RuntimeError("missing required input [expected]");
+        }
+        return (value == expected) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
     }
 };
 
@@ -200,14 +139,11 @@ int main(int argc, char **argv)
 
     // Register nodes (these overloads let the factory pass ros_params to constructors)
     factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
-    factory.registerNodeType<TakeThermalPicture>("TakeThermalPicture", ros_params);
-    factory.registerNodeType<TempBelowThreshold>("TempBelowThreshold", ros_params);
-    factory.registerNodeType<TempAboveThreshold>("TempAboveThreshold", ros_params);
-    factory.registerNodeType<ActionA>("ActionA", ros_params);
-    factory.registerNodeType<ActionB>("ActionB", ros_params);
+    factory.registerNodeType<DetectObject>("DetectObject");
+    factory.registerNodeType<BoolCondition>("BoolCondition");
 
     // Create tree from XML
-    auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/test.xml");
+    auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/amiga_ros2_behavior_tree/examples/test.xml");
 
     // Run loop: tick the tree and spin the ROS node
     rclcpp::Rate rate(10);
@@ -216,7 +152,7 @@ int main(int argc, char **argv)
         auto status = tree.tickOnce();
         if (status == BT::NodeStatus::SUCCESS || status == BT::NodeStatus::FAILURE)
         {
-            RCLCPP_INFO(nh->get_logger(), "Tree finished with status: %s",
+            RCLCPP_INFO(nh->get_logger(), "Mission finished with status: %s",
                         toStr(status, true).c_str());
             break;
         }
