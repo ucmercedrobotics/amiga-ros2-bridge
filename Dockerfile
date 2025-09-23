@@ -37,6 +37,9 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     cd ${BTCPP_ROS2_WORKSPACE} && \
     colcon build --symlink-install
 
+RUN cd ${WORKSPACE_ROOT} && \
+    rosdep install --from-paths . --ignore-src -r -y
+
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
 RUN echo "source ${BTCPP_ROS2_WORKSPACE}/install/setup.bash" >> /root/.bashrc
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc

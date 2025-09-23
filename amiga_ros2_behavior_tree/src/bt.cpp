@@ -15,6 +15,24 @@ using FollowGPSWaypoints = nav2_msgs::action::FollowGPSWaypoints;
 // NOTE: constructors accept (const std::string&, const NodeConfig&, const RosNodeParams&)
 // so factory.registerNodeType<T>("Name", params) can inject the rclcpp::Node.
 
+class TakeAmbientTemperature : public SyncActionNode
+{
+public:
+    TakeAmbientTemperature(const std::string &name, const NodeConfig &config)
+        : SyncActionNode(name, config) {}
+    static PortsList providedPorts()
+    {
+        return {InputPort<std::string>("action_name"), OutputPort<double>("temperature")};
+    }
+    NodeStatus tick() override
+    {
+        double temperature = 20.0 + (std::rand() % 1000) / 100.0; // Simulate reading temperature
+        setOutput("temperature", temperature);
+        RCLCPP_INFO(rclcpp::get_logger("TakeAmbientTemperature"), "Ambient temperature: %.2f C", temperature);
+        return NodeStatus::SUCCESS;
+    }
+};
+
 class DetectObject : public SyncActionNode
 {
 public:
@@ -22,7 +40,7 @@ public:
         : SyncActionNode(name, config) {}
     static PortsList providedPorts()
     {
-        return {InputPort<std::string>("object"), OutputPort<bool>("detected")};
+        return {InputPort<std::string>("object"), InputPort<std::string>("action_name"), OutputPort<bool>("detected")};
     }
 
     NodeStatus tick() override
@@ -77,6 +95,8 @@ public:
         goal.gps_poses = {pose};
         goal.number_of_loops = 1;
         goal.goal_index = 0;
+
+        RCLCPP_INFO(logger(), "Moving to GPS location: (%.6f, %.6f)", lat, lon);
         return true;
     }
 
@@ -95,15 +115,15 @@ public:
     }
 };
 
-class BoolCondition : public ConditionNode
+class CheckValue : public ConditionNode
 {
 public:
-    BoolCondition(const std::string &name, const NodeConfig &config)
+    CheckValue(const std::string &name, const NodeConfig &config)
         : ConditionNode(name, config) {}
 
     static PortsList providedPorts()
     {
-        return {InputPort<bool>("value"), InputPort<bool>("expected")};
+        return {InputPort<bool>("value")};
     }
 
     NodeStatus tick() override
@@ -113,12 +133,31 @@ public:
         {
             throw RuntimeError("missing required input [value]");
         }
-        bool expected;
-        if (!getInput("expected", expected))
+        RCLCPP_INFO(rclcpp::get_logger("CheckValue"), "Asserting value is true: %s", value ? "true" : "false");
+        return (value == true) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
+    }
+};
+
+class AssertTrue : public ConditionNode
+{
+public:
+    AssertTrue(const std::string &name, const NodeConfig &config)
+        : ConditionNode(name, config) {}
+
+    static PortsList providedPorts()
+    {
+        return {InputPort<bool>("result")};
+    }
+
+    NodeStatus tick() override
+    {
+        bool result;
+        if (!getInput("result", result))
         {
-            throw RuntimeError("missing required input [expected]");
+            throw RuntimeError("missing required input [result]");
         }
-        return (value == expected) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
+        RCLCPP_INFO(rclcpp::get_logger("AssertTrue"), "Asserting result is true: %s", result ? "true" : "false");
+        return (result == true) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
     }
 };
 
@@ -140,7 +179,8 @@ int main(int argc, char **argv)
     // Register nodes (these overloads let the factory pass ros_params to constructors)
     factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
     factory.registerNodeType<DetectObject>("DetectObject");
-    factory.registerNodeType<BoolCondition>("BoolCondition");
+    factory.registerNodeType<AssertTrue>("AssertTrue");
+    factory.registerNodeType<TakeAmbientTemperature>("TakeAmbientTemperature");
 
     // Create tree from XML
     auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/amiga_ros2_behavior_tree/examples/test.xml");
