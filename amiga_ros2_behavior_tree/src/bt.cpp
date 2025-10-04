@@ -60,6 +60,23 @@ public:
     }
 };
 
+class SampleLeaf : public SyncActionNode
+{
+public:
+    SampleLeaf(const std::string &name, const NodeConfig &config)
+        : SyncActionNode(name, config) {}
+    static PortsList providedPorts()
+    {
+        return {InputPort<std::string>("action_name")};
+    }
+
+    NodeStatus tick() override
+    {
+        RCLCPP_INFO(rclcpp::get_logger("SampleLeaf"), "SampleLeaf executed");
+        return NodeStatus::SUCCESS;
+    }
+};
+
 class MoveToGPSLocation : public RosActionNode<FollowGPSWaypoints>
 {
 public:
@@ -181,9 +198,10 @@ int main(int argc, char **argv)
     factory.registerNodeType<DetectObject>("DetectObject");
     factory.registerNodeType<AssertTrue>("AssertTrue");
     factory.registerNodeType<TakeAmbientTemperature>("TakeAmbientTemperature");
+    factory.registerNodeType<SampleLeaf>("SampleLeaf");
 
     // Create tree from XML
-    auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/amiga_ros2_behavior_tree/examples/test.xml");
+    auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/amiga_ros2_behavior_tree/examples/sample_leafs.xml");
 
     // Run loop: tick the tree and spin the ROS node
     rclcpp::Rate rate(10);

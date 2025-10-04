@@ -1,0 +1,25 @@
+<root BTCPP_format="4" schema_location="schemas/schemas/amiga.xsd">
+    <Mission>sample leafs of every 2nd tree in the 2nd column</Mission>
+    <BehaviorTree ID="SampleEverySecondTreeColumn2">
+        <Sequence>
+            <MoveToGPSLocation name="move_to_tree_2" action_name="follow_gps_waypoints" latitude="37.26644032166231" longitude="-120.42069862285281"/>
+            <SampleLeaf name="sample_tree_2" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_18" action_name="follow_gps_waypoints" latitude="37.26636353864158" longitude="-120.42069905867073"/>
+            <SampleLeaf name="sample_tree_18" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_34" action_name="follow_gps_waypoints" latitude="37.26628675561991" longitude="-120.42069949448313"/>
+            <SampleLeaf name="sample_tree_34" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_50" action_name="follow_gps_waypoints" latitude="37.2662099725973" longitude="-120.42069993029004"/>
+            <SampleLeaf name="sample_tree_50" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_66" action_name="follow_gps_waypoints" latitude="37.266133189573765" longitude="-120.42070036609145"/>
+            <SampleLeaf name="sample_tree_66" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_82" action_name="follow_gps_waypoints" latitude="37.266056406549296" longitude="-120.42070080188736"/>
+            <SampleLeaf name="sample_tree_82" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_98" action_name="follow_gps_waypoints" latitude="37.265979623523904" longitude="-120.42070123767778"/>
+            <SampleLeaf name="sample_tree_98" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_114" action_name="follow_gps_waypoints" latitude="37.26590284049757" longitude="-120.4207016734627"/>
+            <SampleLeaf name="sample_tree_114" action_name="sample_leaf"/>
+            <MoveToGPSLocation name="move_to_tree_130" action_name="follow_gps_waypoints" latitude="37.265826057470306" longitude="-120.42070210924213"/>
+            <SampleLeaf name="sample_tree_130" action_name="sample_leaf"/>
+        </Sequence>
+    </BehaviorTree>
+</root>
