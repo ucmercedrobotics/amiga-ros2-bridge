@@ -11,6 +11,10 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(behaviortree_ros2 REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(geographic_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -23,12 +27,18 @@ ament_target_dependencies(bt_runner
   rclcpp
   nav2_msgs
   behaviortree_ros2
+  geometry_msgs
+  geographic_msgs
+  tf2
+  tf2_geometry_msgs
 )
 
 ament_target_dependencies(dummy_wp_server
   rclcpp
   rclcpp_action
   nav2_msgs
+  geometry_msgs
+  geographic_msgs
 )
 
 install(TARGETS bt_runner

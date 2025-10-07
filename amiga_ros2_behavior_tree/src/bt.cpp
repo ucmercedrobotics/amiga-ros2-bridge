@@ -6,10 +6,14 @@
 #include <behaviortree_ros2/bt_action_node.hpp>  // for RosActionNode examples
 #include <behaviortree_ros2/ros_node_params.hpp> // RosNodeParams (used when registering)
 #include "behaviortree_ros2/plugins.hpp"
-#include <nav2_msgs/action/follow_gps_waypoints.hpp> // for MoveToGPSLocation example
+#include <nav2_msgs/action/navigate_to_pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geographic_msgs/msg/geo_pose.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 using namespace BT;
-using FollowGPSWaypoints = nav2_msgs::action::FollowGPSWaypoints;
+using NavigateToPose = nav2_msgs::action::NavigateToPose;
 
 // ---- Example node implementations ----
 // NOTE: constructors accept (const std::string&, const NodeConfig&, const RosNodeParams&)
@@ -77,13 +81,13 @@ public:
     }
 };
 
-class MoveToGPSLocation : public RosActionNode<FollowGPSWaypoints>
+class MoveToGPSLocation : public RosActionNode<NavigateToPose>
 {
 public:
     MoveToGPSLocation(const std::string &name,
                       const BT::NodeConfig &config,
                       const BT::RosNodeParams &params)
-        : RosActionNode<FollowGPSWaypoints>(name, config, params) {}
+        : RosActionNode<NavigateToPose>(name, config, params) {}
 
     static BT::PortsList providedPorts()
     {
@@ -101,33 +105,46 @@ public:
             return false;
         }
 
-        geographic_msgs::msg::GeoPose pose;
-        pose.position.latitude = lat;
-        pose.position.longitude = lon;
-        pose.orientation.x = 0.0;
-        pose.orientation.y = 0.0;
-        pose.orientation.z = 0.0;
-        pose.orientation.w = 1.0;
+        // For this example, we'll do a simple conversion (this would need proper GPS->XY conversion in real use)
+        // This is a simplified conversion - in real applications you'd use proper coordinate transformation
+        goal.pose.header.frame_id = "map";
+        auto node_ptr = node_.lock();
+        if (node_ptr) {
+            goal.pose.header.stamp = node_ptr->now();
+        }
 
-        goal.gps_poses = {pose};
-        goal.number_of_loops = 1;
-        goal.goal_index = 0;
+        // Simple conversion: treat lat/lon as x/y coordinates (for demonstration)
+        // In a real application, you'd use proper GPS coordinate conversion libraries
+        goal.pose.pose.position.x = lon * 111320.0; // rough meters per degree longitude at equator
+        goal.pose.pose.position.y = lat * 110540.0; // rough meters per degree latitude
+        goal.pose.pose.position.z = 0.0;
 
-        RCLCPP_INFO(logger(), "Moving to GPS location: (%.6f, %.6f)", lat, lon);
+        // Set orientation (facing north)
+        goal.pose.pose.orientation.x = 0.0;
+        goal.pose.pose.orientation.y = 0.0;
+        goal.pose.pose.orientation.z = 0.0;
+        goal.pose.pose.orientation.w = 1.0;
+
+        goal.behavior_tree = "";
+
+        RCLCPP_INFO(logger(), "Moving to GPS location: (%.6f, %.6f) -> Pose: (%.2f, %.2f)",
+                    lat, lon, goal.pose.pose.position.x, goal.pose.pose.position.y);
         return true;
     }
 
     BT::NodeStatus onResultReceived(const WrappedResult &result) override
     {
-        RCLCPP_INFO(logger(), "Navigation finished with status: %d", int(result.result->error_code));
-        RCLCPP_DEBUG(logger(), "Number of missed waypoints: %ld", result.result->missed_waypoints.size());
+        RCLCPP_INFO(logger(), "Navigation finished successfully: %d", int(result.code));
+        // NavigateToPose::Result doesn't have error_code field like FollowGPSWaypoints did
+        // The result is simple - if we get here, navigation completed
         return BT::NodeStatus::SUCCESS;
     }
 
     BT::NodeStatus onFeedback(const std::shared_ptr<const Feedback> feedback) override
     {
-        (void)feedback;
-        RCLCPP_INFO(logger(), "Navigating...");
+        RCLCPP_INFO(logger(), "Current position: (%.2f, %.2f)",
+                    feedback->current_pose.pose.position.x,
+                    feedback->current_pose.pose.position.y);
         return BT::NodeStatus::RUNNING;
     }
 };
