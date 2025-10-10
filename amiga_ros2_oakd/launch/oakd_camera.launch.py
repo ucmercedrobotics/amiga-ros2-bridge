@@ -34,7 +34,17 @@ def launch_setup(context, *args, **kwargs):
                     plugin="depthai_ros_driver::Camera",
                     name=name,
                     parameters=[params_file],
-                )
+                ),
+                # ComposableNode(
+                #     package="depth_image_proc",
+                #     plugin="depth_image_proc::PointCloudXyzNode",
+                #     name=name + "_pc",
+                #     remappings=[
+                #         ("image_rect", name + "/stereo/image_raw"),
+                #         ("camera_info", name + "/stereo/camera_info"),
+                #         ("points", name + "/points")
+                #     ]
+                # )
             ],
             arguments=["--ros-args", "--log-level", log_level],
             output="both",
