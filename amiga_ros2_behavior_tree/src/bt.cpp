@@ -2,18 +2,20 @@
 #include <behaviortree_cpp/bt_factory.h>
 #include <rclcpp/rclcpp.hpp>
 
-// BehaviorTree.ROS2 wrappers (headers live in the BehaviorTree.ROS2 package)
-#include <behaviortree_ros2/bt_action_node.hpp>  // for RosActionNode examples
-#include <behaviortree_ros2/ros_node_params.hpp> // RosNodeParams (used when registering)
-#include "behaviortree_ros2/plugins.hpp"
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geographic_msgs/msg/geo_pose.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+// BehaviorTree.ROS2 wrappers (headers live in the BehaviorTree.ROS2 package)
+#include "behaviortree_ros2/bt_action_node.hpp"  // for RosActionNode examples
+#include "behaviortree_ros2/ros_node_params.hpp" // RosNodeParams (used when registering)
+#include "behaviortree_ros2/plugins.hpp"
+#include "amiga_interfaces/action/wpfollow.hpp" // for WpFollow action
+
 using namespace BT;
-using NavigateToPose = nav2_msgs::action::NavigateToPose;
+using WpFollow = amiga_interfaces::action::Wpfollow;
 
 // ---- Example node implementations ----
 // NOTE: constructors accept (const std::string&, const NodeConfig&, const RosNodeParams&)
@@ -81,13 +83,13 @@ public:
     }
 };
 
-class MoveToGPSLocation : public RosActionNode<NavigateToPose>
+class MoveToGPSLocation : public RosActionNode<WpFollow>
 {
 public:
     MoveToGPSLocation(const std::string &name,
                       const BT::NodeConfig &config,
                       const BT::RosNodeParams &params)
-        : RosActionNode<NavigateToPose>(name, config, params) {}
+        : RosActionNode<WpFollow>(name, config, params) {}
 
     static BT::PortsList providedPorts()
     {
@@ -105,30 +107,11 @@ public:
             return false;
         }
 
-        // For this example, we'll do a simple conversion (this would need proper GPS->XY conversion in real use)
-        // This is a simplified conversion - in real applications you'd use proper coordinate transformation
-        goal.pose.header.frame_id = "map";
-        auto node_ptr = node_.lock();
-        if (node_ptr) {
-            goal.pose.header.stamp = node_ptr->now();
-        }
+        goal.lat = lat;
+        goal.lon = lon;
 
-        // Simple conversion: treat lat/lon as x/y coordinates (for demonstration)
-        // In a real application, you'd use proper GPS coordinate conversion libraries
-        goal.pose.pose.position.x = lon * 111320.0; // rough meters per degree longitude at equator
-        goal.pose.pose.position.y = lat * 110540.0; // rough meters per degree latitude
-        goal.pose.pose.position.z = 0.0;
-
-        // Set orientation (facing north)
-        goal.pose.pose.orientation.x = 0.0;
-        goal.pose.pose.orientation.y = 0.0;
-        goal.pose.pose.orientation.z = 0.0;
-        goal.pose.pose.orientation.w = 1.0;
-
-        goal.behavior_tree = "";
-
-        RCLCPP_INFO(logger(), "Moving to GPS location: (%.6f, %.6f) -> Pose: (%.2f, %.2f)",
-                    lat, lon, goal.pose.pose.position.x, goal.pose.pose.position.y);
+        RCLCPP_INFO(logger(), "Moving to GPS location: (%.8f, %.8f)",
+                    lat, lon);
         return true;
     }
 
@@ -142,9 +125,8 @@ public:
 
     BT::NodeStatus onFeedback(const std::shared_ptr<const Feedback> feedback) override
     {
-        RCLCPP_INFO(logger(), "Current position: (%.2f, %.2f)",
-                    feedback->current_pose.pose.position.x,
-                    feedback->current_pose.pose.position.y);
+        RCLCPP_INFO(logger(), "Distance from goal: (%.6f)",
+                    feedback->dist);
         return BT::NodeStatus::RUNNING;
     }
 };

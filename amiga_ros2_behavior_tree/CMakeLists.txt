@@ -15,13 +15,14 @@ find_package(geometry_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(amiga_interfaces REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 
 add_executable(bt_runner src/bt.cpp)
 
-add_executable(dummy_wp_server src/dummy_gps.cpp)
+add_executable(dummy_wp_server src/dummy_wp_server.cpp)
 
 ament_target_dependencies(bt_runner
   rclcpp
@@ -31,11 +32,13 @@ ament_target_dependencies(bt_runner
   geographic_msgs
   tf2
   tf2_geometry_msgs
+  amiga_interfaces
 )
 
 ament_target_dependencies(dummy_wp_server
   rclcpp
   rclcpp_action
+  amiga_interfaces
   nav2_msgs
   geometry_msgs
   geographic_msgs
