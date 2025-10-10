@@ -11,7 +11,13 @@
       i_rot_cov: 0.0001
       i_gyro_mode: GYROSCOPE_CALIBRATED
       i_mag_mode: MAGNETOMETER_CALIBRATED
-      
+    stereo:
+      i_align_depth: true
+      i_board_socket_id: 2
+      i_subpixel: true
+      i_right_rect_publish_topic: true
+      i_right_rect_synced: false
+
 /oak1:
   ros__parameters:
     camera:
@@ -25,3 +31,8 @@
       i_rot_cov: 0.0001
       i_gyro_mode: GYROSCOPE_CALIBRATED
       i_mag_mode: MAGNETOMETER_CALIBRATED
+    stereo:
+      i_synced: false
+      i_align_depth: true
+      i_board_socket_id: 2
+      i_subpixel: false
