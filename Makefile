@@ -44,6 +44,9 @@ bash:
 clean:
 	rm -rf build/ install/ log/
 
+bringup:
+	ros2 launch amiga_bringup brain_bringup.launch.py
+
 amiga-streams:
 	ros2 launch amiga_ros2_bridge amiga_streams.launch.py
 
