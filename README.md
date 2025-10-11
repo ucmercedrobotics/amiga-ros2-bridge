@@ -38,6 +38,8 @@ Collaboration and PRs are welcome and will be evaluated by UC Merced and Farm-ng
 
 ## How to set up the node (needed only one time):
 
+## Installation
+
 1. Clone this repo and open the directory:
 ```bash
 git clone https://github.com/ucmercedrobotics/amiga-ros2-bridge.git
@@ -51,27 +53,58 @@ source venv/bin/activate
 pip install --upgrade pip
 ```
 
-From now on, we will be using Makefile in this repo to make chain commands, feel free to modify and/or use your own commands.
-
-2. [Optional, for application requiring GUIs] Make your local Docker network to connect your VNC client, local machine, and Amiga together. You'll use this later when remote controlling the Amiga.
+2. Clone submodules and other repos
 ```bash
-make network
+git submodule update
+cd amiga-ros2-nav
+vcs import < nav.repos
+cd ..
 ```
 
 3. After, build your ROS2 container:
+   
+To build on your own machine,
 ```bash
-make build-image
+make build-dev
 ```
 
-<!-- TODO: options for images based on arm platforms -->
+To build on the Amiga,
+```bash
+make build-prod
+```
 
-4. [Optional, for application requiring GUIs] Next, standup the VNC container to forward X11 to your web browser. You can see this at `localhost:8080`. We use `localhost` here assuming the container is running locally.
+4. Build ROS2 packages:
+
+Run the ROS2 docker container,
+```bash
+make bash
+```
+
+Once inside, build ROS2 packages,
+```bash
+colcon build
+source install/setup.bash
+```
+
+5. [Optional, for application requiring GUIs] Next, standup the noVNC container to forward X11 to your web browser.
+
+To build the container manually,
+```bash
+git clone https://github.com/ucmercedrobotics/docker-novnc
+cd docker-novnc
+make build
+```
+
+To run the container (back in amiga-ros2-bridge),
 ```bash
 make vnc
 ```
+
+You can view the noVNC page at `http://localhost:8080/vnc.html` if ran locally, or `http://{IP}:8080/vnc.html` if the image is remote.
+
 ## Execution (every time you start the node):
 
-5. Configure and spin up your docker container:
+6. Configure and spin up your docker container:
 
 This step assumes you have installed Tailscale and properly [configured your access](https://amiga.farm-ng.com/docs/ssh/) to the Brain with farm-ng's [support team](mailto:support@farm-ng.com).
 
@@ -157,46 +190,41 @@ Feel free to explore around the code and add functionality. You will see there a
 
 Have fun!
 
-## Nav2
-If you want to build autonomy with ROS2 into your ecosystem, follow these steps.
-
-1. Initialize the Nav2 submodule in this repo with `git submodule update`. This will clone the Nav2 packages for the Amiga.
-
-2. Follow the instructions in the README in [`amiga-ros2-nav`](https://github.com/ucmercedrobotics/amiga-ros2-nav).
-
-3. Build and Start the docker container with `make build-prod` and `make bash`.
-
-4. From within the container, install dependencies
-```bash
-rosdep update; rosdep install --from-paths . --ignore-src -r -y
-```
-
-5. Run `colcon build`
-
 ### Foxglove [Optional]
 
-1. Inside the docker container, install the ros2 foxglove node with 
+1. Inside the docker container, run the foxglove node (Farm-ng uses port `8765` for their foxglove bridge, so we use `8766` by default), 
 ```bash
-apt install ros-humble-foxglove-bridge
+make foxglove
 ```
 
-2. Run the foxglove node (Farm-ng uses port `8765` for their foxglove bridge, so use `8766`)
-```bash
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:="8766"
-```
+2. Follow instructions [here](https://docs.foxglove.dev/docs/connecting-to-data/frameworks/ros2) to open foxglove
 
-3. Follow instructions [here](https://docs.foxglove.dev/docs/connecting-to-data/frameworks/ros2) to open foxglove
+### Stopping Services
+
+If you want to connect to the Oakd cameras using the `depthai-ros` package, you need to disable some services on the Amiga. Farm-ng hosts a web server on port `8001` to control services. We provide a bash script to turn off unneeded Amiga services when running the ROS2 Autonomy stack:
+```bash
+bash ./scripts/stop_amiga_services.sh
+```
 
 ### Autonomy
 
-1. Bringup the relevant nodes for robot localization (you can `make shell` in new windows as each command will block the shell)
+We provide two ways of bringing up the autonomy stack:
+
+1. shell script that spawns all nodes inside tmux for debugging:
 ```bash
-make foxglove # optional
-make amiga-streams
-make twist
-make description
-make oakd
-make localization
+bash ./scripts/bringup_amiga_tmux.sh
 ```
 
-This will spawn the robot localization in preparation for Nav2 control.
+2. Master launch file for deployment:
+
+Start the container,
+```bash
+make bash
+```
+
+Once inside, bring up the nodes,
+```bash
+make bringup
+```
+
+This will spawn the Amiga-ROS2 bridge, Oakd cameras, URDF descriptions, localization stack, and nav2 stack.
