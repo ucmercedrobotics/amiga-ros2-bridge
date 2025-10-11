@@ -16,9 +16,9 @@ from launch_ros.descriptions import ComposableNode
 # Oak0: front camera, Oak1: back camera
 CAMS = ["oak0", "oak1"]
 
+
 def launch_setup(context, *args, **kwargs):
     package_dir = get_package_share_directory("amiga_ros2_oakd")
-    driver_dir = get_package_share_directory("depthai_ros_driver")
     params_file = os.path.join(package_dir, "config", "amiga_cameras.yaml")
 
     # Launch nodes for each camera
