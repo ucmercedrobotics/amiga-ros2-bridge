@@ -18,8 +18,9 @@ CAMS = ["oak0", "oak1"]
 
 def launch_setup(context, *args, **kwargs):
     package_dir = get_package_share_directory("amiga_ros2_oakd")
+    driver_dir = get_package_share_directory("depthai_ros_driver")
     params_file = os.path.join(package_dir, "config", "amiga_cameras.yaml")
-    
+
     # Launch nodes for each camera
     nodes = []
     for cam_name in CAMS:
@@ -29,16 +30,15 @@ def launch_setup(context, *args, **kwargs):
             ),
             launch_arguments={
                 "name": cam_name,
-                "params_file": params_file
-            }.items()
+                "params_file": params_file,
+                "rectify_rgb": "false",
+                "pointcloud_enable": "true",
+            }.items(),
         )
         nodes.append(node)
-    
-    return nodes
-        
 
-    
+    return nodes
+
+
 def generate_launch_description():
-    return LaunchDescription(
-        [OpaqueFunction(function=launch_setup)]
-    )
+    return LaunchDescription([OpaqueFunction(function=launch_setup)])
