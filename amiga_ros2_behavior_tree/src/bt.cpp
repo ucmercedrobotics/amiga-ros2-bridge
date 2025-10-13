@@ -1,221 +1,107 @@
-// main.cpp (sketch)
 #include <behaviortree_cpp/bt_factory.h>
 #include <rclcpp/rclcpp.hpp>
 
-#include <nav2_msgs/action/navigate_to_pose.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
-#include <geographic_msgs/msg/geo_pose.hpp>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <string>
+#include <cstdlib>
+#include <ctime>
 
-// BehaviorTree.ROS2 wrappers (headers live in the BehaviorTree.ROS2 package)
-#include "behaviortree_ros2/bt_action_node.hpp"  // for RosActionNode examples
-#include "behaviortree_ros2/ros_node_params.hpp" // RosNodeParams (used when registering)
-#include "behaviortree_ros2/plugins.hpp"
-#include "amiga_interfaces/action/wpfollow.hpp" // for WpFollow action
+#include "behaviortree_ros2/ros_node_params.hpp"
+#include <ament_index_cpp/get_package_share_directory.hpp>
+
+#include "amiga_ros2_behavior_tree/mission_tcp.hpp"
+#include "amiga_ros2_behavior_tree/xml_validation.hpp"
+#include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/detect_object.hpp"
+#include "amiga_ros2_behavior_tree/actions/assert_true.hpp"
+#include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
+#include "amiga_ros2_behavior_tree/actions/check_value.hpp"
 
 using namespace BT;
-using WpFollow = amiga_interfaces::action::Wpfollow;
+using namespace amiga_bt;
 
-// ---- Example node implementations ----
-// NOTE: constructors accept (const std::string&, const NodeConfig&, const RosNodeParams&)
-// so factory.registerNodeType<T>("Name", params) can inject the rclcpp::Node.
-
-class TakeAmbientTemperature : public SyncActionNode
-{
-public:
-    TakeAmbientTemperature(const std::string &name, const NodeConfig &config)
-        : SyncActionNode(name, config) {}
-    static PortsList providedPorts()
-    {
-        return {InputPort<std::string>("action_name"), OutputPort<double>("temperature")};
-    }
-    NodeStatus tick() override
-    {
-        double temperature = 20.0 + (std::rand() % 1000) / 100.0; // Simulate reading temperature
-        setOutput("temperature", temperature);
-        RCLCPP_INFO(rclcpp::get_logger("TakeAmbientTemperature"), "Ambient temperature: %.2f C", temperature);
-        return NodeStatus::SUCCESS;
-    }
-};
-
-class DetectObject : public SyncActionNode
-{
-public:
-    DetectObject(const std::string &name, const NodeConfig &config)
-        : SyncActionNode(name, config) {}
-    static PortsList providedPorts()
-    {
-        return {InputPort<std::string>("object"), InputPort<std::string>("action_name"), OutputPort<bool>("detected")};
-    }
-
-    NodeStatus tick() override
-    {
-        std::string object;
-        // Simulate object detection
-        bool detected = (std::rand() % 2) == 0;
-
-        if (!getInput("object", object))
-        {
-            throw RuntimeError("missing required input [object]");
-        }
-        setOutput("detected", detected);
-
-        RCLCPP_INFO(rclcpp::get_logger("DetectObject"), "Object '%s' detected: %s", object.c_str(), detected ? "true" : "false");
-        return NodeStatus::SUCCESS;
-    }
-};
-
-class SampleLeaf : public SyncActionNode
-{
-public:
-    SampleLeaf(const std::string &name, const NodeConfig &config)
-        : SyncActionNode(name, config) {}
-    static PortsList providedPorts()
-    {
-        return {InputPort<std::string>("action_name")};
-    }
-
-    NodeStatus tick() override
-    {
-        RCLCPP_INFO(rclcpp::get_logger("SampleLeaf"), "SampleLeaf executed");
-        return NodeStatus::SUCCESS;
-    }
-};
-
-class MoveToGPSLocation : public RosActionNode<WpFollow>
-{
-public:
-    MoveToGPSLocation(const std::string &name,
-                      const BT::NodeConfig &config,
-                      const BT::RosNodeParams &params)
-        : RosActionNode<WpFollow>(name, config, params) {}
-
-    static BT::PortsList providedPorts()
-    {
-        return providedBasicPorts({BT::InputPort<double>("latitude"), BT::InputPort<double>("longitude")});
-    }
-
-    // Convert GPS (lat, lon) -> PoseStamped
-    bool setGoal(Goal &goal) override
-    {
-        double lat, lon;
-
-        if (!getInput("latitude", lat) || !getInput("longitude", lon))
-        {
-            RCLCPP_ERROR(logger(), "Missing latitude/longitude input");
-            return false;
-        }
-
-        goal.lat = lat;
-        goal.lon = lon;
-
-        RCLCPP_INFO(logger(), "Moving to GPS location: (%.8f, %.8f)",
-                    lat, lon);
-        return true;
-    }
-
-    BT::NodeStatus onResultReceived(const WrappedResult &result) override
-    {
-        RCLCPP_INFO(logger(), "Navigation finished successfully: %d", int(result.code));
-        // NavigateToPose::Result doesn't have error_code field like FollowGPSWaypoints did
-        // The result is simple - if we get here, navigation completed
-        return BT::NodeStatus::SUCCESS;
-    }
-
-    BT::NodeStatus onFeedback(const std::shared_ptr<const Feedback> feedback) override
-    {
-        RCLCPP_INFO(logger(), "Distance from goal: (%.6f)",
-                    feedback->dist);
-        return BT::NodeStatus::RUNNING;
-    }
-};
-
-class CheckValue : public ConditionNode
-{
-public:
-    CheckValue(const std::string &name, const NodeConfig &config)
-        : ConditionNode(name, config) {}
-
-    static PortsList providedPorts()
-    {
-        return {InputPort<bool>("value")};
-    }
-
-    NodeStatus tick() override
-    {
-        bool value;
-        if (!getInput("value", value))
-        {
-            throw RuntimeError("missing required input [value]");
-        }
-        RCLCPP_INFO(rclcpp::get_logger("CheckValue"), "Asserting value is true: %s", value ? "true" : "false");
-        return (value == true) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
-    }
-};
-
-class AssertTrue : public ConditionNode
-{
-public:
-    AssertTrue(const std::string &name, const NodeConfig &config)
-        : ConditionNode(name, config) {}
-
-    static PortsList providedPorts()
-    {
-        return {InputPort<bool>("result")};
-    }
-
-    NodeStatus tick() override
-    {
-        bool result;
-        if (!getInput("result", result))
-        {
-            throw RuntimeError("missing required input [result]");
-        }
-        RCLCPP_INFO(rclcpp::get_logger("AssertTrue"), "Asserting result is true: %s", result ? "true" : "false");
-        return (result == true) ? NodeStatus::SUCCESS : NodeStatus::FAILURE;
-    }
-};
-
-// ---- main ----
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
     auto nh = rclcpp::Node::make_shared("bt_runner");
 
-    std::srand(std::time(nullptr));
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    int port = 12346;
+    nh->declare_parameter<int>("mission_port", port);
+    nh->get_parameter("mission_port", port);
 
     BehaviorTreeFactory factory;
-
-    // Provide the ROS node to the factory so it can inject it into node constructors.
     RosNodeParams ros_params;
     ros_params.nh = nh;
-    // optional: ros_params.default_port_value = "...";
 
-    // Register nodes (these overloads let the factory pass ros_params to constructors)
     factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
     factory.registerNodeType<DetectObject>("DetectObject");
-    factory.registerNodeType<AssertTrue>("AssertTrue");
-    factory.registerNodeType<TakeAmbientTemperature>("TakeAmbientTemperature");
     factory.registerNodeType<SampleLeaf>("SampleLeaf");
+    // conditional nodes
+    factory.registerNodeType<AssertTrue>("AssertTrue");
+    factory.registerNodeType<CheckValue>("CheckValue");
 
-    // Create tree from XML
-    auto tree = factory.createTreeFromFile("/amiga-ros2-bridge/amiga_ros2_behavior_tree/examples/sample_leafs.xml");
+    std::string schema_path;
+    try
+    {
+        std::string share_dir = ament_index_cpp::get_package_share_directory("amiga_ros2_behavior_tree");
+        schema_path = share_dir + "/schemas/schemas/amiga_btcpp.xsd";
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_WARN(nh->get_logger(), "Could not resolve package share for default schema: %s", e.what());
+        schema_path = "amiga_btcpp.xsd";
+    }
+    nh->declare_parameter<std::string>("mission_schema", schema_path);
+    nh->get_parameter("mission_schema", schema_path);
 
-    // Run loop: tick the tree and spin the ROS node
-    rclcpp::Rate rate(10);
     while (rclcpp::ok())
     {
-        auto status = tree.tickOnce();
-        if (status == BT::NodeStatus::SUCCESS || status == BT::NodeStatus::FAILURE)
+        std::string mission_in;
+        try
         {
-            RCLCPP_INFO(nh->get_logger(), "Mission finished with status: %s",
-                        toStr(status, true).c_str());
-            break;
+            mission_in = mission_tcp::wait_for_mission_tcp(port, nh->get_logger());
         }
-        rclcpp::spin_some(nh);
-        rate.sleep();
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(nh->get_logger(), "Failed to receive mission: %s", e.what());
+            continue;
+        }
+
+        Tree tree;
+        try
+        {
+            std::string err;
+            if (!xml_validation::validate(mission_in, schema_path, err))
+            {
+                RCLCPP_ERROR(nh->get_logger(), "Mission XML schema validation failed: %s", err.c_str());
+                continue;
+            }
+            tree = factory.createTreeFromText(mission_in);
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(nh->get_logger(), "Failed to create BT from mission: %s", e.what());
+            continue;
+        }
+
+        RCLCPP_INFO(nh->get_logger(), "Starting mission execution...");
+
+        rclcpp::Rate rate(10);
+        while (rclcpp::ok())
+        {
+            auto status = tree.tickOnce();
+            if (status == BT::NodeStatus::SUCCESS || status == BT::NodeStatus::FAILURE)
+            {
+                RCLCPP_INFO(nh->get_logger(), "Mission finished with status: %s",
+                            toStr(status, true).c_str());
+                break;
+            }
+            rclcpp::spin_some(nh);
+            rate.sleep();
+        }
     }
+
     rclcpp::shutdown();
     return 0;
 }
