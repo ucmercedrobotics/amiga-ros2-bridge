@@ -16,9 +16,6 @@ shell:
 	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}) && \
 	docker exec -it $${CONTAINER_PS} bash
 
-network:
-	docker network create ros
-
 build-dev:
 	docker build . -t ${IMAGE} --target base
 
@@ -41,6 +38,9 @@ bash:
 	-v /dev/ttyACM1:/dev/ttyACM1 \
 	${IMAGE} bash
 
+deps:
+	rosdep install --from-paths . --ignore-src -r -y
+
 clean:
 	rm -rf build/ install/ log/
 
@@ -52,7 +52,7 @@ amiga-streams:
 
 twist:
 	ros2 launch amiga_ros2_bridge twist_control.launch.py
-	
+
 joy:
 	ros2 launch amiga_ros2_teleop joy.launch.py
 
@@ -61,7 +61,7 @@ foxglove:
 
 oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
-	
+
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 

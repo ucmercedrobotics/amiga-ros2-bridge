@@ -1,7 +1,11 @@
+# VSCode settings
+.vscode/
+
 # ros2 build artifacts
 build/
 install/
 log/
+
 # virtual environment from script
 venv/
 

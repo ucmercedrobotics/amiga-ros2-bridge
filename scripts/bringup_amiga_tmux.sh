@@ -67,23 +67,26 @@ main() {
     # Amiga bridge
 	run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py"
     run "ros2 launch amiga_ros2_bridge twist_control.launch.py"
-    
+
     # Foxglove
     run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766"
-    
+
     # URDF
     run "ros2 launch amiga_ros2_description urdf.launch.py"
-    
+
     # Cameras
     run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py"
-    
+
     # Localization
     run "ros2 launch amiga_localization bringup.launch.py"
-    
+
     # Nav2
     run "ros2 launch amiga_navigation navigation.launch.py"
     run "ros2 run amiga_navigation waypoint_follower"
-    
+
+    # Behavior Tree
+    run "ros2 run amiga_ros2_behavior_tree bt"
+
     attach_tmux
 }
 

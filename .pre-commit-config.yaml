@@ -9,6 +9,11 @@ repos:
     hooks:
       - id: black
         exclude: '^(resources/)'
+  - repo: https://github.com/cpp-linter/cpp-linter-hooks
+    rev: v0.6.0  # Use the ref you want to point at
+    hooks:
+      - id: clang-format
+        args: [--style=Google] # Other coding style: LLVM, GNU, Chromium, Microsoft, Mozilla, WebKit.
   # TODO: figure out how mypy works with ROS2. Lots of typing errors
   # - repo: https://github.com/pre-commit/mirrors-mypy
   #   rev: 'v1.13.0'  # Use the sha / tag you want to point at

@@ -1,0 +1,37 @@
+<root BTCPP_format="4" schema_location="schemas/schemas/ros2_bt.xsd">
+    <Mission>Look for a pistachio at the first tree. If not found look at the next two trees. When found take temperature. Finish at last tree</Mission>
+    <BehaviorTree ID="MainTree">
+        <Sequence>
+            <MoveToGPSLocation name="move_to_tree_1" action_name="follow_gps_waypoints" latitude="37.26643908" longitude="-120.42079453"/>
+            <DetectObject name="detect_pistachio_tree1" action_name="detect_object" object="pistachio" detected="{pistachio_found_tree1}"/>
+            <Fallback>
+                <Sequence>
+                    <AssertTrue result="{pistachio_found_tree1}"/>
+                    <TakeAmbientTemperature name="take_temp_tree1" action_name="take_ambient_temperature" temperature="{temperature}"/>
+                </Sequence>
+                <Sequence>
+                    <MoveToGPSLocation name="move_to_tree_2" action_name="follow_gps_waypoints" latitude="37.26644032166231" longitude="-120.42069862285281"/>
+                    <DetectObject name="detect_pistachio_tree2" action_name="detect_object" object="pistachio" detected="{pistachio_found_tree2}"/>
+                    <Fallback>
+                        <Sequence>
+                            <AssertTrue result="{pistachio_found_tree2}"/>
+                            <TakeAmbientTemperature name="take_temp_tree2" action_name="take_ambient_temperature" temperature="{temperature}"/>
+                        </Sequence>
+                        <Sequence>
+                            <MoveToGPSLocation name="move_to_tree_3" action_name="follow_gps_waypoints" latitude="37.26644156324671" longitude="-120.42060271570708"/>
+                            <DetectObject name="detect_pistachio_tree3" action_name="detect_object" object="pistachio" detected="{pistachio_found_tree3}"/>
+                            <Fallback>
+                                <Sequence>
+                                    <AssertTrue result="{pistachio_found_tree3}"/>
+                                    <TakeAmbientTemperature name="take_temp_tree3" action_name="take_ambient_temperature" temperature="{temperature}"/>
+                                </Sequence>
+                                <AlwaysSuccess/>
+                            </Fallback>
+                        </Sequence>
+                    </Fallback>
+                </Sequence>
+            </Fallback>
+            <MoveToGPSLocation name="move_to_tree_144" action_name="follow_gps_waypoints" latitude="37.2657886" longitude="-120.42011635000001"/>
+        </Sequence>
+    </BehaviorTree>
+</root>

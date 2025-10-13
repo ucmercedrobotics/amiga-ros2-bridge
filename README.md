@@ -30,8 +30,6 @@ Using this bridge with the amiga requires an Amiga OS `v2.3.x`.
 
 To setup the environment, you'll be working in Docker on your local machine. It will communicate to the Amiga via Tailscale using gRPC, just like any of our [ADK Brain examples](https://amiga.farm-ng.com/docs/examples/examples-index#brain-adk-examples).
 
-In theory, this would also work on the Amiga with minimal changes, but we haven't tested it yet.
-
 Even though this repo is a collaboration between [farm-ng](https://www.github.com/orgs/farm-ng) and [Robotics@UC Merced](https://github.com/ucmercedrobotics), this is **NOT** an official release from farm-ng and, therefore, we can't guarantee support or long term compatibility. That said, we will do everything possible to help you use it. For suggestions, questions, or concerns, raise an issue [here](https://github.com/ucmercedrobotics/amiga-ros2-bridge/issues/new).
 
 Collaboration and PRs are welcome and will be evaluated by UC Merced and Farm-ng teams on regular basis.
@@ -60,9 +58,11 @@ cd amiga-ros2-nav
 vcs import < nav.repos
 cd ..
 ```
+Note, this bridge works even if you're not using Nav2! We've added support for Nav2 assuming you are using a UBlox module.
+We use a UBlox RTK Zed-F9P module to get RTK corrections from a base station instead of using NTRIP over IP as is provided from FarmNG on the Amiga.
 
-3. After, build your ROS2 container:
-   
+3. After, build your ROS2 container. Note you can run either on your own machine becausce of gRPC or directly on the Amiga:
+
 To build on your own machine,
 ```bash
 make build-dev
@@ -73,38 +73,19 @@ To build on the Amiga,
 make build-prod
 ```
 
-4. Build ROS2 packages:
+4. [Optional, for application requiring GUIs] Next, standup the noVNC container to forward X11 to your web browser.
 
-Run the ROS2 docker container,
-```bash
-make bash
-```
-
-Once inside, build ROS2 packages,
-```bash
-colcon build
-source install/setup.bash
-```
-
-5. [Optional, for application requiring GUIs] Next, standup the noVNC container to forward X11 to your web browser.
-
-To build the container manually,
-```bash
-git clone https://github.com/ucmercedrobotics/docker-novnc
-cd docker-novnc
-make build
-```
-
-To run the container (back in amiga-ros2-bridge),
+To run the container,
 ```bash
 make vnc
 ```
+Be sure to run this on the same machine you're running your ROS2 bridge on.
 
 You can view the noVNC page at `http://localhost:8080/vnc.html` if ran locally, or `http://{IP}:8080/vnc.html` if the image is remote.
 
 ## Execution (every time you start the node):
 
-6. Configure and spin up your docker container:
+5. Configure and spin up your Docker container:
 
 This step assumes you have installed Tailscale and properly [configured your access](https://amiga.farm-ng.com/docs/ssh/) to the Brain with farm-ng's [support team](mailto:support@farm-ng.com).
 
@@ -120,7 +101,7 @@ Check which [services/streams](https://amiga.farm-ng.com/docs/concepts/system_ov
         ...
 ```
 
-Finally, standup the container and connect to it:
+6. Finally, standup the container and connect to it:
 
 ```bash
 make bash
@@ -131,11 +112,17 @@ You should now be inside the container, and the terminal will show something lik
 root@docker-desktop:/amiga_ros2_bridge#
 ```
 
+Once inside, build ROS2 packages,
+```bash
+colcon build
+source install/setup.bash
+```
+
 > [!Note]
 > Feel free to modify Makefile to change your container's startup command based
 > on what you need adding port forwarding, displays, different volumes, etc.
 
-6. Expose your Amiga gRPC servers as ROS2 topics:
+7. Expose your Amiga gRPC servers as ROS2 topics:
 
 ```bash
 make amiga-streams
@@ -148,65 +135,82 @@ You should see confirmation of the topics exposed:
 ...
 ```
 
-7. Do Stuff:
+## Examples
 
 You should now be able to interact with the services from your ROS2 container. An example is to allow twist commands to drive the Amiga:
 
-Open a new terminal, connect to the container with a shell:
+1. Open a new terminal, connect to the container with a shell:
 
 ```bash
 make shell
 ```
+> Note, please use `make shell` after you've used `make bash` to create the container instance.
+> This command will attach you to the current environment instead of creating a completely new one.
+> See `Makefile` for more details.
 
-Now run our example twist converter
+2. Now run the twist converter:
 
 ```bash
 make twist
 ```
 
-You should see two more topics (published by twist_control node):
-```bash
-ros2 topic list
-/amiga/cmd_vel
-/amiga/vel
-```
+This will listen on topic `/cmd_vel` from standard ROS2 velocity commands and convert them to Amiga specific CANbus velocity commands.
 
-Now you should see your commands getting to the robot. You can confirm this on the AUTO page from the dashboard:
+Prior to running anything using ROS2, make sure you activate auto control as seen in the image below.
 
 ![dashboard in auto page](https://github.com/farm-ng/amiga-dev-kit/assets/133177230/9a8dcddf-cb5d-4e3c-95e0-0224f521ae6d)
 
-> [!WARNING]
-> If your Amiga has AUTO CONTROL enabled, the robot will move. Make sure it is safe.
+> ⚠️ Make sure it is safe to move the robot without physically controlling it! ⚠️
 
-8. Control remotely or autonomously:
+3. Control remotely:
 
 ```bash
 make joy
 ```
 
-This defaults to a PS4 controller, which should be configured via `bluetoothctl`.
+This defaults to a controller mapped to `/dev/input/js0`.
+This default file descriptor is usually a PS4 controller.
+You can connect your own contoller via `bluetoothctl`.
 
-Feel free to explore around the code and add functionality. You will see there are a lot of commented sections that are useful to get a better understanding of this repo, ROS2 and the Amiga.
+## Current Support
 
-Have fun!
+### Luxonis Oak-D
+Using the onboard Oak-D cameras or your own, you can configure them to stream using ROS2 drivers.
+The below command will execute the DepthAI provided ROS2 drivers (including 9-axis IMU support).
+```bash
+make oakd
+```
 
-### Foxglove [Optional]
+To edit the config to match your cameras, edit `amiga_ros2_oakd/config/amiga_cameras.yaml` prior to running the ROS2 drivers.
 
-1. Inside the docker container, run the foxglove node (Farm-ng uses port `8765` for their foxglove bridge, so we use `8766` by default), 
+### BT.CPP
+This repo supports mission command and control via [BT.CPP](https://www.behaviortree.dev/) XML.
+We have an example behavior tree in `amiga_ros2_behavior_tree`, which can be adapted to fit your own robot configuration.
+
+See [amiga_ros_behavior_tree](amiga_ros2_behavior_tree/README.md) for examples.
+
+### Foxglove
+
+1. Inside the docker container, run the foxglove node (Farm-ng uses port `8765` for their foxglove bridge, so we use `8766` by default),
 ```bash
 make foxglove
 ```
 
 2. Follow instructions [here](https://docs.foxglove.dev/docs/connecting-to-data/frameworks/ros2) to open foxglove
 
-### Stopping Services
+### Nav2
+While we use our own UBlox RTK module in order to support Nav2 related ROS2 nodes, this can be adapted to model any configuration.
+See [our Nav2 repo](https://github.com/ucmercedrobotics/amiga-ros2-nav/tree/main) for more details.
 
-If you want to connect to the Oakd cameras using the `depthai-ros` package, you need to disable some services on the Amiga. Farm-ng hosts a web server on port `8001` to control services. We provide a bash script to turn off unneeded Amiga services when running the ROS2 Autonomy stack:
+## Stopping Services
+Many services, such as the Oak-D cameras, require the exclusive use of the hardware.
+You may also see it fit to use this
+To disable default Amiga drivers, use the following command:
 ```bash
 bash ./scripts/stop_amiga_services.sh
 ```
 
-### Autonomy
+## Nav2 Autonomous Pipeline
 
 We provide two ways of bringing up the autonomy stack:
 
