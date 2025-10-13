@@ -19,7 +19,7 @@ bool validate(const std::string &xml, const std::string &schema_path, std::strin
 {
     static XmlInit init_guard;
 
-    xmlDocPtr doc = xmlReadMemory(xml.c_str(), static_cast<int>(xml.size()), nullptr, nullptr, XML_PARSE_NONET);
+    xmlDocPtr doc = xmlReadMemory(xml.c_str(), static_cast<int>(xml.size()), nullptr, nullptr, XML_PARSE_NONET | XML_PARSE_NOENT | XML_PARSE_NOBLANKS);
     if (!doc)
     {
         error_out = "Failed to parse XML string";
