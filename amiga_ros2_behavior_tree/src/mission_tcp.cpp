@@ -26,7 +26,12 @@ std::string wait_for_mission_tcp(int port, const rclcpp::Logger &logger)
     }
 
     int opt = 1;
-    (void)::setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
+    if (::setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0)
+    {
+        RCLCPP_FATAL(logger, "setsockopt() failed: %s", std::strerror(errno));
+        ::close(server_fd);
+        throw std::runtime_error("setsockopt failed");
+    }
 
     sockaddr_in address{};
     address.sin_family = AF_INET;
