@@ -10,6 +10,7 @@
 #include "amiga_ros2_behavior_tree/actions/check_value.hpp"
 #include "amiga_ros2_behavior_tree/actions/detect_object.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/mission_tcp.hpp"
 #include "amiga_ros2_behavior_tree/xml_validation.hpp"
@@ -33,6 +34,10 @@ int main(int argc, char **argv) {
   ros_params.nh = nh;
 
   factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
+  factory.registerNodeType<MoveToRelativeLocation>("MoveToRelativeLocation",
+                                                   ros_params);
+  factory.registerNodeType<MoveToRelativeLocation>("OrientRobotHeading",
+                                                   ros_params);
   factory.registerNodeType<DetectObject>("DetectObject");
   factory.registerNodeType<SampleLeaf>("SampleLeaf");
   // conditional nodes

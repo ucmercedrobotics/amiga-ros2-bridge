@@ -1,0 +1,10 @@
+<root BTCPP_format="4" schema_location="schemas/schemas/amiga.xsd">
+    <Mission>move forward a meter and sample a leaf</Mission>
+    <BehaviorTree ID="move_and_sample_leaf">
+        <Sequence>
+            <MoveToRelativeLocation name="move_to_rel" action_name="navigate_to_pose" x="1.0" y="0.0"/>
+            <OrientRobotHeading name="orient_heading" action_name="navigate_to_pose" absolute="false" yaw="3.1415"/>
+            <SampleLeaf name="sample_leaf" action_name="sample_leaf"/>
+        </Sequence>
+    </BehaviorTree>
+</root>

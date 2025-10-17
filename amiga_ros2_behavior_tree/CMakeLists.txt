@@ -27,18 +27,21 @@ add_executable(bt_runner
   src/mission_tcp.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
+  src/actions/move_to_relative_location.cpp
   src/actions/detect_object.cpp
   src/actions/sample_leaf.cpp
   src/actions/check_value.cpp
   src/actions/assert_true.cpp
 )
 
+add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
+
+add_executable(dummy_nav_to_pose src/mocks/dummy_navigate_to_pose_server.cpp)
+
 target_include_directories(bt_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-
-add_executable(dummy_wp_server src/dummy_wp_server.cpp)
 
 ament_target_dependencies(bt_runner
   rclcpp
@@ -52,10 +55,6 @@ ament_target_dependencies(bt_runner
   amiga_interfaces
 )
 
-target_link_libraries(bt_runner
-  LibXml2::LibXml2
-)
-
 ament_target_dependencies(dummy_wp_server
   rclcpp
   rclcpp_action
@@ -65,10 +64,25 @@ ament_target_dependencies(dummy_wp_server
   geographic_msgs
 )
 
+ament_target_dependencies(dummy_nav_to_pose
+  rclcpp
+  rclcpp_action
+  tf2
+  nav2_msgs
+  geometry_msgs
+)
+
+target_link_libraries(bt_runner
+  LibXml2::LibXml2
+)
+
 install(TARGETS bt_runner
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_wp_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS dummy_nav_to_pose
   DESTINATION lib/${PROJECT_NAME})
 
 # Install public headers
