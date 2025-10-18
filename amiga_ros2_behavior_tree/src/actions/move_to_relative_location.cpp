@@ -3,8 +3,10 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 
+#include <chrono>
 #include <cmath>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <thread>
 
 namespace amiga_bt {
 
@@ -55,7 +57,7 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
 
   geometry_msgs::msg::PoseStamped pose_in_base_link;
   pose_in_base_link.header.frame_id = frame_id;
-  pose_in_base_link.header.stamp = node->now();
+  pose_in_base_link.header.stamp = rclcpp::Time(0);
   pose_in_base_link.pose.position.x = x;
   pose_in_base_link.pose.position.y = y;
   pose_in_base_link.pose.position.z = 0.0;
@@ -64,20 +66,35 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
   pose_in_base_link.pose.orientation.z = z;
   pose_in_base_link.pose.orientation.w = w;
 
-  try {
-    geometry_msgs::msg::PoseStamped pose_in_map;
-    pose_in_map = tf_buffer_->transform(pose_in_base_link, "map",
-                                        tf2::durationFromSec(2.0));
+  geometry_msgs::msg::PoseStamped pose_in_map;
+  const int max_retries = 10;
+  const auto retry_delay = std::chrono::milliseconds(100);
 
-    goal.pose = pose_in_map;
+  for (int attempt = 0; attempt < max_retries; ++attempt) {
+    try {
+      pose_in_map = tf_buffer_->transform(pose_in_base_link, "map",
+                                          tf2::durationFromSec(0.5));
 
-    RCLCPP_INFO(
-        logger(),
-        "Transformed pose from base_link (%.2f, %.2f) to map (%.2f, %.2f)", x,
-        y, pose_in_map.pose.position.x, pose_in_map.pose.position.y);
-  } catch (const tf2::TransformException &ex) {
-    RCLCPP_ERROR(logger(), "Could not transform pose: %s", ex.what());
-    return false;
+      goal.pose = pose_in_map;
+
+      RCLCPP_INFO(
+          logger(),
+          "Transformed pose from base_link (%.2f, %.2f) to map (%.2f, %.2f)", x,
+          y, pose_in_map.pose.position.x, pose_in_map.pose.position.y);
+
+      return true;
+
+    } catch (const tf2::TransformException &ex) {
+      if (attempt < max_retries - 1) {
+        RCLCPP_WARN(logger(), "Transform attempt %d/%d failed: %s. Retrying...",
+                    attempt + 1, max_retries, ex.what());
+        std::this_thread::sleep_for(retry_delay);
+      } else {
+        RCLCPP_ERROR(logger(), "Could not transform pose after %d attempts: %s",
+                     max_retries, ex.what());
+        return false;
+      }
+    }
   }
 
   return true;
