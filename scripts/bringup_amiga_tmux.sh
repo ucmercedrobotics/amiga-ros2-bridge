@@ -85,7 +85,7 @@ main() {
     run "ros2 run amiga_navigation waypoint_follower"
 
     # Behavior Tree
-    run "ros2 run amiga_ros2_behavior_tree bt"
+    run "ros2 run amiga_ros2_behavior_tree bt_runner"
 
     attach_tmux
 }
