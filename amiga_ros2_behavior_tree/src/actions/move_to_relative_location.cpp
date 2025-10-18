@@ -11,7 +11,13 @@ namespace amiga_bt {
 MoveToRelativeLocation::MoveToRelativeLocation(const std::string &name,
                                                const BT::NodeConfig &config,
                                                const BT::RosNodeParams &params)
-    : BT::RosActionNode<NavigateToPose>(name, config, params) {}
+    : BT::RosActionNode<NavigateToPose>(name, config, params) {
+  auto node = node_.lock();
+  if (node) {
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  }
+}
 
 BT::PortsList MoveToRelativeLocation::providedPorts() {
   return providedBasicPorts(
@@ -47,22 +53,33 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
     return false;
   }
 
-  goal.pose.header.frame_id = frame_id.c_str();
-  goal.pose.header.stamp = node->now();
+  geometry_msgs::msg::PoseStamped pose_in_base_link;
+  pose_in_base_link.header.frame_id = frame_id;
+  pose_in_base_link.header.stamp = node->now();
+  pose_in_base_link.pose.position.x = x;
+  pose_in_base_link.pose.position.y = y;
+  pose_in_base_link.pose.position.z = 0.0;
+  pose_in_base_link.pose.orientation.x = 0.0;
+  pose_in_base_link.pose.orientation.y = 0.0;
+  pose_in_base_link.pose.orientation.z = z;
+  pose_in_base_link.pose.orientation.w = w;
 
-  goal.pose.pose.position.x = x;
-  goal.pose.pose.position.y = y;
-  goal.pose.pose.position.z = 0.0;
+  try {
+    geometry_msgs::msg::PoseStamped pose_in_map;
+    pose_in_map = tf_buffer_->transform(pose_in_base_link, "map",
+                                        tf2::durationFromSec(1.0));
 
-  goal.pose.pose.orientation.x = 0.0;
-  goal.pose.pose.orientation.y = 0.0;
-  goal.pose.pose.orientation.z = z;
-  goal.pose.pose.orientation.w = w;
+    goal.pose = pose_in_map;
 
-  RCLCPP_INFO(
-      logger(),
-      "Sending NavigateToPose goal: (%.2f, %.2f, %.2f) - orientation free", x,
-      y, yaw);
+    RCLCPP_INFO(
+        logger(),
+        "Transformed pose from base_link (%.2f, %.2f) to map (%.2f, %.2f)", x,
+        y, pose_in_map.pose.position.x, pose_in_map.pose.position.y);
+  } catch (const tf2::TransformException &ex) {
+    RCLCPP_ERROR(logger(), "Could not transform pose: %s", ex.what());
+    return false;
+  }
+
   return true;
 }
 

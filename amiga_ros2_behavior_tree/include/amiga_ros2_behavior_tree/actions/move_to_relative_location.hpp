@@ -1,7 +1,11 @@
 #pragma once
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
+#include <memory>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 
 namespace amiga_bt {
@@ -19,6 +23,10 @@ class MoveToRelativeLocation : public BT::RosActionNode<NavigateToPose> {
   BT::NodeStatus onResultReceived(const WrappedResult &result) override;
   BT::NodeStatus onFeedback(
       const std::shared_ptr<const Feedback> feedback) override;
+
+ private:
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 };
 
 }  // namespace amiga_bt
