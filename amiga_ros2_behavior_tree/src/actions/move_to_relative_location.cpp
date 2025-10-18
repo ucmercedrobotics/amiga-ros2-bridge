@@ -67,7 +67,7 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
   try {
     geometry_msgs::msg::PoseStamped pose_in_map;
     pose_in_map = tf_buffer_->transform(pose_in_base_link, "map",
-                                        tf2::durationFromSec(1.0));
+                                        tf2::durationFromSec(2.0));
 
     goal.pose = pose_in_map;
 
