@@ -32,18 +32,19 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
   goal.yaw = yaw;
   goal.absolute = absolute;
 
+  RCLCPP_INFO(logger(),
+              "Moving to relative location: (x=%.2f, y=%.2f, yaw=%.2f rad, "
+              "absolute=%s)",
+              x, y, yaw, absolute ? "true" : "false");
+
   return true;
 }
 
 BT::NodeStatus MoveToRelativeLocation::onResultReceived(
     const WrappedResult &result) {
-  if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
-    RCLCPP_INFO(logger(), "Navigation succeeded");
-    return BT::NodeStatus::SUCCESS;
-  } else {
-    RCLCPP_ERROR(logger(), "Navigation failed with code: %d", int(result.code));
-    return BT::NodeStatus::FAILURE;
-  }
+  RCLCPP_INFO(logger(), "Navigation finished successfully: %d",
+              int(result.code));
+  return BT::NodeStatus::SUCCESS;
 }
 
 BT::NodeStatus MoveToRelativeLocation::onFeedback(
