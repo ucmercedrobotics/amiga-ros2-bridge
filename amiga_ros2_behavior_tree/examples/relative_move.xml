@@ -2,7 +2,7 @@
     <Mission>move forward 5 meters and turn</Mission>
     <BehaviorTree ID="move_and_turn">
         <Sequence>
-            <MoveToRelativeLocation name="move_to_rel" action_name="navigate_to_pose_in_frame" x="5.0" y="0.0"/>
+            <MoveToRelativeLocation name="move_to_rel" action_name="navigate_to_pose_in_frame" x="1.0" y="0.0"/>
             <OrientRobotHeading name="orient_heading" action_name="navigate_to_pose_in_frame" absolute="false" yaw="1.5708"/>
         </Sequence>
     </BehaviorTree>

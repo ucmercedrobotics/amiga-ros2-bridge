@@ -1,5 +1,7 @@
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
 
+#include <rclcpp_action/rclcpp_action.hpp>
+
 namespace amiga_bt {
 
 MoveToRelativeLocation::MoveToRelativeLocation(const std::string &name,
@@ -42,9 +44,19 @@ bool MoveToRelativeLocation::setGoal(Goal &goal) {
 
 BT::NodeStatus MoveToRelativeLocation::onResultReceived(
     const WrappedResult &result) {
-  RCLCPP_INFO(logger(), "Navigation finished successfully: %d",
-              int(result.code));
-  return BT::NodeStatus::SUCCESS;
+  RCLCPP_INFO(logger(), "Navigation finished with code: %d", int(result.code));
+
+  // Check if the action succeeded
+  if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+    RCLCPP_INFO(logger(), "Navigation succeeded!");
+    return BT::NodeStatus::SUCCESS;
+  } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
+    RCLCPP_WARN(logger(), "Navigation was canceled");
+    return BT::NodeStatus::FAILURE;
+  } else {
+    RCLCPP_ERROR(logger(), "Navigation failed or was aborted");
+    return BT::NodeStatus::FAILURE;
+  }
 }
 
 BT::NodeStatus MoveToRelativeLocation::onFeedback(

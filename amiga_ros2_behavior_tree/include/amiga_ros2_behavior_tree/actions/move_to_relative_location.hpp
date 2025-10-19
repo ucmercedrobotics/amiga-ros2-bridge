@@ -3,7 +3,6 @@
 #include <amiga_interfaces/action/navigate_to_pose_in_frame.hpp>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
-#include <memory>
 
 namespace amiga_bt {
 
