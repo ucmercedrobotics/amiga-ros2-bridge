@@ -36,8 +36,6 @@ add_executable(bt_runner
 
 add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
 
-add_executable(dummy_pose_in_frame_server src/mocks/dummy_pose_in_frame_server.cpp)
-
 target_include_directories(bt_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -58,12 +56,6 @@ ament_target_dependencies(dummy_wp_server
   geographic_msgs
 )
 
-ament_target_dependencies(dummy_pose_in_frame_server
-  rclcpp
-  rclcpp_action
-  amiga_interfaces
-)
-
 target_link_libraries(bt_runner
   LibXml2::LibXml2
 )
@@ -72,9 +64,6 @@ install(TARGETS bt_runner
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_wp_server
-  DESTINATION lib/${PROJECT_NAME})
-
-install(TARGETS dummy_pose_in_frame_server
   DESTINATION lib/${PROJECT_NAME})
 
 # Install public headers
