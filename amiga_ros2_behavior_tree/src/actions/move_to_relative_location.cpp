@@ -14,8 +14,8 @@ BT::PortsList MoveToRelativeLocation::providedPorts() {
 }
 
 bool MoveToRelativeLocation::setGoal(Goal &goal) {
-  double x, y, yaw;
-  bool absolute;
+  double x = 0.0, y = 0.0, yaw = 0.0;
+  bool absolute = false;
 
   if (getInput("x", x) && getInput("y", y)) {
     RCLCPP_DEBUG(logger(), "Received x/y input. Making relative movement.");
