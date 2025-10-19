@@ -19,6 +19,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             name="publish_joints", default_value="true", description="Publish joint states"
         ),
+        DeclareLaunchArgument(
+            name='use_lidar',
+            default_value='false',
+            description='Whether to include the LiDAR in the robot description'
+        ),
         Node(
             package="joint_state_publisher",
             executable="joint_state_publisher",
@@ -34,7 +39,10 @@ def generate_launch_description():
             parameters=[
                 {
                    'robot_description': ParameterValue(
-                        Command(['xacro ', LaunchConfiguration('urdf')]),
+                        Command(['xacro ', 
+                                 LaunchConfiguration('urdf'),
+                                 ' use_lidar:=',
+                                 LaunchConfiguration('use_lidar')]),
                         value_type=str
                     )
                 }
