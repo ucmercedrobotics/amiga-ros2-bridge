@@ -1,11 +1,15 @@
 <?xml version="1.0"?>
 <robot name="amiga_base" xmlns:xacro="http://ros.org/wiki/xacro">
 
+  <!-- Use LiDAR or not?-->
+  <xacro:arg name="use_lidar" default="false" />
+
   <!-- Include macros -->
   <xacro:include filename="$(find amiga_ros2_description)/urdf/base.urdf.xacro" />
   <xacro:include filename="$(find amiga_ros2_description)/urdf/wheel.urdf.xacro" />
   <xacro:include filename="$(find amiga_ros2_description)/urdf/gps.urdf.xacro"/>
   <xacro:include filename="$(find amiga_ros2_description)/urdf/oak_d_w_poe.urdf.xacro"/>
+
 
   <!-- Base -->
   <xacro:base 
@@ -51,6 +55,16 @@
     joint_origin_xyz="-0.343 0.27301 1.0163"
     joint_origin_rpy="0 0 0"/>
 
+  <!-- LiDAR -->
+  <xacro:if value="$(arg use_lidar)">
+    <xacro:include filename="$(find amiga_ros2_description)/urdf/lidar.urdf.xacro"/>
+    <xacro:lidar
+    parent_link="base_link"
+    lidar_link_name="lidar_link"
+    joint_origin_xyz="0 0.56219 0.14117"
+    joint_origin_rpy="0 0 0"/>
+  </xacro:if>
+  
   <!-- Cameras -->
   <!-- Front -->
   <!-- imu_rpy="3.14159265359 1.5708 0" -->
