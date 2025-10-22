@@ -202,6 +202,13 @@ make foxglove
 While we use our own UBlox RTK module in order to support Nav2 related ROS2 nodes, this can be adapted to model any configuration.
 See [our Nav2 repo](https://github.com/ucmercedrobotics/amiga-ros2-nav/tree/main) for more details.
 
+### LLM Planning
+From any computer (except the Amiga since it's behind Tailscale) on the same network as the Amiga, run the proxy that will connect our webapp to the Amiga.
+`git clone https://github.com/vtomnet/mp-proxy`, make a venv, install `requirements.txt`, `python proxy.py --to-tcp <amiga_ip>:<bt_runner_port>`.
+From https://mp.vtom.net/ plan out your mission.
+
+Note, you can configure what port the Amiga talks from through `bt_runner` parameter `mission_port`, which is defaulted to `12346`.
+
 ## Stopping Services
 Many services, such as the Oak-D cameras, require the exclusive use of the hardware.
 You may also see it fit to use this
