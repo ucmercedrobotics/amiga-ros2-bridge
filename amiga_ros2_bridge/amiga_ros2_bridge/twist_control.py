@@ -25,25 +25,15 @@ from geometry_msgs.msg import Twist
 
 
 ############convert the msg to twist2d and push to queue#####
-def cmd_vel_callback(
-    node: Node, msg: Twist, queue: asyncio.Queue
-) -> None:
+def cmd_vel_callback(node: Node, msg: Twist, queue: asyncio.Queue) -> None:
     """Callback for the /amiga/cmd_vel topic."""
-    node.get_logger().info("wouliyee!!!!! cmd_vel_callback triggered")
     twist = Twist2d()
     twist.linear_velocity_x = msg.linear.x
     twist.linear_velocity_y = msg.linear.y
     twist.angular_velocity = msg.angular.z
     try:
-        node.get_logger().info(
-            f"converted Twist data: linear_velocity_x={twist.linear_velocity_x}, "
-            f"converted linear_velocity_y={twist.linear_velocity_y}, "
-            f"converted angular_velocity={twist.angular_velocity}"
-        )
-
         # put_nowait method selected by farmng
         queue.put_nowait(twist)  # Add the twist message to the queue
-        node.get_logger().info("twist2d message added to the queue")
     except asyncio.QueueFull:
         node.get_logger().warn("Queue is full, dropping Twist message")
 
@@ -55,10 +45,6 @@ def cmd_vel_callback(
 async def command_task(node: Node, client: EventClient, queue: asyncio.Queue) -> None:
     node.get_logger().info("command_task started")
     while rclpy.ok():
-        node.get_logger().info(
-            "waiting for the twist2d message from the cmd_vel_callback"
-        )
-
         # #get twist2d message
         # twist = await queue.get()
         # node.get_logger().info(f"Twist2d data received: {twist}")
@@ -69,16 +55,11 @@ async def command_task(node: Node, client: EventClient, queue: asyncio.Queue) ->
         try:
             # try to get a message from the queue
             twist = await queue.get()
-            node.get_logger().info(f"Twist2d RECEIVED from cmd_vel_callback: {twist}")
         except Exception as e:
             node.get_logger().error(f"DID NOT GET message from queue: {e}")
             continue  # skip to next
-
-        # Send the Twist2d message to the canbus service
-        node.get_logger().info("Twist2d received and SENDING to canbus")
         try:
             await client.request_reply("/twist", twist)
-            node.get_logger().info("success Twist2d message sent to canbus")
         except Exception as e:
             node.get_logger().error(f"ERROR: {e}")
 

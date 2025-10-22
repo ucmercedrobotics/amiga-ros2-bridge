@@ -17,3 +17,8 @@ To use BT.CPP with ROS2, we've created a small demo to showcase utility.
 ```
 
 > Note, we use XML syntax validation via XSD for our behavior tree XML. This isn't standard practice, but we find it makes our pipeline more secure. You can edit the `bt_runner` node however you see fit for BT.CPP support.
+
+## Mocks
+- `/navigate_to_pose` mock -> dummy_nav2_ntp_server
+- `/navigate_to_pose_in_frame` mock -> dummy_ntp_server
+- `follow_gps_waypoints` mock -> dummy_wp_server

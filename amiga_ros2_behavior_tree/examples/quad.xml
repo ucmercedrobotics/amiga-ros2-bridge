@@ -1,0 +1,13 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+    <Mission>Can I go to trees 1, 2, 3, 4, and 5, please?</Mission>
+    <BehaviorTree ID="MainTree">
+        <Sequence>
+            <MoveToGPSLocation name="move_to_tree_1" action_name="follow_gps_waypoints" latitude="37.366449" longitude="-120.423065"/>
+            <MoveToGPSLocation name="move_to_tree_2" action_name="follow_gps_waypoints" latitude="37.3664050000283" longitude="-120.4230154999136"/>
+            <MoveToGPSLocation name="move_to_tree_3" action_name="follow_gps_waypoints" latitude="37.36636100003774" longitude="-120.42296599988482"/>
+            <MoveToGPSLocation name="move_to_tree_4" action_name="follow_gps_waypoints" latitude="37.3663170000283" longitude="-120.42291649991363"/>
+            <MoveToGPSLocation name="move_to_tree_5" action_name="follow_gps_waypoints" latitude="37.366273" longitude="-120.42286700000001"/>
+            <MoveToGPSLocation name="home" action_name="follow_gps_waypoints" latitude="37.366351898723934" longitude="-120.42261198151091"/>
+        </Sequence>
+    </BehaviorTree>
+</root>
