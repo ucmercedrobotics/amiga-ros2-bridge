@@ -83,6 +83,7 @@ main() {
     # Nav2
     run "ros2 launch amiga_navigation navigation.launch.py"
     run "ros2 run amiga_navigation waypoint_follower"
+    run "ros2 run amiga_navigation lidar_velo"
 
     # Behavior Tree
     run "ros2 run amiga_ros2_behavior_tree bt_runner"
