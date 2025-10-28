@@ -51,7 +51,7 @@
   <!-- GPS -->
   <xacro:gps
     parent_link="base_link"
-    gps_link_name="gps_link"
+    gps_link_name="gps_antenna"
     joint_origin_xyz="-0.343 0.27301 1.0163"
     joint_origin_rpy="0 0 0"/>
 

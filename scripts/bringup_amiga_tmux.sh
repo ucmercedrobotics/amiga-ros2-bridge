@@ -75,15 +75,15 @@ main() {
     run "ros2 launch amiga_ros2_description urdf.launch.py"
 
     # Cameras
-    run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py"
+	run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py"
 
     # Localization
     run "ros2 launch amiga_localization bringup.launch.py"
 
     # Nav2
     run "ros2 launch amiga_navigation navigation.launch.py"
-    run "ros2 run amiga_navigation waypoint_follower"
-    run "ros2 run amiga_navigation lidar_velo"
+    run "ros2 run amiga_navigation waypoint_follower.py"
+    run "ros2 run amiga_navigation linear_velo"
 
     # Behavior Tree
     run "ros2 run amiga_ros2_behavior_tree bt_runner"

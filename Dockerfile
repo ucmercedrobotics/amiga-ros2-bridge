@@ -19,9 +19,6 @@ RUN python3 -m venv .venv && \
 
 WORKDIR ${WORKSPACE_ROOT}
 
-# Copy everything into the workspace (except what's in .dockerignore)
-COPY . ${WORKSPACE_ROOT}
-
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=:2 \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -36,6 +33,8 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     git clone https://github.com/BehaviorTree/BehaviorTree.ROS2.git ${BTCPP_ROS2_WORKSPACE} && \
     cd ${BTCPP_ROS2_WORKSPACE} && \
     colcon build --symlink-install
+
+COPY . ${WORKSPACE_ROOT}
 
 RUN cd ${WORKSPACE_ROOT} && \
     rosdep install --from-paths . --ignore-src -r -y

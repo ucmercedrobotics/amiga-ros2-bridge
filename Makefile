@@ -20,7 +20,7 @@ build-dev:
 	docker build . -t ${IMAGE} --target base
 
 build-prod:
-	docker buildx build --platform linux/arm64/v8 . -t ${IMAGE} --target base
+	docker build --network=host --platform linux/arm64/v8 . -t ${IMAGE} --target base
 
 vnc:
 	docker run -d --rm --net=host \
@@ -35,7 +35,7 @@ bash:
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/input/js0:/dev/input/js0 \
-	-v /dev/ttyACM1:/dev/ttyACM1 \
+	-v /dev/ttyACM0:/dev/ttyACM0 \
 	${IMAGE} bash
 
 deps:
