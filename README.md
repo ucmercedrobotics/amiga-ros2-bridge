@@ -114,6 +114,7 @@ root@docker-desktop:/amiga_ros2_bridge#
 
 Once inside, build ROS2 packages,
 ```bash
+rosdep install --from-paths . --ignore-src -r -y
 colcon build
 source install/setup.bash
 ```
