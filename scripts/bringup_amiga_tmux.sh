@@ -52,7 +52,32 @@ run() {
     WINDOW_INDEX=$((WINDOW_INDEX + 1))
 }
 
+# Ask the user for optional parameters before launching.
+# Currently asks whether a sensor tower is being used and exports
+# USE_SENSOR_TOWER=1 (yes) or 0 (no). The choice is shown and the
+# user must confirm before the script proceeds.
+ask_parameters() {
+    # Prompt: sensor tower
+    while true; do
+        read -r -p "Do you have the sensor tower connected? [y/N]: " ans
+        case "$ans" in
+            [Yy]* ) USE_SENSOR_TOWER="use_lidar:=True"; break ;;
+            [Nn]* ) USE_SENSOR_TOWER="use_lidar:=False"; break ;;
+            ""    ) USE_SENSOR_TOWER="use_lidar:=False"; break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+
+    export USE_SENSOR_TOWER
+
+    echo
+    echo "Starting bringup..."
+}
+
 main() {
+    # -- Ask user for optional parameters before proceeding
+    ask_parameters
+
     if tmux has-session -t "$SESSION" 2>/dev/null; then
         echo "Tmux session '$SESSION' already exists. Attaching..."
         attach_tmux
@@ -72,7 +97,7 @@ main() {
     run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766"
 
     # URDF
-    run "ros2 launch amiga_ros2_description urdf.launch.py"
+    run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER}"
 
     # Cameras
     run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py"
@@ -83,7 +108,9 @@ main() {
     # Nav2
     run "ros2 launch amiga_navigation navigation.launch.py"
     run "ros2 run amiga_navigation waypoint_follower"
-    run "ros2 run amiga_navigation lidar_velo"
+    run "ros2 run amiga_navigation linear_velo"
+    # TODO: replace the above with this once we confirm NAV2 working with IMU
+    # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
 
     # Behavior Tree
     run "ros2 run amiga_ros2_behavior_tree bt_runner"
