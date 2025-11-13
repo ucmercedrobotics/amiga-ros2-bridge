@@ -19,15 +19,18 @@ RUN python3 -m venv .venv && \
 
 WORKDIR ${WORKSPACE_ROOT}
 
-# Copy everything into the workspace (except what's in .dockerignore)
-COPY . ${WORKSPACE_ROOT}
-
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=:2 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=all \
   __GLX_VENDOR_LIBRARY_NAME=nvidia \
   __NV_PRIME_RENDER_OFFLOAD=1
+
+# BNO085 IMU I2C to USB-C board
+ENV BLINKA_MCP2221="1"
+
+COPY . ${WORKSPACE_ROOT}
+RUN rosdep install --from-paths . --ignore-src -r -y
 
 # install BT CPP ROS2 wrapper
 ARG BTCPP_ROS2_WORKSPACE="/btcpp_ros2_ws"
@@ -36,9 +39,6 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     git clone https://github.com/BehaviorTree/BehaviorTree.ROS2.git ${BTCPP_ROS2_WORKSPACE} && \
     cd ${BTCPP_ROS2_WORKSPACE} && \
     colcon build --symlink-install
-
-RUN cd ${WORKSPACE_ROOT} && \
-    rosdep install --from-paths . --ignore-src -r -y
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
 RUN echo "source ${BTCPP_ROS2_WORKSPACE}/install/setup.bash" >> /root/.bashrc
