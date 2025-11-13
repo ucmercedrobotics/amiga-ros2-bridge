@@ -61,7 +61,7 @@
     parent_link="base_link"
     bno085_link_name="bno085"
     joint_origin_xyz="-0.343 0.17301 0.8163"
-    joint_origin_rpy="0 0 0"/>
+	  joint_origin_rpy="${pi/2} 0 0"/>
 
   <!-- LiDAR -->
   <xacro:if value="$(arg use_lidar)">

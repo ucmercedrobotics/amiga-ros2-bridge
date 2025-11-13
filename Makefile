@@ -27,15 +27,19 @@ vnc:
 	--name=novnc \
 	${NOVNC}
 
-bash:
+udev: 
+	cp udev/99-ucm.rules /etc/udev/rules.d && \
+	udevadm control --reload-rules && \
+	udevadm trigger
+
+bash: udev
 	docker run -it --rm \
 	--net=host \
 	--privileged \
 	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
-	-v /dev/input/js0:/dev/input/js0 \
-	-v /dev/ttyACM1:/dev/ttyACM1 \
+	-v /dev/:/dev/ \
 	${IMAGE} bash
 
 deps:

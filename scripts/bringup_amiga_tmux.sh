@@ -88,6 +88,8 @@ main() {
     start_container
     wait_for_container
 
+    make udev
+
     # -- Commands
     # Amiga bridge
 	run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py"
