@@ -88,11 +88,11 @@ main() {
     start_container
     wait_for_container
 
-    make udev
+    make udev -B
 
     # -- Commands
     # Amiga bridge
-	run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py"
+    run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py"
     run "ros2 launch amiga_ros2_bridge twist_control.launch.py"
 
     # Foxglove

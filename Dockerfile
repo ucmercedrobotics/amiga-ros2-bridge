@@ -29,6 +29,9 @@ ENV DISPLAY=:2 \
 # BNO085 IMU I2C to USB-C board
 ENV BLINKA_MCP2221="1"
 
+COPY . ${WORKSPACE_ROOT}
+RUN rosdep install --from-paths . --ignore-src -r -y
+
 # install BT CPP ROS2 wrapper
 ARG BTCPP_ROS2_WORKSPACE="/btcpp_ros2_ws"
 RUN mkdir -p ${BTCPP_ROS2_WORKSPACE}
