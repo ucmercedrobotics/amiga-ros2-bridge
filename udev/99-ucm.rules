@@ -1,2 +1,2 @@
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", ATTRS{devpath}=="2.1.3", SYMLINK+="ublox", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="ublox", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idProduct}=="00dd", SYMLINK+="bno085", MODE="0666"
