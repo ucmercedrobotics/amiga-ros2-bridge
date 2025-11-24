@@ -1,6 +1,15 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
 NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
+ARCH := $(shell uname -m)
+CUDA_MOUNT:=
+ifneq (,$(filter $(ARCH),arm64 aarch64))
+	PLATFORM := linux/arm64/v8
+	ARCH_TAG:=arm64
+	TARGET:=jetson
+	CUDA_MOUNT:= -v /usr/local/cuda-12.2:/usr/local/cuda:ro \
+		     -v /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
+endif
 
 repo-init:
 	python3 -m pip install pre-commit && \
@@ -16,11 +25,8 @@ shell:
 	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}) && \
 	docker exec -it $${CONTAINER_PS} bash
 
-build-dev:
-	docker build . -t ${IMAGE} --target base
-
-build-prod:
-	docker buildx build --platform linux/arm64/v8 . -t ${IMAGE} --target base
+build-image:
+	docker build --platform ${PLATFORM} . -t ${IMAGE}:${ARCH_TAG} --target ${TARGET}
 
 vnc:
 	docker run -d --rm --net=host \

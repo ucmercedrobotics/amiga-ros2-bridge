@@ -19,19 +19,6 @@ RUN python3 -m venv .venv && \
 
 WORKDIR ${WORKSPACE_ROOT}
 
-# configure DISPLAY env variable for novnc connection
-ENV DISPLAY=:2 \
-    NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=all \
-  __GLX_VENDOR_LIBRARY_NAME=nvidia \
-  __NV_PRIME_RENDER_OFFLOAD=1
-
-# BNO085 IMU I2C to USB-C board
-ENV BLINKA_MCP2221="1"
-
-COPY . ${WORKSPACE_ROOT}
-RUN rosdep install --from-paths . --ignore-src -r -y
-
 # install BT CPP ROS2 wrapper
 ARG BTCPP_ROS2_WORKSPACE="/btcpp_ros2_ws"
 RUN mkdir -p ${BTCPP_ROS2_WORKSPACE}
@@ -40,8 +27,34 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     cd ${BTCPP_ROS2_WORKSPACE} && \
     colcon build --symlink-install
 
+# configure DISPLAY env variable for novnc connection
+ENV DISPLAY=:2 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=all \
+  __GLX_VENDOR_LIBRARY_NAME=nvidia \
+  __NV_PRIME_RENDER_OFFLOAD=1 \
+  FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/fastdds.xml
+
+# BNO085 IMU I2C to USB-C board
+ENV BLINKA_MCP2221="1"
+
+COPY . ${WORKSPACE_ROOT}
+RUN rosdep install --from-paths . --ignore-src -r -y
+
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
 RUN echo "source ${BTCPP_ROS2_WORKSPACE}/install/setup.bash" >> /root/.bashrc
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
 RUN echo "source /.venv/bin/activate" >> /root/.bashrc
 RUN echo "export PYTHONPATH=/usr/lib/python3/dist-packages:\$PYTHONPATH" >> /root/.bashrc
+
+FROM base AS jetson
+# This is terrible to do, but they offer me no choice...
+RUN wget "https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl" && \
+    mv mp164asf3sceb570wvjsrezk1p4ftj8t.whl torch-2.3.0-cp310-cp310-linux_aarch64.whl && \
+    wget "https://nvidia.box.com/shared/static/xpr06qe6ql3l6rj22cu3c45tz1wzi36p.whl" && \
+    mv xpr06qe6ql3l6rj22cu3c45tz1wzi36p.whl torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl && \
+    . /.venv/bin/activate && \
+    pip install torch-2.3.0-cp310-cp310-linux_aarch64.whl torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl
+
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/aarch64-linux/lib/:/usr/lib/aarch64-linux-gnu/openblas-pthread
+ENV PATH=/usr/local/cuda/bin:${PATH}

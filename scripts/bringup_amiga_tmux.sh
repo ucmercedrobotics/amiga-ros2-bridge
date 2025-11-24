@@ -88,34 +88,41 @@ main() {
     start_container
     wait_for_container
 
-    make udev -B
+    while true; do
+        read -r -p "Are you on the Brain? [y/N]: " ans
+        case "$ans" in
+            [Yy]* ) 
+                run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py";
+                run "ros2 launch amiga_ros2_bridge twist_control.launch.py"; 
+                break ;;
+            [Nn]* ) 
+            sudo make udev -B
+            
+            # Foxglove
+            run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766";
 
-    # -- Commands
-    # Amiga bridge
-    run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py"
-    run "ros2 launch amiga_ros2_bridge twist_control.launch.py"
+            # URDF
+            run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER}";
 
-    # Foxglove
-    run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766"
+            # Cameras
+            run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
 
-    # URDF
-    run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER}"
+            # Localization
+            run "ros2 launch amiga_localization bringup.launch.py";
 
-    # Cameras
-    run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py"
+            # Nav2
+            run "ros2 launch amiga_navigation navigation.launch.py";
+            run "ros2 run amiga_navigation waypoint_follower.py";
+            run "ros2 run amiga_navigation linear_velo";
+            # TODO: replace the above with this once we confirm NAV2 working with IMU
+            # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
 
-    # Localization
-    run "ros2 launch amiga_localization bringup.launch.py"
-
-    # Nav2
-    run "ros2 launch amiga_navigation navigation.launch.py"
-    run "ros2 run amiga_navigation waypoint_follower"
-    run "ros2 run amiga_navigation linear_velo"
-    # TODO: replace the above with this once we confirm NAV2 working with IMU
-    # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
-
-    # Behavior Tree
-    run "ros2 run amiga_ros2_behavior_tree bt_runner"
+            # Behavior Tree
+            run "ros2 run amiga_ros2_behavior_tree bt_runner"; 
+            break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
 
     attach_tmux
 }
