@@ -8,8 +8,9 @@ MoveToGPSLocation::MoveToGPSLocation(const std::string &name,
     : BT::RosActionNode<WpFollow>(name, config, params) {}
 
 BT::PortsList MoveToGPSLocation::providedPorts() {
-  return providedBasicPorts(
-      {BT::InputPort<double>("latitude"), BT::InputPort<double>("longitude")});
+  return providedBasicPorts({BT::InputPort<double>("latitude"),
+                             BT::InputPort<double>("longitude"),
+                             BT::OutputPort<double>("object_angle")});
 }
 
 bool MoveToGPSLocation::setGoal(Goal &goal) {
@@ -33,6 +34,7 @@ BT::NodeStatus MoveToGPSLocation::onResultReceived(
   // Check if the action succeeded
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     RCLCPP_INFO(logger(), "Navigation succeeded!");
+    setOutput("object_angle", result.result->object_angle);
     return BT::NodeStatus::SUCCESS;
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
     RCLCPP_WARN(logger(), "Navigation was canceled");
@@ -41,7 +43,6 @@ BT::NodeStatus MoveToGPSLocation::onResultReceived(
     RCLCPP_ERROR(logger(), "Navigation failed or was aborted");
     return BT::NodeStatus::FAILURE;
   }
-  setOutput("object_angle", result.result->object_angle);
 }
 
 BT::NodeStatus MoveToGPSLocation::onFeedback(

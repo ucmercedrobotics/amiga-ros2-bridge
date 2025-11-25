@@ -23,7 +23,7 @@ bool SampleLeaf::setGoal(Goal &goal) {
   goal.object_angle = tree_angle;
 
   RCLCPP_INFO(logger(),
-              "Sampling leaves from tree at object angle: %.2f degrees",
+              "Sampling leaves from tree at object angle: %.2f radians",
               goal.object_angle);
   return true;
 }
