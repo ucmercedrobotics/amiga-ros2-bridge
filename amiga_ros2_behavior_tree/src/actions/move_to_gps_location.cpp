@@ -41,6 +41,7 @@ BT::NodeStatus MoveToGPSLocation::onResultReceived(
     RCLCPP_ERROR(logger(), "Navigation failed or was aborted");
     return BT::NodeStatus::FAILURE;
   }
+  setOutput("object_angle", result.result->object_angle);
 }
 
 BT::NodeStatus MoveToGPSLocation::onFeedback(
