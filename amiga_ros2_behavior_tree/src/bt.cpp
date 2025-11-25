@@ -38,8 +38,8 @@ int main(int argc, char **argv) {
                                                    ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("OrientRobotHeading",
                                                    ros_params);
+  factory.registerNodeType<SampleLeaf>("SampleLeaf", ros_params);
   factory.registerNodeType<DetectObject>("DetectObject");
-  factory.registerNodeType<SampleLeaf>("SampleLeaf");
   // conditional nodes
   factory.registerNodeType<AssertTrue>("AssertTrue");
   factory.registerNodeType<CheckValue>("CheckValue");

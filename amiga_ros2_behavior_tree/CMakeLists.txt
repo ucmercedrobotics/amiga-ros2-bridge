@@ -14,6 +14,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(amiga_interfaces REQUIRED)
@@ -49,6 +50,7 @@ ament_target_dependencies(bt_runner
   rclcpp
   behaviortree_ros2
   amiga_interfaces
+  sensor_msgs
 )
 
 ament_target_dependencies(dummy_wp_server
