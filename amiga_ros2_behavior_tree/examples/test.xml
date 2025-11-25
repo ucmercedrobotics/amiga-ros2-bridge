@@ -1,4 +1,4 @@
-<root BTCPP_format="4" schema_location="schemas/schemas/ros2_bt.xsd">
+<root BTCPP_format="4" schema_location="schemas/ros2_bt.xsd">
     <Mission>Look for a pistachio at the first tree. If not found look at the next two trees. When found take temperature. Finish at last tree</Mission>
     <BehaviorTree ID="MainTree">
         <Sequence>

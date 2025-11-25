@@ -30,30 +30,23 @@ bool SampleLeaf::setGoal(Goal &goal) {
     return false;
   }
 
-  // Check if we have a GPS reading
   if (!last_gps_.has_value()) {
     RCLCPP_ERROR(logger(), "No GPS data available yet");
     return false;
   }
 
-  // Get current GPS position
   double current_lat = last_gps_->latitude;
   double current_lon = last_gps_->longitude;
-
-  // Convert to radians
   double lat1_rad = current_lat * M_PI / 180.0;
   double lon1_rad = current_lon * M_PI / 180.0;
   double lat2_rad = lat * M_PI / 180.0;
   double lon2_rad = lon * M_PI / 180.0;
-
-  // Calculate bearing (angle) from current position to target position
   double dlon = lon2_rad - lon1_rad;
   double y = std::sin(dlon) * std::cos(lat2_rad);
   double x = std::cos(lat1_rad) * std::sin(lat2_rad) -
              std::sin(lat1_rad) * std::cos(lat2_rad) * std::cos(dlon);
   double bearing = std::atan2(y, x);
 
-  // Convert bearing to degrees
   goal.object_angle = bearing * 180.0 / M_PI;
 
   RCLCPP_INFO(logger(),
