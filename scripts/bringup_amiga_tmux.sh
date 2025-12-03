@@ -70,6 +70,30 @@ ask_parameters() {
 
     export USE_SENSOR_TOWER
 
+    while true; do
+        read -r -p "Using base station? [y/N]: " ans
+        case "$ans" in
+            [Yy]* ) GPS_LINK="gps_link_name:=gps_link"; break ;;
+            [Nn]* ) GPS_LINK="gps_link_name:=gps_antenna"; break ;;
+            ""    ) GPS_LINK="gps_link_name:=gps_antenna"; break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+
+    export GPS_LINK
+
+    while true; do
+        read -r -p "Using VectorNav IMU? [y/N]: " ans
+        case "$ans" in
+            [Yy]* ) VECTOR_NAV="use_vectornav:=True"; break ;;
+            [Nn]* ) VECTOR_NAV="use_vectornav:=False"; break ;;
+            ""    ) VECTOR_NAV="use_vectornav:=False"; break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+
+    export VECTOR_NAV
+
     echo
     echo "Starting bringup..."
 }
@@ -89,37 +113,64 @@ main() {
     wait_for_container
 
     while true; do
-        read -r -p "Are you on the Brain? [y/N]: " ans
+        read -r -p "Do you want to run CAN bus nodes? [y/N]: " ans
         case "$ans" in
-            [Yy]* ) 
+            [Yy]* )
                 run "ros2 launch amiga_ros2_bridge amiga_streams.launch.py";
-                run "ros2 launch amiga_ros2_bridge twist_control.launch.py"; 
+                run "ros2 launch amiga_ros2_bridge twist_control.launch.py";
                 break ;;
-            [Nn]* ) 
-            sudo make udev -B
-            
-            # Foxglove
-            run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766";
+            [Nn]* )
+                break;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
 
-            # URDF
-            run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER}";
+    while true; do
+        read -r -p "Do you want to run Nav2 stack? [y/N]: " ans
+        case "$ans" in
+            [Yy]* )
+                sudo make udev -B
 
-            # Cameras
-            run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
+                if [[ "$VECTOR_NAV" == *"True"* ]]; then
+                    run "ros2 run vectornav vectornav --ros-args -p port:=/dev/vectornav";
+                    run "ros2 run vectornav vn_sensor_msgs";
+                else
+                    echo "Defaulting to BNO085 IMU.";
+                    run "ros2 run amiga_localization bno085_node --ros-args --params-file config/bno085_params.yaml";
+                fi
 
-            # Localization
-            run "ros2 launch amiga_localization bringup.launch.py";
+                if [[ "$GPS_LINK" == *"gps_link"* ]]; then
+                    echo "Using UBLOX GPS RTK driver.";
+                    run "ros2 launch amiga_localization ublox.launch.py";
+                fi
 
-            # Nav2
-            run "ros2 launch amiga_navigation navigation.launch.py";
-            run "ros2 run amiga_navigation waypoint_follower.py";
-            run "ros2 run amiga_navigation linear_velo";
-            # TODO: replace the above with this once we confirm NAV2 working with IMU
-            # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
+                echo "Launching Nav2 components...";
 
-            # Behavior Tree
-            run "ros2 run amiga_ros2_behavior_tree bt_runner"; 
-            break ;;
+                # Foxglove
+                run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766";
+
+                # URDF
+                run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER} ${GPS_LINK} ${VECTOR_NAV}";
+
+                # Cameras
+                # run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
+
+                # Localization
+                run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV}";
+
+                # Nav2
+                run "ros2 launch amiga_navigation navigation.launch.py";
+                run "ros2 run amiga_navigation lidar_object_navigator";
+                run "ros2 run amiga_navigation waypoint_follower.py";
+                run "ros2 run amiga_navigation linear_velo";
+                # TODO: replace the above with this once we confirm NAV2 working with IMU
+                # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
+
+                # Behavior Tree
+                run "ros2 run amiga_ros2_behavior_tree bt_runner";
+                break;;
+            [Nn]* )
+                break ;;
             * ) echo "Please answer y or n." ;;
         esac
     done

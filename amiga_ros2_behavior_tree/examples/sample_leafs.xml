@@ -2,7 +2,7 @@
     <Mission>go to the first tree and sample leaves</Mission>
     <BehaviorTree ID="MainTree">
         <Sequence>
-            <MoveToGPSLocation name="MoveToTree1" action_name="follow_gps_waypoints" object_angle="{tree_angle}" latitude="37.26643908" longitude="-120.42079453"/>
+            <MoveToGPSLocation name="MoveToTree1" action_name="follow_gps_waypoints" object_angle="{tree_angle}" latitude="37.266373699999995" longitude="-120.4203514"/>
             <SampleLeaf name="SampleLeavesTree1" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
         </Sequence>
     </BehaviorTree>
