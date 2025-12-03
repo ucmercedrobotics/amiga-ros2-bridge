@@ -139,9 +139,11 @@ main() {
                     run "ros2 run amiga_localization bno085_node --ros-args --params-file config/bno085_params.yaml";
                 fi
 
+                GPS_TOPIC="gps_topic:=/gps/pvt"
                 if [[ "$GPS_LINK" != *"gps_antenna"* ]]; then
                     echo "Using UBLOX GPS RTK driver.";
                     run "ros2 launch amiga_localization ublox.launch.py";
+                    GPS_TOPIC="gps_topic:=/ublox_gps_node/fix"
                 fi
 
                 echo "Launching Nav2 components...";
@@ -156,7 +158,7 @@ main() {
                 # run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
 
                 # Localization
-                run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV}";
+                run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV} ${GPS_TOPIC}";
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
