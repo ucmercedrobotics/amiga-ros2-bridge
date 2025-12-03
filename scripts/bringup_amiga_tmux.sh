@@ -139,7 +139,7 @@ main() {
                     run "ros2 run amiga_localization bno085_node --ros-args --params-file config/bno085_params.yaml";
                 fi
 
-                if [[ "$GPS_LINK" == *"gps_link"* ]]; then
+                if [[ "$GPS_LINK" != *"gps_antenna"* ]]; then
                     echo "Using UBLOX GPS RTK driver.";
                     run "ros2 launch amiga_localization ublox.launch.py";
                 fi

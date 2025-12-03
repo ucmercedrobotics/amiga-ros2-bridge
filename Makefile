@@ -33,7 +33,7 @@ vnc:
 	--name=novnc \
 	${NOVNC}
 
-udev: 
+udev:
 	cp udev/99-ucm.rules /etc/udev/rules.d && \
 	udevadm control --reload-rules && \
 	udevadm trigger
@@ -77,3 +77,6 @@ description:
 
 localization:
 	ros2 launch amiga_localization bringup.launch.py
+
+amiga:
+	./scripts/bringup_amiga_tmux.sh
