@@ -2,7 +2,7 @@
 
 #include <string>
 
-#define AMIGA_SCHEMA_DEFAULT_PATH "/schemas/schemas/amiga_btcpp.xsd"
+#define AMIGA_SCHEMA_DEFAULT_PATH "/schemas/amiga_btcpp.xsd"
 
 namespace xml_validation {
 
