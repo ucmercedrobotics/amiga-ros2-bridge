@@ -1,12 +1,13 @@
 #pragma once
 
-#include <amiga_interfaces/action/navigate_to_pose_in_frame.hpp>
+#include <amiga_navigation_interfaces/action/navigate_to_pose_in_frame.hpp>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
 
 namespace amiga_bt {
 
-using NavigateToPoseInFrame = amiga_interfaces::action::NavigateToPoseInFrame;
+using NavigateToPoseInFrame =
+    amiga_navigation_interfaces::action::NavigateToPoseInFrame;
 
 class MoveToRelativeLocation : public BT::RosActionNode<NavigateToPoseInFrame> {
  public:

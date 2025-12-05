@@ -17,7 +17,7 @@ find_package(geographic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(amiga_interfaces REQUIRED)
+find_package(amiga_navigation_interfaces REQUIRED)
 find_package(LibXml2 REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
@@ -49,14 +49,14 @@ target_include_directories(bt_runner PUBLIC
 ament_target_dependencies(bt_runner
   rclcpp
   behaviortree_ros2
-  amiga_interfaces
+  amiga_navigation_interfaces
   sensor_msgs
 )
 
 ament_target_dependencies(dummy_wp_server
   rclcpp
   rclcpp_action
-  amiga_interfaces
+  amiga_navigation_interfaces
   nav2_msgs
   geometry_msgs
   geographic_msgs
@@ -65,7 +65,7 @@ ament_target_dependencies(dummy_wp_server
 ament_target_dependencies(dummy_ntp_server
   rclcpp
   rclcpp_action
-  amiga_interfaces
+  amiga_navigation_interfaces
 )
 
 ament_target_dependencies(dummy_nav2_ntp_server

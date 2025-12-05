@@ -2,6 +2,9 @@ IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
 NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
 ARCH := $(shell uname -m)
+PLATFORM := linux/amd64
+TARGET:=base
+ARCH_TAG:=x86_64
 CUDA_MOUNT:=
 ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
