@@ -6,6 +6,10 @@ ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
 TARGET:=base
 ARCH_TAG:=x86_64
+
+PORT:=12346
+PAYLOAD:=true
+
 CUDA_MOUNT:=
 ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
@@ -80,6 +84,9 @@ description:
 
 localization:
 	ros2 launch amiga_localization bringup.launch.py
+
+mission-interface:
+	ros2 run amiga_ros2_behavior_tree bt_runner --ros-args -p mission_port:=${PORT} -p mission_payload_length_included:=${PAYLOAD}
 
 amiga:
 	./scripts/bringup_amiga_tmux.sh

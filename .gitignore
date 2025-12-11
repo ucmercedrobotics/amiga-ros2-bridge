@@ -4,6 +4,8 @@ sandbox.ipynb
 experiments/
 rosbag2_*
 
+test.bin
+
 # VSCode settings
 .vscode/
 
