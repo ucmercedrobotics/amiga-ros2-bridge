@@ -1,4 +1,6 @@
-tests/
+sandbox.ipynb
+yolo*
+experiments/
 
 # VSCode settings
 .vscode/

@@ -28,6 +28,9 @@ int main(int argc, char **argv) {
   int port = MISSION_TCP_DEFAULT_PORT;
   nh->declare_parameter<int>("mission_port", port);
   nh->get_parameter("mission_port", port);
+  bool payload_length_included = true;
+  nh->declare_parameter<bool>("mission_payload_length_included", true);
+  nh->get_parameter("mission_payload_length_included", payload_length_included);
 
   BehaviorTreeFactory factory;
   RosNodeParams ros_params;
@@ -61,7 +64,8 @@ int main(int argc, char **argv) {
   while (rclcpp::ok()) {
     std::string mission_in;
     try {
-      mission_in = mission_tcp::wait_for_mission_tcp(port, nh->get_logger());
+      mission_in = mission_tcp::wait_for_mission_tcp(port, nh->get_logger(),
+                                                     payload_length_included);
     } catch (const std::exception &e) {
       RCLCPP_ERROR(nh->get_logger(), "Failed to receive mission: %s", e.what());
       continue;
