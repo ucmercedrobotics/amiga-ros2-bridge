@@ -11,22 +11,18 @@ ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
 	ARCH_TAG:=arm64
 	TARGET:=jetson
-	CUDA_MOUNT:= -v /usr/local/cuda-12.2:/usr/local/cuda:ro \
-		     -v /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
+	CUDA_MOUNT:= --runtime=nvidia \
+			 -v /usr/local/cuda:/usr/local/cuda:ro \
+		     -v /usr/lib/aarch64-linux-gnu/libcudnn.so.9:/usr/lib/aarch64-linux-gnu/libcudnn.so.9:ro \
+			 -v /usr/lib/aarch64-linux-gnu/libopenblas.so.0:/usr/lib/aarch64-linux-gnu/libopenblas.so.0:ro
 endif
 
 repo-init:
 	python3 -m pip install pre-commit && \
 	pre-commit install
 
-multiarch-builder:
-	docker buildx create --name multiarch --driver docker-container --use
-
-push:
-	docker buildx build --platform linux/arm64/v8,linux/amd64 -t ${IMAGE} --target base . --push
-
 shell:
-	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}) && \
+	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}:${ARCH_TAG}) && \
 	docker exec -it $${CONTAINER_PS} bash
 
 build-image:
@@ -46,12 +42,13 @@ bash: udev
 	docker run -it --rm \
 	--net=host \
 	--privileged \
+	${CUDA_MOUNT} \
 	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/:/dev/ \
 	-e FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/${MACHINE_NAME}.xml \
-	${IMAGE} bash
+	${IMAGE}:${ARCH_TAG} bash
 
 deps:
 	rosdep install --from-paths . --ignore-src -r -y

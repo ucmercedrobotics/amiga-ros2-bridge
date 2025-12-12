@@ -10,7 +10,8 @@ ARG MACHINE_NAME="agx"
 # any utilities you want
 RUN apt-get update && apt-get install -y git wget python3-full python3-pip vim net-tools netcat-traditional build-essential cmake \
     ros-${ROS_DISTRO}-foxglove-bridge ros-${ROS_DISTRO}-depthai-ros \
-    ros-${ROS_DISTRO}-behaviortree-cpp ros-${ROS_DISTRO}-generate-parameter-library
+    ros-${ROS_DISTRO}-behaviortree-cpp ros-${ROS_DISTRO}-generate-parameter-library \
+    rhash librhash-dev
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
 COPY requirements.txt /requirements.txt
@@ -33,12 +34,13 @@ ENV DISPLAY=:2 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=all \
   __GLX_VENDOR_LIBRARY_NAME=nvidia \
-  __NV_PRIME_RENDER_OFFLOAD=1 \
+  __NV_PRIME_RENDER_OFFLOAD=1
 
 COPY . ${WORKSPACE_ROOT}
 RUN rosdep install --from-paths . --ignore-src -r -y
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
+RUN echo "source install/setup.bash" >> /root/.bashrc
 RUN echo "source ${BTCPP_ROS2_WORKSPACE}/install/setup.bash" >> /root/.bashrc
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
 RUN echo "source /.venv/bin/activate" >> /root/.bashrc
@@ -46,12 +48,11 @@ RUN echo "export PYTHONPATH=/usr/lib/python3/dist-packages:\$PYTHONPATH" >> /roo
 
 FROM base AS jetson
 # This is terrible to do, but they offer me no choice...
-RUN wget "https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl" && \
-    mv mp164asf3sceb570wvjsrezk1p4ftj8t.whl torch-2.3.0-cp310-cp310-linux_aarch64.whl && \
-    wget "https://nvidia.box.com/shared/static/xpr06qe6ql3l6rj22cu3c45tz1wzi36p.whl" && \
-    mv xpr06qe6ql3l6rj22cu3c45tz1wzi36p.whl torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl && \
+# only works on AGX because it's built for libcudnn 9 (cuda 12.6)
+RUN wget "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl#sha256=62a1beee9f2f147076a974d2942c90060c12771c94740830327cae705b2595fc" && \
+    wget "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl#sha256=907c4c1933789645ebb20dd9181d40f8647978e6bd30086ae7b01febb937d2d1" && \
     . /.venv/bin/activate && \
-    pip install torch-2.3.0-cp310-cp310-linux_aarch64.whl torchvision-0.18.0a0+6043bc2-cp310-cp310-linux_aarch64.whl
+    pip install torch-2.8.0-cp310-cp310-linux_aarch64.whl torchvision-0.23.0-cp310-cp310-linux_aarch64.whl
 
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/aarch64-linux/lib/:/usr/lib/aarch64-linux-gnu/openblas-pthread
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/targets/aarch64-linux/lib/:/usr/lib/aarch64-linux-gnu/openblas-pthread
 ENV PATH=/usr/local/cuda/bin:${PATH}
