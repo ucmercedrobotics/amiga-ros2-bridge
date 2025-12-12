@@ -1,6 +1,7 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
 NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
+MACHINE_NAME?=agx
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
 TARGET:=base
@@ -49,6 +50,7 @@ bash: udev
 	-v .:/${WORKSPACE}:Z \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/:/dev/ \
+	-e FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/${MACHINE_NAME}.xml \
 	${IMAGE} bash
 
 deps:

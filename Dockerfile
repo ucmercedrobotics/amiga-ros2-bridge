@@ -5,6 +5,7 @@ FROM ${BASE_IMAGE} AS base
 
 ARG WORKSPACE_ROOT="/amiga-ros2-bridge"
 ARG PACKAGE_NAME="amiga_ros2_bridge"
+ARG MACHINE_NAME="agx"
 
 # any utilities you want
 RUN apt-get update && apt-get install -y git wget python3-full python3-pip vim net-tools netcat-traditional build-essential cmake \
@@ -33,10 +34,6 @@ ENV DISPLAY=:2 \
     NVIDIA_DRIVER_CAPABILITIES=all \
   __GLX_VENDOR_LIBRARY_NAME=nvidia \
   __NV_PRIME_RENDER_OFFLOAD=1 \
-  FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE_ROOT}/dds/fastdds.xml
-
-# BNO085 IMU I2C to USB-C board
-ENV BLINKA_MCP2221="1"
 
 COPY . ${WORKSPACE_ROOT}
 RUN rosdep install --from-paths . --ignore-src -r -y
