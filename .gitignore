@@ -1,7 +1,8 @@
 yolo*
 sandbox.ipynb
 
-tests/
+experiments/
+rosbag2_*
 
 # VSCode settings
 .vscode/

@@ -14,3 +14,5 @@ Jetson.GPIO==2.1.12
 hidapi==0.14.0.post4
 # YOLO
 ultralytics==8.3.236
+torch
+torchvision
