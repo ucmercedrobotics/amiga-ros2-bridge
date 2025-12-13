@@ -40,7 +40,6 @@ COPY . ${WORKSPACE_ROOT}
 RUN rosdep install --from-paths . --ignore-src -r -y
 
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
-RUN echo "source install/setup.bash" >> /root/.bashrc
 RUN echo "source ${BTCPP_ROS2_WORKSPACE}/install/setup.bash" >> /root/.bashrc
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
 RUN echo "source /.venv/bin/activate" >> /root/.bashrc
