@@ -11,11 +11,11 @@ ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
 	ARCH_TAG:=arm64
 	TARGET:=jetson
-# 	CUDA_MOUNT:= --runtime=nvidia \
-# 			 -v /usr/local/cuda:/usr/local/cuda:ro \
-# 		     -v /usr/lib/aarch64-linux-gnu/libcudnn.so.9:/usr/lib/aarch64-linux-gnu/libcudnn.so.9:ro \
-# 			 -v /usr/lib/aarch64-linux-gnu/libcudnn_graph.so.9:/usr/lib/aarch64-linux-gnu/libcudnn_graph.so.9:ro \
-# 			 -v /usr/lib/aarch64-linux-gnu/libopenblas.so.0:/usr/lib/aarch64-linux-gnu/libopenblas.so.0:ro
+	CUDA_MOUNT:= --runtime=nvidia \
+			 -v /usr/local/cuda:/usr/local/cuda:ro \
+		     -v /usr/lib/aarch64-linux-gnu/:/usr/lib/aarch64-linux-gnu-host/:ro \
+			 --device /dev/nvhost-gpu \
+			 --device /dev/nvmap 
 endif
 
 repo-init:
