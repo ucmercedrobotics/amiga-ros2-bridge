@@ -4,9 +4,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
-#include "amiga_interfaces/action/wpfollow.hpp"
+#include "amiga_navigation_interfaces/action/wpfollow.hpp"
 
-using WpFollow = amiga_interfaces::action::Wpfollow;
+using WpFollow = amiga_navigation_interfaces::action::Wpfollow;
 
 class DummyGPSActionServer : public rclcpp::Node {
  public:

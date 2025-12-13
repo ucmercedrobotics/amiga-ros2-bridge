@@ -6,7 +6,7 @@
       <type>UDPv4</type>
       <interfaces>
         <allowlist>
-          <!-- Amiga Brain's network device, change for different computers if needed -->
+          <!-- AGX's network device, change for different computers if needed -->
           <interface name="eno1" netmask_filter="ON"/>
         </allowlist>
       </interfaces>

@@ -3,9 +3,11 @@
 <package format="3">
   <name>amiga_ros2_oakd</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>OAK-D drivers and associated nodes</description>
   <maintainer email="root@todo.todo">root</maintainer>
-  <license>TODO: License declaration</license>
+  <license>TODO</license>
+
+  <depend>rclpy</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
