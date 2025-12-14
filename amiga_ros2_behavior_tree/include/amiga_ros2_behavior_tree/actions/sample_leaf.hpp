@@ -1,15 +1,14 @@
 #pragma once
 
-#include <amiga_navigation_interfaces/action/navigate_via_lidar.hpp>
+#include <kortex_interfaces/action/segment_leaves.hpp>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
-#include <sensor_msgs/msg/nav_sat_fix.hpp>
 
 namespace amiga_bt {
 
-using NavigateViaLidar = amiga_navigation_interfaces::action::NavigateViaLidar;
+using SegmentLeaves = kortex_interfaces::action::SegmentLeaves;
 
-class SampleLeaf : public BT::RosActionNode<NavigateViaLidar> {
+class SampleLeaf : public BT::RosActionNode<SegmentLeaves> {
  public:
   SampleLeaf(const std::string &name, const BT::NodeConfig &config,
              const BT::RosNodeParams &params);
@@ -20,10 +19,6 @@ class SampleLeaf : public BT::RosActionNode<NavigateViaLidar> {
   BT::NodeStatus onResultReceived(const WrappedResult &result) override;
   BT::NodeStatus onFeedback(
       const std::shared_ptr<const Feedback> feedback) override;
-
- private:
-  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gps_sub_;
-  std::optional<sensor_msgs::msg::NavSatFix> last_gps_;
 };
 
 }  // namespace amiga_bt
