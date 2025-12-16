@@ -19,7 +19,7 @@ start_tmux_session() {
 
 start_container() {
     echo "Running 'make bash' to start container"
-    tmux send-keys -t "$SESSION" "cd $PROJECT_PATH; make -C $PROJECT_PATH bash" C-m
+    tmux send-keys -t "$SESSION" "cd $PROJECT_PATH; make -C $PROJECT_PATH bash MACHINE_NAME=$MACHINE_NAME" C-m
 }
 
 attach_tmux() {
@@ -28,8 +28,11 @@ attach_tmux() {
 
 wait_for_container() {
     echo "Waiting for container from image ${IMAGE} to start..."
+
+    uname -m | grep -Eq '^(arm64|aarch64)$' && ARCH_TAG=arm64
+
     for i in $(seq 30); do
-        CONTAINER_ID=$(docker ps -q --filter ancestor="${IMAGE}" | head -n 1)
+        CONTAINER_ID=$(docker ps -q --filter ancestor="${IMAGE}:${ARCH_TAG}" | head -n 1)
         if [ -n "$CONTAINER_ID" ]; then
             echo "Container started: $CONTAINER_ID"
             export CONTAINER_ID
@@ -94,6 +97,18 @@ ask_parameters() {
 
     export VECTOR_NAV
 
+    while true; do
+        read -r -p "Running on AGX (N for Brain)? [y/N]: " ans
+        case "$ans" in
+            [Yy]* ) MACHINE_NAME="agx"; break ;;
+            [Nn]* ) MACHINE_NAME="brain"; break ;;
+            ""    ) MACHINE_NAME="brain"; break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+
+    export MACHINE_NAME
+
     echo
     echo "Starting bringup..."
 }
@@ -136,7 +151,8 @@ main() {
                     run "ros2 run vectornav vn_sensor_msgs";
                 else
                     echo "Defaulting to BNO085 IMU.";
-                    run "ros2 run amiga_localization bno085_node --ros-args --params-file config/bno085_params.yaml";
+                    run "ros2 run amiga_localization bno085_node --ros-args --params-file \
+                         install/amiga_localization/share/amiga_localization/config/bno085_params.yaml";
                 fi
 
                 GPS_TOPIC="gps_topic:=/gps/pvt"
@@ -155,7 +171,7 @@ main() {
                 run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER} ${GPS_LINK} ${VECTOR_NAV}";
 
                 # Cameras
-                # run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
+                run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
 
                 # Localization
                 run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV} ${GPS_TOPIC}";
@@ -165,6 +181,7 @@ main() {
                 run "ros2 run amiga_navigation lidar_object_navigator";
                 run "ros2 run amiga_navigation waypoint_follower.py";
                 run "ros2 run amiga_navigation linear_velo";
+                run "ros2 run amiga_navigation yolo_person_follower.py"
                 # TODO: replace the above with this once we confirm NAV2 working with IMU
                 # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
 

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_allowlist</transport_id>
+      <type>UDPv4</type>
+      <interfaces>
+        <allowlist>
+          <!-- Amiga Brain's network device, change for different computers if needed -->
+          <interface name="eth0" netmask_filter="ON"/>
+        </allowlist>
+      </interfaces>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="ros2_default" is_default_profile="true">
+    <rtps>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <userTransports>
+        <transport_id>udp_allowlist</transport_id>
+      </userTransports>
+      <builtin>
+        <discovery_config>
+          <discoveryProtocol>SIMPLE</discoveryProtocol>
+        </discovery_config>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>
