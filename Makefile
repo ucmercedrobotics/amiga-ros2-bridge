@@ -9,7 +9,10 @@ ARCH_TAG:=x86_64
 
 PORT:=12346
 PAYLOAD:=true
-
+ARCH := $(shell uname -m)
+PLATFORM := linux/amd64
+TARGET:=base
+ARCH_TAG:=x86_64
 CUDA_MOUNT:=
 ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8

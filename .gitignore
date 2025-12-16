@@ -3,8 +3,11 @@ sandbox.ipynb
 
 experiments/
 rosbag2_*
+<<<<<<< HEAD
 
 test.bin
+=======
+>>>>>>> e28ab2c (feat: person tracking (#44))
 
 # VSCode settings
 .vscode/
