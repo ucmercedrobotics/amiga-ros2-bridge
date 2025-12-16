@@ -9,6 +9,10 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+## example_interfaces no longer needed after custom srv
+# find_package(example_interfaces REQUIRED)
+find_package(nlohmann_json REQUIRED)
+find_package(amiga_interfaces REQUIRED)
 find_package(behaviortree_ros2 REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(nav2_msgs REQUIRED)
@@ -19,6 +23,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(amiga_navigation_interfaces REQUIRED)
 find_package(LibXml2 REQUIRED)
+find_package(std_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -28,6 +33,7 @@ add_executable(bt_runner
   src/mission_tcp.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
+  src/actions/move_to_tree_id.cpp
   src/actions/move_to_relative_location.cpp
   src/actions/detect_object.cpp
   src/actions/sample_leaf.cpp
@@ -41,6 +47,10 @@ add_executable(dummy_ntp_server src/mocks/dummy_ntp_server.cpp)
 
 add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 
+add_executable(orchard_management_node src/orchard_management.cpp)
+
+add_executable(tcp_demux_node src/tcp_demux_node.cpp)
+
 target_include_directories(bt_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -51,6 +61,7 @@ ament_target_dependencies(bt_runner
   behaviortree_ros2
   amiga_navigation_interfaces
   sensor_msgs
+  std_msgs
 )
 
 ament_target_dependencies(dummy_wp_server
@@ -75,8 +86,23 @@ ament_target_dependencies(dummy_nav2_ntp_server
   geometry_msgs
 )
 
+ament_target_dependencies(orchard_management_node
+  rclcpp
+  amiga_interfaces
+  std_msgs
+)
+
+ament_target_dependencies(tcp_demux_node
+  rclcpp
+  std_msgs
+)
+
 target_link_libraries(bt_runner
   LibXml2::LibXml2
+)
+
+target_link_libraries(orchard_management_node
+  nlohmann_json::nlohmann_json
 )
 
 install(TARGETS bt_runner
@@ -89,6 +115,12 @@ install(TARGETS dummy_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_nav2_ntp_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS orchard_management_node
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS tcp_demux_node
   DESTINATION lib/${PROJECT_NAME})
 
 # Install public headers

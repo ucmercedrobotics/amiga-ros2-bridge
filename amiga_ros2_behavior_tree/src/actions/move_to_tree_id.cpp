@@ -1,34 +1,32 @@
-#include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 
 namespace amiga_bt {
 
-MoveToGPSLocation::MoveToGPSLocation(const std::string &name,
+MoveToTreeID::MoveToTreeID(const std::string &name,
                                      const BT::NodeConfig &config,
                                      const BT::RosNodeParams &params)
-    : BT::RosActionNode<GPSWaypoint>(name, config, params) {}
+    : BT::RosActionNode<TreeIDWaypoint>(name, config, params) {}
 
-BT::PortsList MoveToGPSLocation::providedPorts() {
-  return providedBasicPorts({BT::InputPort<double>("latitude"),
-                             BT::InputPort<double>("longitude"),
+BT::PortsList MoveToTreeID::providedPorts() {
+  return providedBasicPorts({BT::InputPort<double>("id"),
                              BT::OutputPort<double>("object_angle")});
 }
 
-bool MoveToGPSLocation::setGoal(Goal &goal) {
-  double lat, lon;
+bool MoveToTreeID::setGoal(Goal &goal) {
+  uint32_t id;
 
-  if (!getInput("latitude", lat) || !getInput("longitude", lon)) {
-    RCLCPP_ERROR(logger(), "Missing latitude/longitude input");
+  if (!getInput("id", id)) {
+    RCLCPP_ERROR(logger(), "Missing tree ID input");
     return false;
   }
 
-  goal.lat = lat;
-  goal.lon = lon;
+  goal.tree_id = id;
 
-  RCLCPP_INFO(logger(), "Moving to GPS location: (%.8f, %.8f)", lat, lon);
+  RCLCPP_INFO(logger(), "Moving to tree ID: %u", id);
   return true;
 }
 
-BT::NodeStatus MoveToGPSLocation::onResultReceived(
+BT::NodeStatus MoveToTreeID::onResultReceived(
     const WrappedResult &result) {
   RCLCPP_INFO(logger(), "Navigation finished with code: %d", int(result.code));
   // Check if the action succeeded
@@ -45,7 +43,7 @@ BT::NodeStatus MoveToGPSLocation::onResultReceived(
   }
 }
 
-BT::NodeStatus MoveToGPSLocation::onFeedback(
+BT::NodeStatus MoveToTreeID::onFeedback(
     const std::shared_ptr<const Feedback> feedback) {
   RCLCPP_INFO(logger(), "Distance from goal: (%.6f)", feedback->dist);
   return BT::NodeStatus::RUNNING;
