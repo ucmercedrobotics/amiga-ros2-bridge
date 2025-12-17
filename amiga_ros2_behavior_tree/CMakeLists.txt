@@ -30,7 +30,6 @@ find_package(std_msgs REQUIRED)
 
 add_executable(bt_runner
   src/bt.cpp
-  src/mission_tcp.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
   src/actions/move_to_tree_id.cpp
