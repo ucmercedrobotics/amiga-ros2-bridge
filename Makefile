@@ -2,10 +2,6 @@ IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
 NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
 MACHINE_NAME?=agx
-ARCH := $(shell uname -m)
-PLATFORM := linux/amd64
-TARGET:=base
-ARCH_TAG:=x86_64
 
 PORT:=12346
 PAYLOAD:=true
