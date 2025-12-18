@@ -46,6 +46,8 @@ add_executable(dummy_ntp_server src/mocks/dummy_ntp_server.cpp)
 
 add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 
+add_executable(dummy_tree_id_server src/mocks/dummy_tree_id_server.cpp)
+
 add_executable(orchard_management_node src/orchard_management.cpp)
 
 add_executable(tcp_demux_node src/tcp_demux_node.cpp)
@@ -85,6 +87,12 @@ ament_target_dependencies(dummy_nav2_ntp_server
   geometry_msgs
 )
 
+ament_target_dependencies(dummy_tree_id_server
+  rclcpp
+  rclcpp_action
+  amiga_navigation_interfaces
+)
+
 ament_target_dependencies(orchard_management_node
   rclcpp
   amiga_interfaces
@@ -116,6 +124,9 @@ install(TARGETS dummy_ntp_server
 install(TARGETS dummy_nav2_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
+install(TARGETS dummy_tree_id_server
+  DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS orchard_management_node
   DESTINATION lib/${PROJECT_NAME})
 
@@ -131,8 +142,8 @@ install(DIRECTORY schemas/
   DESTINATION share/${PROJECT_NAME}/schemas
 )
 
-# install(DIRECTORY launch
-#   DESTINATION share/${PROJECT_NAME}/)
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}/)
 
 # install(DIRECTORY config
 #   DESTINATION share/${PROJECT_NAME}/)
