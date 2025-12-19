@@ -1,16 +1,16 @@
 #pragma once
 
-#include <amiga_navigation_interfaces/action/gps_waypoint.hpp>
+#include <amiga_navigation_interfaces/action/tree_id_waypoint.hpp>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
 
 namespace amiga_bt {
 
-using GPSWaypoint = amiga_navigation_interfaces::action::GPSWaypoint;
+using TreeIDWaypoint = amiga_navigation_interfaces::action::TreeIDWaypoint;
 
-class MoveToGPSLocation : public BT::RosActionNode<GPSWaypoint> {
+class MoveToTreeID : public BT::RosActionNode<TreeIDWaypoint> {
  public:
-  MoveToGPSLocation(const std::string &name, const BT::NodeConfig &config,
+  MoveToTreeID(const std::string &name, const BT::NodeConfig &config,
                     const BT::RosNodeParams &params);
 
   static BT::PortsList providedPorts();

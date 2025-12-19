@@ -21,6 +21,9 @@ RUN python3 -m venv .venv && \
 
 WORKDIR ${WORKSPACE_ROOT}
 
+COPY . ${WORKSPACE_ROOT}
+RUN rosdep install --from-paths . --ignore-src -r -y
+
 # install BT CPP ROS2 wrapper
 ARG BTCPP_ROS2_WORKSPACE="/btcpp_ros2_ws"
 RUN mkdir -p ${BTCPP_ROS2_WORKSPACE}

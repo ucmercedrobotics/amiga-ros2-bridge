@@ -14,10 +14,10 @@
       i_output_isp: true
     left:
       i_publish_topic: false
-      i_fps: 10.0
+      i_fps: 30.0
     right:
       i_publish_topic: false
-      i_fps: 10.0
+      i_fps: 30.0
     stereo:
       i_align_depth: true
       i_subpixel: true

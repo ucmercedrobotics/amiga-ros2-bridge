@@ -4,14 +4,14 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
-#include "amiga_navigation_interfaces/action/wpfollow.hpp"
+#include "amiga_navigation_interfaces/action/gps_waypoint.hpp"
 
-using WpFollow = amiga_navigation_interfaces::action::Wpfollow;
+using GPSWaypoint = amiga_navigation_interfaces::action::GPSWaypoint;
 
 class DummyGPSActionServer : public rclcpp::Node {
  public:
   DummyGPSActionServer() : Node("dummy_gps_action_server") {
-    server_ = rclcpp_action::create_server<WpFollow>(
+    server_ = rclcpp_action::create_server<GPSWaypoint>(
         this, "follow_gps_waypoints",
         std::bind(&DummyGPSActionServer::handle_goal, this,
                   std::placeholders::_1, std::placeholders::_2),
@@ -22,11 +22,11 @@ class DummyGPSActionServer : public rclcpp::Node {
   }
 
  private:
-  rclcpp_action::Server<WpFollow>::SharedPtr server_;
+  rclcpp_action::Server<GPSWaypoint>::SharedPtr server_;
 
   rclcpp_action::GoalResponse handle_goal(
       const rclcpp_action::GoalUUID &uuid,
-      std::shared_ptr<const WpFollow::Goal> goal) {
+      std::shared_ptr<const GPSWaypoint::Goal> goal) {
     std::string uuid_str = "Received goal request with UUID: ";
     for (auto const &id : uuid) uuid_str += std::to_string(id) + " ";
 
@@ -38,18 +38,18 @@ class DummyGPSActionServer : public rclcpp::Node {
   }
 
   rclcpp_action::CancelResponse handle_cancel(
-      const std::shared_ptr<rclcpp_action::ServerGoalHandle<WpFollow>>) {
+      const std::shared_ptr<rclcpp_action::ServerGoalHandle<GPSWaypoint>>) {
     RCLCPP_INFO(this->get_logger(), "Goal cancelled");
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
   void handle_accepted(
-      const std::shared_ptr<rclcpp_action::ServerGoalHandle<WpFollow>>
+      const std::shared_ptr<rclcpp_action::ServerGoalHandle<GPSWaypoint>>
           goal_handle) {
     // Run asynchronously
     std::thread([this, goal_handle]() {
-      auto feedback = std::make_shared<WpFollow::Feedback>();
-      auto result = std::make_shared<WpFollow::Result>();
+      auto feedback = std::make_shared<GPSWaypoint::Feedback>();
+      auto result = std::make_shared<GPSWaypoint::Result>();
       uintptr_t addr = reinterpret_cast<uintptr_t>(this);
       double random_radians = ((addr % 10000) / 10000.0) * 2 * M_PI -
                               M_PI;  // Random value between -π and π

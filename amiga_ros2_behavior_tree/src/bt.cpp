@@ -4,15 +4,18 @@
 #include <cstdlib>
 #include <ctime>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <mutex>
+#include <optional>
 #include <string>
 
 #include "amiga_ros2_behavior_tree/actions/assert_true.hpp"
 #include "amiga_ros2_behavior_tree/actions/check_value.hpp"
 #include "amiga_ros2_behavior_tree/actions/detect_object.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
-#include "amiga_ros2_behavior_tree/mission_tcp.hpp"
 #include "amiga_ros2_behavior_tree/xml_validation.hpp"
 #include "behaviortree_ros2/ros_node_params.hpp"
 
@@ -25,15 +28,16 @@ int main(int argc, char **argv) {
 
   std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
-  int port = MISSION_TCP_DEFAULT_PORT;
-  nh->declare_parameter<int>("mission_port", port);
-  nh->get_parameter("mission_port", port);
+  nh->declare_parameter<std::string>("mission_topic", std::string("/mission/xml"));
+  std::string mission_topic;
+  nh->get_parameter("mission_topic", mission_topic);
 
   BehaviorTreeFactory factory;
   RosNodeParams ros_params;
   ros_params.nh = nh;
 
   factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
+  factory.registerNodeType<MoveToTreeID>("MoveToTreeID", ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("MoveToRelativeLocation",
                                                    ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("OrientRobotHeading",
@@ -58,14 +62,28 @@ int main(int argc, char **argv) {
   nh->declare_parameter<std::string>("mission_schema", schema_path);
   nh->get_parameter("mission_schema", schema_path);
 
+  std::mutex mtx;
+  std::optional<std::string> pending_mission;
+  auto sub = nh->create_subscription<std_msgs::msg::String>(
+      mission_topic, 10,
+      [&](const std_msgs::msg::String &msg) {
+        std::lock_guard<std::mutex> lk(mtx);
+        pending_mission = msg.data;
+      });
+
+  rclcpp::Rate spin_rate(20);
   while (rclcpp::ok()) {
-    std::string mission_in;
-    try {
-      mission_in = mission_tcp::wait_for_mission_tcp(port, nh->get_logger());
-    } catch (const std::exception &e) {
-      RCLCPP_ERROR(nh->get_logger(), "Failed to receive mission: %s", e.what());
+    std::optional<std::string> mission_in_opt;
+    {
+      std::lock_guard<std::mutex> lk(mtx);
+      mission_in_opt.swap(pending_mission);
+    }
+    if (!mission_in_opt.has_value()) {
+      rclcpp::spin_some(nh);
+      spin_rate.sleep();
       continue;
     }
+    const std::string &mission_in = *mission_in_opt;
 
     Tree tree;
     try {

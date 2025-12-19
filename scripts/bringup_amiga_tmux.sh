@@ -186,7 +186,7 @@ main() {
                 # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
 
                 # Behavior Tree
-                run "ros2 run amiga_ros2_behavior_tree bt_runner";
+                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
                 break;;
             [Nn]* )
                 break ;;

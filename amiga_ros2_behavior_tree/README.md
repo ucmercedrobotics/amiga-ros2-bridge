@@ -22,3 +22,27 @@ To use BT.CPP with ROS2, we've created a small demo to showcase utility.
 - `/navigate_to_pose` mock -> dummy_nav2_ntp_server
 - `/navigate_to_pose_in_frame` mock -> dummy_ntp_server
 - `follow_gps_waypoints` mock -> dummy_wp_server
+
+## Orchard Management Service
+- **Service:** `/orchard/get_tree_placements` (`example_interfaces/srv/Trigger`)
+- **Behavior:** On request, the node opens a TCP server on the configured `port` (default 12346), reads a length-prefixed JSON payload, and returns the raw JSON string in `response.message`.
+- **JSON Format:** List of dictionaries with keys: `tree_index`, `row`, `col`, `lat`, `lon`.
+
+### Run
+```bash
+ros2 run amiga_ros2_behavior_tree orchard_management_service_node
+```
+
+### Call
+```bash
+ros2 service call /orchard/get_tree_placements example_interfaces/srv/Trigger
+```
+
+### Configure
+- `port` (int): TCP port to listen on (default 12346)
+- `payload_length_included` (bool): If `true`, expects a 4-byte big-endian length before the JSON payload (default true)
+
+Example with parameters:
+```bash
+ros2 run amiga_ros2_behavior_tree orchard_management_service_node --ros-args -p port:=12347 -p payload_length_included:=true
+```
