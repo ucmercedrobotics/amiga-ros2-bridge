@@ -1,0 +1,13 @@
+uint8 TREE_INDEX = 0
+uint8 ROW_INDEX = 1
+uint8 COL_INDEX = 2
+# Request fields
+uint8 index_type
+uint8[] indicies
+# List of fields to include in the response objects
+# supported keys: "tree_index", "row", "col", "lat", "lon", "row_waypoints"
+string[] fields
+---
+# Response fields
+# JSON string containing filtered results
+string json
