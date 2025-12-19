@@ -174,7 +174,7 @@ main() {
                 run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
 
                 # Localization
-                run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV} ${GPS_TOPIC}";
+                run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV} ${GPS_TOPIC} use_gps:=True";
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
