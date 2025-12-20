@@ -182,3 +182,5 @@ cython_debug/
 
 # STL files for amiga_ros2_description
 meshes/
+
+kortex_interfaces/

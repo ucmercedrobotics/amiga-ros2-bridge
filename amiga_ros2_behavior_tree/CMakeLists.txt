@@ -22,6 +22,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(amiga_navigation_interfaces REQUIRED)
+find_package(kortex_interfaces REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(std_msgs REQUIRED)
 # uncomment the following section in order to fill in
@@ -46,6 +47,8 @@ add_executable(dummy_ntp_server src/mocks/dummy_ntp_server.cpp)
 
 add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 
+add_executable(dummy_segment_leaves_server src/mocks/dummy_segment_leaves_server.cpp)
+
 add_executable(dummy_tree_id_server src/mocks/dummy_tree_id_server.cpp)
 
 add_executable(orchard_management_node src/orchard_management.cpp)
@@ -61,6 +64,7 @@ ament_target_dependencies(bt_runner
   rclcpp
   behaviortree_ros2
   amiga_navigation_interfaces
+  kortex_interfaces
   sensor_msgs
   std_msgs
 )
@@ -85,6 +89,12 @@ ament_target_dependencies(dummy_nav2_ntp_server
   rclcpp_action
   nav2_msgs
   geometry_msgs
+)
+
+ament_target_dependencies(dummy_segment_leaves_server
+  rclcpp
+  rclcpp_action
+  kortex_interfaces
 )
 
 ament_target_dependencies(dummy_tree_id_server
@@ -122,6 +132,9 @@ install(TARGETS dummy_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_nav2_ntp_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS dummy_segment_leaves_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_tree_id_server

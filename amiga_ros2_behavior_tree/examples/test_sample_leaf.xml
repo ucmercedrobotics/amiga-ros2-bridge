@@ -1,0 +1,8 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+    <Mission>Test the SampleLeaf action</Mission>
+    <BehaviorTree ID="MainTree">
+        <Sequence>
+            <SampleLeaf name="TestSampleLeaf" action_name="segment_leaves"/>
+        </Sequence>
+    </BehaviorTree>
+</root>
