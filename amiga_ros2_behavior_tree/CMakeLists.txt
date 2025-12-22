@@ -39,6 +39,7 @@ add_executable(bt_runner
   src/actions/sample_leaf.cpp
   src/actions/check_value.cpp
   src/actions/assert_true.cpp
+  src/actions/follow_person.cpp
 )
 
 add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
