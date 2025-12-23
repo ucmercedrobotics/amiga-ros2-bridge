@@ -174,6 +174,13 @@ You can connect your own contoller via `bluetoothctl`.
 
 ## Current Support
 
+### Kinova Kortex
+If you're using the Kinova as an attachment to your Amiga, use `vcs import < kinova.repos`.
+From there, make sure you build using the MoveIt enabled image we provided (you must have access since the registry is private).
+To do so, use `make build-image USE_KINOVA=1`.
+
+See https://github.com/ucmercedrobotics/ros2-kortex-control.
+
 ### Luxonis Oak-D
 Using the onboard Oak-D cameras or your own, you can configure them to stream using ROS2 drivers.
 The below command will execute the DepthAI provided ROS2 drivers (including 9-axis IMU support).
