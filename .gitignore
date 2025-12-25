@@ -184,5 +184,3 @@ cython_debug/
 
 # STL files for amiga_ros2_description
 meshes/
-
-ros2-kortex-control/

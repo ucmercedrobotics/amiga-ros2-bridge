@@ -1,5 +1,0 @@
-repositories:
-    ros2-kortex-control:
-        type: git
-        url: git@github.com:ucmercedrobotics/ros2-kortex-control.git
-        version: main
