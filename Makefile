@@ -1,7 +1,10 @@
 IMAGE:=ghcr.io/ucmercedrobotics/amiga-ros2-bridge
 WORKSPACE:=amiga-ros2-bridge
 NOVNC:=ghcr.io/ucmercedrobotics/docker-novnc
+ROS_DISTRO:=humble
+BASE_IMAGE:=ghcr.io/sloretz/ros:${ROS_DISTRO}-desktop-full-2025-12-07
 MACHINE_NAME?=agx
+USE_KINOVA?=0
 
 PORT:=12346
 PAYLOAD:=true
@@ -29,8 +32,19 @@ shell:
 	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}:${ARCH_TAG}) && \
 	docker exec -it $${CONTAINER_PS} bash
 
-build-image:
-	docker build --platform ${PLATFORM} . -t ${IMAGE}:${ARCH_TAG} --target ${TARGET}
+manifest:
+	mkdir -p manifests
+	rsync -av --include '*/' --include 'package.xml' --exclude '*' amiga* manifests/
+
+build-image: manifest
+	if [ "$(USE_KINOVA)" = "1" ]; then \
+		ROS_IMAGE=ghcr.io/ucmercedrobotics/ros2-kortex-control:${ARCH_TAG}; \
+		INSTALL_BTCPP_ROS2=false; \
+	else \
+		ROS_IMAGE=${BASE_IMAGE}; \
+		INSTALL_BTCPP_ROS2=true; \
+	fi && \
+	docker build --platform ${PLATFORM} . -t ${IMAGE}:${ARCH_TAG} --target ${TARGET} --build-arg BASE_IMAGE=$${ROS_IMAGE} --build-arg INSTALL_BTCPP_ROS2=$${INSTALL_BTCPP_ROS2}
 
 vnc:
 	docker run -d --rm --net=host \
@@ -49,6 +63,7 @@ bash: udev
 	${CUDA_MOUNT} \
 	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
+	-v /${WORKSPACE}/manifests \
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/:/dev/ \
 	-e FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/${MACHINE_NAME}.xml \

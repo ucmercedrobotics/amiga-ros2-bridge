@@ -19,18 +19,21 @@ RUN python3 -m venv .venv && \
     . .venv/bin/activate && \
     pip install -r /requirements.txt
 
-WORKDIR ${WORKSPACE_ROOT}
-
-COPY . ${WORKSPACE_ROOT}
-RUN rosdep install --from-paths . --ignore-src -r -y
-
 # install BT CPP ROS2 wrapper
+ARG INSTALL_BTCPP_ROS2=true
 ARG BTCPP_ROS2_WORKSPACE="/btcpp_ros2_ws"
-RUN mkdir -p ${BTCPP_ROS2_WORKSPACE}
-RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+RUN if [ "$INSTALL_BTCPP_ROS2" = "true" ]; then \
+    mkdir -p ${BTCPP_ROS2_WORKSPACE} && \
+    . /opt/ros/${ROS_DISTRO}/setup.sh && \
     git clone https://github.com/BehaviorTree/BehaviorTree.ROS2.git ${BTCPP_ROS2_WORKSPACE} && \
     cd ${BTCPP_ROS2_WORKSPACE} && \
-    colcon build --symlink-install
+    colcon build --symlink-install; \
+    fi
+
+WORKDIR ${WORKSPACE_ROOT}
+
+COPY manifests/ /manifests/
+RUN rosdep install --from-paths /manifests --ignore-src -r -y
 
 # configure DISPLAY env variable for novnc connection
 ENV DISPLAY=:2 \
@@ -48,10 +51,11 @@ RUN echo "export PYTHONPATH=/usr/lib/python3/dist-packages:\$PYTHONPATH" >> /roo
 FROM base AS jetson
 # This is terrible to do, but they offer me no choice...
 # only works on AGX because it's built for libcudnn 9 (cuda 12.6)
-RUN wget "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl#sha256=62a1beee9f2f147076a974d2942c90060c12771c94740830327cae705b2595fc" && \
-    wget "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl#sha256=907c4c1933789645ebb20dd9181d40f8647978e6bd30086ae7b01febb937d2d1" && \
+RUN curl -O "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl" && \
+    curl -O "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl" && \
     . /.venv/bin/activate && \
-    pip install torch-2.8.0-cp310-cp310-linux_aarch64.whl torchvision-0.23.0-cp310-cp310-linux_aarch64.whl
+    pip install torch-2.8.0-cp310-cp310-linux_aarch64.whl \
+    torchvision-0.23.0-cp310-cp310-linux_aarch64.whl
 
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/targets/aarch64-linux/lib/:/usr/lib/aarch64-linux-gnu-host/openblas-pthread:/usr/lib/aarch64-linux-gnu-host/
 ENV PATH=/usr/local/cuda/bin:${PATH}
