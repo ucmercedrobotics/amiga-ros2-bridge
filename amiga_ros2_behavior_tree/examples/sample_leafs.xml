@@ -1,9 +1,13 @@
 <root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
-    <Mission>go to the first tree and sample leaves</Mission>
-    <BehaviorTree ID="MainTree">
-        <Sequence>
-            <MoveToGPSLocation name="MoveToTree1" action_name="follow_gps_waypoints" object_angle="{tree_angle}" latitude="37.266373699999995" longitude="-120.4203514"/>
-            <SampleLeaf name="SampleLeavesTree1" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
-        </Sequence>
-    </BehaviorTree>
+  <Mission>sample trees 10 and 60</Mission>
+  <BehaviorTree ID="Sample_Trees_10_and_60">
+    <Sequence>
+      <MoveToTreeID name="Goto_Tree_10" action_name="follow_tree_id_waypoint" object_angle="{tree_angle}" id="10" approach_tree="true"/>
+      <SampleLeaf name="Sample_Tree_10" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
+      <MoveToTreeID name="Exit_Column_2_Top" action_name="follow_tree_id_waypoint" id="2" approach_tree="false"/>
+      <MoveToTreeID name="Enter_Column_4_Top" action_name="follow_tree_id_waypoint" id="4" approach_tree="false"/>
+      <MoveToTreeID name="Goto_Tree_60" action_name="follow_tree_id_waypoint" object_angle="{tree_angle}" id="60" approach_tree="true"/>
+      <SampleLeaf name="Sample_Tree_60" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
+    </Sequence>
+  </BehaviorTree>
 </root>

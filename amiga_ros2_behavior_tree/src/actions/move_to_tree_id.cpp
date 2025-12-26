@@ -9,19 +9,21 @@ MoveToTreeID::MoveToTreeID(const std::string &name,
 
 BT::PortsList MoveToTreeID::providedPorts() {
   return providedBasicPorts({BT::InputPort<double>("id"),
+                             BT::InputPort<bool>("approach_tree"),
                              BT::OutputPort<double>("object_angle")});
 }
 
 bool MoveToTreeID::setGoal(Goal &goal) {
   uint32_t id;
+  bool approach_tree;
 
-  if (!getInput("id", id)) {
-    RCLCPP_ERROR(logger(), "Missing tree ID input");
+  if (!getInput("id", id) || !getInput("approach_tree", approach_tree)) {
+    RCLCPP_ERROR(logger(), "Missing tree ID input or approach_tree flag");
     return false;
   }
 
   goal.tree_id = id;
-
+  goal.approach_tree = approach_tree;
   RCLCPP_INFO(logger(), "Moving to tree ID: %u", id);
   return true;
 }

@@ -50,10 +50,6 @@ class DummyGPSActionServer : public rclcpp::Node {
     std::thread([this, goal_handle]() {
       auto feedback = std::make_shared<GPSWaypoint::Feedback>();
       auto result = std::make_shared<GPSWaypoint::Result>();
-      uintptr_t addr = reinterpret_cast<uintptr_t>(this);
-      double random_radians = ((addr % 10000) / 10000.0) * 2 * M_PI -
-                              M_PI;  // Random value between -π and π
-      result->object_angle = random_radians;
 
       RCLCPP_INFO(this->get_logger(), "Executing goal...");
       RCLCPP_INFO(this->get_logger(), "Navigating to (%.8f, %.8f)",
