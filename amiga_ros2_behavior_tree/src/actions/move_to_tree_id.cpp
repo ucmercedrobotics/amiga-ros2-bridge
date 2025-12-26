@@ -9,8 +9,7 @@ MoveToTreeID::MoveToTreeID(const std::string &name,
 
 BT::PortsList MoveToTreeID::providedPorts() {
   return providedBasicPorts({BT::InputPort<double>("id"),
-                             BT::InputPort<bool>("approach_tree"),
-                             BT::OutputPort<double>("object_angle")});
+                             BT::InputPort<bool>("approach_tree")});
 }
 
 bool MoveToTreeID::setGoal(Goal &goal) {
@@ -34,7 +33,6 @@ BT::NodeStatus MoveToTreeID::onResultReceived(
   // Check if the action succeeded
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     RCLCPP_INFO(logger(), "Navigation succeeded!");
-    setOutput("object_angle", result.result->object_angle);
     return BT::NodeStatus::SUCCESS;
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
     RCLCPP_WARN(logger(), "Navigation was canceled");

@@ -1,13 +1,13 @@
 <root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
-  <Mission>sample trees 10 and 60</Mission>
-  <BehaviorTree ID="Sample_Trees_10_and_60">
+  <Mission>sample leaves from trees 10 and 60</Mission>
+  <BehaviorTree ID="Sample_Leaves_Trees_10_60">
     <Sequence>
-      <MoveToTreeID name="Goto_Tree_10" action_name="follow_tree_id_waypoint" object_angle="{tree_angle}" id="10" approach_tree="true"/>
-      <SampleLeaf name="Sample_Tree_10" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
-      <MoveToTreeID name="Exit_Column_2_Top" action_name="follow_tree_id_waypoint" id="2" approach_tree="false"/>
-      <MoveToTreeID name="Enter_Column_4_Top" action_name="follow_tree_id_waypoint" id="4" approach_tree="false"/>
-      <MoveToTreeID name="Goto_Tree_60" action_name="follow_tree_id_waypoint" object_angle="{tree_angle}" id="60" approach_tree="true"/>
-      <SampleLeaf name="Sample_Tree_60" action_name="navigate_via_lidar" tree_angle="{tree_angle}"/>
+      <MoveToTreeID name="Visit_Tree_10" action_name="follow_tree_id_waypoint" id="10" approach_tree="true"/>
+      <SampleLeaf name="Sample_Leaves_Tree_10" action_name="segment_leaves"/>
+      <MoveToTreeID name="Exit_To_Top_Headland_Col2_Tree2" action_name="follow_tree_id_waypoint" id="2" approach_tree="false"/>
+      <MoveToTreeID name="Traverse_Top_Headland_To_Col4_Tree4" action_name="follow_tree_id_waypoint" id="4" approach_tree="false"/>
+      <MoveToTreeID name="Visit_Tree_60" action_name="follow_tree_id_waypoint" id="60" approach_tree="true"/>
+      <SampleLeaf name="Sample_Leaves_Tree_60" action_name="segment_leaves"/>
     </Sequence>
   </BehaviorTree>
 </root>

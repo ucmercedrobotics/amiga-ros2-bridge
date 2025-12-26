@@ -52,13 +52,8 @@ class DummyTreeIDActionServer : public rclcpp::Node {
       double lat = 37.0 + (tree_id % 1000) / 10000.0;  // ~37.0-37.1
       double lon = -122.0 + (tree_id % 1000) / 10000.0;  // ~-122.0--121.9
       
-      uintptr_t addr = reinterpret_cast<uintptr_t>(this);
-      double random_radians = ((addr % 10000) / 10000.0) * 2 * M_PI -
-                              M_PI;  // Random value between -π and π
-      
       result->lat = lat;
       result->lon = lon;
-      result->object_angle = random_radians;
 
       RCLCPP_INFO(this->get_logger(), "Executing goal...");
       RCLCPP_INFO(this->get_logger(), "Navigating to tree ID: %u", tree_id);
@@ -80,8 +75,8 @@ class DummyTreeIDActionServer : public rclcpp::Node {
 
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), 
-                  "Goal succeeded! Arrived at tree %u (%.6f, %.6f), angle: %.3f rad",
-                  tree_id, lat, lon, random_radians);
+                  "Goal succeeded! Arrived at tree %u (%.6f, %.6f)",
+                  tree_id, lat, lon);
     }).detach();
   }
 };
