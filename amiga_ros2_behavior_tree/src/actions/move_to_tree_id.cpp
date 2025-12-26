@@ -9,19 +9,20 @@ MoveToTreeID::MoveToTreeID(const std::string &name,
 
 BT::PortsList MoveToTreeID::providedPorts() {
   return providedBasicPorts({BT::InputPort<double>("id"),
-                             BT::OutputPort<double>("object_angle")});
+                             BT::InputPort<bool>("approach_tree")});
 }
 
 bool MoveToTreeID::setGoal(Goal &goal) {
   uint32_t id;
+  bool approach_tree;
 
-  if (!getInput("id", id)) {
-    RCLCPP_ERROR(logger(), "Missing tree ID input");
+  if (!getInput("id", id) || !getInput("approach_tree", approach_tree)) {
+    RCLCPP_ERROR(logger(), "Missing tree ID input or approach_tree flag");
     return false;
   }
 
   goal.tree_id = id;
-
+  goal.approach_tree = approach_tree;
   RCLCPP_INFO(logger(), "Moving to tree ID: %u", id);
   return true;
 }
@@ -32,7 +33,6 @@ BT::NodeStatus MoveToTreeID::onResultReceived(
   // Check if the action succeeded
   if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
     RCLCPP_INFO(logger(), "Navigation succeeded!");
-    setOutput("object_angle", result.result->object_angle);
     return BT::NodeStatus::SUCCESS;
   } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
     RCLCPP_WARN(logger(), "Navigation was canceled");
