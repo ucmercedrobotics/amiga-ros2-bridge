@@ -60,49 +60,39 @@ run() {
 # USE_SENSOR_TOWER=1 (yes) or 0 (no). The choice is shown and the
 # user must confirm before the script proceeds.
 ask_parameters() {
-    # Prompt: sensor tower
+    # Single environment question: Carpin vs Reza
     while true; do
-        read -r -p "Do you have the sensor tower connected? [y/N]: " ans
+        read -r -p "Is this Carpin Amiga? [y/N]: " ans
         case "$ans" in
-            [Yy]* ) USE_SENSOR_TOWER="use_lidar:=True"; break ;;
-            [Nn]* ) USE_SENSOR_TOWER="use_lidar:=False"; break ;;
-            ""    ) USE_SENSOR_TOWER="use_lidar:=False"; break ;;
+            [Yy]* )
+                # Carpin preset: BNO085 IMU, gps_link, ublox driver, no sensor tower
+                USE_SENSOR_TOWER="use_lidar:=False"
+                GPS_LINK="gps_link_name:=gps_link"
+                VECTOR_NAV="use_vectornav:=False"
+                CAM_CONFIG="camera_config:=amiga_cameras.yaml"
+                break ;;
+            [Nn]* | "" )
+                # Reza preset: VectorNav IMU, gps_antenna, sensor tower
+                USE_SENSOR_TOWER="use_lidar:=True"
+                GPS_LINK="gps_link_name:=gps_antenna"
+                VECTOR_NAV="use_vectornav:=True"
+                CAM_CONFIG="camera_config:=reza_cameras.yaml"
+                break ;;
             * ) echo "Please answer y or n." ;;
         esac
     done
 
     export USE_SENSOR_TOWER
-
-    while true; do
-        read -r -p "Using base station? [y/N]: " ans
-        case "$ans" in
-            [Yy]* ) GPS_LINK="gps_link_name:=gps_link"; break ;;
-            [Nn]* ) GPS_LINK="gps_link_name:=gps_antenna"; break ;;
-            ""    ) GPS_LINK="gps_link_name:=gps_antenna"; break ;;
-            * ) echo "Please answer y or n." ;;
-        esac
-    done
-
     export GPS_LINK
-
-    while true; do
-        read -r -p "Using VectorNav IMU? [y/N]: " ans
-        case "$ans" in
-            [Yy]* ) VECTOR_NAV="use_vectornav:=True"; break ;;
-            [Nn]* ) VECTOR_NAV="use_vectornav:=False"; break ;;
-            ""    ) VECTOR_NAV="use_vectornav:=False"; break ;;
-            * ) echo "Please answer y or n." ;;
-        esac
-    done
-
     export VECTOR_NAV
+    export CAM_CONFIG
 
+    # Machine selection remains: AGX or Brain
     while true; do
         read -r -p "Running on AGX (N for Brain)? [y/N]: " ans
         case "$ans" in
             [Yy]* ) MACHINE_NAME="agx"; break ;;
-            [Nn]* ) MACHINE_NAME="brain"; break ;;
-            ""    ) MACHINE_NAME="brain"; break ;;
+            [Nn]* | "" ) MACHINE_NAME="brain"; break ;;
             * ) echo "Please answer y or n." ;;
         esac
     done
@@ -171,7 +161,7 @@ main() {
                 run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER} ${GPS_LINK} ${VECTOR_NAV}";
 
                 # Cameras
-                run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py";
+                run "ros2 launch amiga_ros2_oakd amiga_cameras.launch.py ${CAM_CONFIG}";
 
                 # Localization
                 run "ros2 launch amiga_localization bringup.launch.py ${VECTOR_NAV} ${GPS_TOPIC} use_gps:=True";

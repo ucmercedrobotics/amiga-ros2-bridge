@@ -19,7 +19,11 @@ CAMS = ["oak0", "oak1"]
 
 def launch_setup(context, *args, **kwargs):
     package_dir = get_package_share_directory("amiga_ros2_oakd")
-    params_file = os.path.join(package_dir, "config", "ali_cameras.yaml")
+    # Allow selecting camera config YAML via launch arg
+    config_name = LaunchConfiguration("camera_config").perform(context)
+    if not config_name:
+        config_name = "amiga_cameras.yaml"
+    params_file = os.path.join(package_dir, "config", config_name)
 
     # Launch nodes for each camera
     nodes = []
@@ -41,4 +45,11 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    return LaunchDescription([OpaqueFunction(function=launch_setup)])
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            "camera_config",
+            default_value="ali_cameras.yaml",
+            description="Camera configuration YAML filename (in package config folder)",
+        ),
+        OpaqueFunction(function=launch_setup),
+    ])
