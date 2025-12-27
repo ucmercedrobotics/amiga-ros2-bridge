@@ -48,7 +48,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "camera_config",
-            default_value="ali_cameras.yaml",
+            default_value="amiga_cameras.yaml",
             description="Camera configuration YAML filename (in package config folder)",
         ),
         OpaqueFunction(function=launch_setup),

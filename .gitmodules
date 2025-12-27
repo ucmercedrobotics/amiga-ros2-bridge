@@ -1,7 +1,6 @@
 [submodule "amiga-ros2-nav"]
 	path = amiga-ros2-nav
 	url = git@github.com:ucmercedrobotics/amiga-ros2-nav.git
-	branch = ali/navigation
 [submodule "amiga_ros2_behavior_tree/schemas"]
 	path = amiga_ros2_behavior_tree/schemas
 	url = git@github.com:ucmercedrobotics/gpt-mission-planner-schemas.git
