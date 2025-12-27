@@ -1,8 +1,7 @@
 /oak0:
   ros__parameters:
     camera:
-      i_ip: 10.95.76.10
-      i_mx_id: 18443010D1D8920F00
+      i_ip: 10.95.76.20
       i_pipeline_type: RGBD
       i_nn_type: none
       i_laser_dot_brightness: 1000
@@ -14,10 +13,10 @@
       i_output_isp: true
     left:
       i_publish_topic: false
-      i_fps: 30.0
+      i_fps: 10.0
     right:
       i_publish_topic: false
-      i_fps: 30.0
+      i_fps: 10.0
     stereo:
       i_align_depth: true
       i_subpixel: true
@@ -32,8 +31,7 @@
 /oak1:
   ros__parameters:
     camera:
-      i_ip: 10.95.76.11
-      i_mx_id: 18443010F1E8920F00
+      i_ip: 10.95.76.21
       i_pipeline_type: RGBD
       i_nn_type: none
       i_laser_dot_brightness: 1000

@@ -22,6 +22,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(amiga_navigation_interfaces REQUIRED)
+find_package(amiga_interfaces REQUIRED)
 find_package(kortex_interfaces REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -65,6 +66,7 @@ ament_target_dependencies(bt_runner
   rclcpp
   behaviortree_ros2
   amiga_navigation_interfaces
+  amiga_interfaces
   kortex_interfaces
   sensor_msgs
   std_msgs

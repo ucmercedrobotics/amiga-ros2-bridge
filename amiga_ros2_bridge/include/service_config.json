@@ -13,22 +13,22 @@
         {
             "name": "oak0",
             "port": 50010,
-	        "host": "000.000.000.000"
+	        "host": "10.95.76.1"
         },
         {
             "name": "filter",
             "port": 20001,
-	        "host": "000.000.000.000"
+	        "host": "10.95.76.1"
         },
         {
             "name": "track_follower",
             "port": 20101,
-	        "host": "000.000.000.000"
+	        "host": "10.95.76.1"
         },
         {
             "name": "system_monitor",
             "port": 20201,
-	        "host": "000.000.000.000"
+	        "host": "10.95.76.1"
         },
         {
             "name": "amiga_subscriptions",
