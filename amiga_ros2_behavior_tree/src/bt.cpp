@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
 
     RCLCPP_INFO(nh->get_logger(), "Starting mission execution...");
 
-    rclcpp::Rate rate(10);
+    rclcpp::Rate rate(50);
     while (rclcpp::ok()) {
       auto status = tree.tickOnce();
       if (status == BT::NodeStatus::SUCCESS ||
