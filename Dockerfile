@@ -11,6 +11,7 @@ ARG MACHINE_NAME="agx"
 RUN apt-get update && apt-get install -y git wget python3-full python3-pip vim net-tools netcat-traditional build-essential cmake \
     ros-${ROS_DISTRO}-foxglove-bridge ros-${ROS_DISTRO}-depthai-ros \
     ros-${ROS_DISTRO}-behaviortree-cpp ros-${ROS_DISTRO}-generate-parameter-library \
+    ros-${ROS_DISTRO}-tf-transformations \
     rhash librhash-dev
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
