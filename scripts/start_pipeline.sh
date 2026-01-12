@@ -99,6 +99,9 @@ main() {
     # Arm control (arm_commander + target_manager)
     run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
 
+    # Nanospec sensor service
+    run "ros2 run nanospec NSP32_service_node" "nanospec"
+
     # Trigger window (ready for user to run)
     echo "Creating trigger window..."
     tmux new-window -t "$SESSION" -n "trigger" "docker exec -it $CONTAINER_ID bash"
