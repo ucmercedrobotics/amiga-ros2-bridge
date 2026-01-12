@@ -75,7 +75,7 @@ ask_parameters() {
                 # Reza preset: VectorNav IMU, gps_antenna, sensor tower
                 USE_SENSOR_TOWER="use_lidar:=True"
                 GPS_LINK="gps_link_name:=gps_antenna"
-                VECTOR_NAV="use_vectornav:=True"
+                VECTOR_NAV="use_vectornav:=False"
                 CAM_CONFIG="camera_config:=reza_cameras.yaml"
                 break ;;
             * ) echo "Please answer y or n." ;;
