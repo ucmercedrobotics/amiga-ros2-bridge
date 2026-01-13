@@ -66,7 +66,7 @@
       parent_link="base_link"
       vectornav_link_name="vectornav"
       joint_origin_xyz="-0.3 0 0"
-      joint_origin_rpy="${pi} 0 -${pi/2}"/>
+      joint_origin_rpy="${pi} 0 ${pi/2}"/>
   </xacro:if>
   <xacro:unless value="$(arg use_vectornav)">
     <xacro:bno085
