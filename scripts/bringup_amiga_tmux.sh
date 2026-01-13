@@ -170,10 +170,10 @@ main() {
                 run "ros2 launch amiga_navigation navigation.launch.py";
                 run "ros2 run amiga_navigation lidar_object_navigator";
                 run "ros2 run amiga_navigation waypoint_follower.py";
+                # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
+                run "ros2 run amiga_navigation navigate_to_pose_in_frame"
                 # run "ros2 run amiga_navigation linear_velo";
                 run "ros2 run amiga_navigation yolo_person_follower.py"
-                # TODO: replace the above with this once we confirm NAV2 working with IMU
-                run "ros2 run amiga_navigation navigate_to_pose_in_frame"
 
                 # Behavior Tree
                 run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
