@@ -170,16 +170,43 @@ main() {
                 run "ros2 launch amiga_navigation navigation.launch.py";
                 run "ros2 run amiga_navigation lidar_object_navigator";
                 run "ros2 run amiga_navigation waypoint_follower.py";
-                run "ros2 run amiga_navigation linear_velo";
+                # run "ros2 run amiga_navigation linear_velo";
                 run "ros2 run amiga_navigation yolo_person_follower.py"
                 # TODO: replace the above with this once we confirm NAV2 working with IMU
-                # run "ros2 launch amiga_navigation navigate_to_pose_in_frame"
+                run "ros2 run amiga_navigation navigate_to_pose_in_frame"
 
                 # Behavior Tree
                 run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
                 break;;
             [Nn]* )
                 break ;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+    while true; do
+        read -r -p "Do you want to run the Kortex MoveIt stack? [y/N]: " ans
+        case "$ans" in
+            [Yy]* )
+                # MoveIt (main arm control)
+                run "ros2 launch kortex_move robot.launch.py robot_ip:=192.168.0.10 vision:=true" "moveit"
+
+                # Wait for MoveIt to initialize before starting other nodes
+                sleep 2
+
+                # Vision camera streams
+                run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=192.168.0.10" "vision"
+
+                # Leaf segmentation (YOLO)
+                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
+
+                # Arm control (arm_commander + target_manager)
+                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
+
+                # Nanospec sensor service
+                run "ros2 run nanospec NSP32_service_node" "nanospec"
+                break;;
+            [Nn]* )
+                break;;
             * ) echo "Please answer y or n." ;;
         esac
     done
