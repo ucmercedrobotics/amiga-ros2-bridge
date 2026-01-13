@@ -12,5 +12,8 @@ adafruit_circuitpython_bno08x==1.3.1
 Adafruit-Blinka==8.67.0
 Jetson.GPIO==2.1.12
 hidapi==0.14.0.post4
+python-dateutil
+pandas==1.5.3
+scikit-learn==1.1.3
 # YOLO
 ultralytics==8.3.236
