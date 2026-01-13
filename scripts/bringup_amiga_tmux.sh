@@ -176,7 +176,7 @@ main() {
                 run "ros2 run amiga_navigation yolo_person_follower.py"
 
                 # Behavior Tree
-                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
+                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=0.0 y_offset:=0.0";
                 break;;
             [Nn]* )
                 break ;;
