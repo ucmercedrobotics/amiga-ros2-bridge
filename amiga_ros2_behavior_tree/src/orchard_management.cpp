@@ -9,6 +9,8 @@ using GetTreeInfo = amiga_interfaces::srv::GetTreeInfo;
 using json = nlohmann::json;
 
 constexpr double EARTH_RADIUS_M = 6378137.0;
+constexpr uint8_t ROW_WAYPOINT_LAT = 0;
+constexpr uint8_t ROW_WAYPOINT_LON = 1;
 
 class OrchardManagementServiceNode : public rclcpp::Node {
  public:
@@ -84,14 +86,12 @@ class OrchardManagementServiceNode : public rclcpp::Node {
         if (include_field("row_waypoints") && obj.contains("row_waypoints")) out["row_waypoints"] = obj["row_waypoints"];
         if (out["row_waypoints"].is_array()) {
           for (auto &wp : out["row_waypoints"]) {
-            if (wp.contains("lat") && wp.contains("lon")) {
-              this->add_meters_to_gps(
-                  wp["lat"].get<double>(), wp["lon"].get<double>(),
-                  x_offset, y_offset,
-                  adj_lat, adj_lon);
-              wp["lat"] = adj_lat;
-              wp["lon"] = adj_lon;
-            }
+            this->add_meters_to_gps(
+                wp[ROW_WAYPOINT_LAT], wp[ROW_WAYPOINT_LON],
+                x_offset, y_offset,
+                adj_lat, adj_lon);
+            wp[ROW_WAYPOINT_LAT] = adj_lat;
+            wp[ROW_WAYPOINT_LON] = adj_lon;
           }
         }
         return out;
