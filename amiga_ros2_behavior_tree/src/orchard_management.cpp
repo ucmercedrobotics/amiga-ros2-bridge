@@ -8,11 +8,17 @@
 using GetTreeInfo = amiga_interfaces::srv::GetTreeInfo;
 using json = nlohmann::json;
 
+constexpr double EARTH_RADIUS_M = 6378137.0;
+constexpr uint8_t ROW_WAYPOINT_LAT = 0;
+constexpr uint8_t ROW_WAYPOINT_LON = 1;
+
 class OrchardManagementServiceNode : public rclcpp::Node {
  public:
   OrchardManagementServiceNode()
       : rclcpp::Node("orchard_management_service_node") {
     this->declare_parameter<std::string>("json_topic", std::string("/orchard/tree_info_json"));
+    this->declare_parameter<double>("x_offset", double(0.0));
+    this->declare_parameter<double>("y_offset", double(0.0));
 
     service_ = this->create_service<GetTreeInfo>(
         "/orchard/get_tree_info",
@@ -59,6 +65,9 @@ class OrchardManagementServiceNode : public rclcpp::Node {
         return fields.empty() || std::find(fields.begin(), fields.end(), k) != fields.end();
       };
 
+      double adj_lat, adj_lon;
+      double x_offset = this->get_parameter("x_offset").as_double();
+      double y_offset = this->get_parameter("y_offset").as_double();
       auto project_obj = [&](const json &obj) {
         json out = json::object();
         if (include_field("tree_index") && obj.contains("tree_index")) out["tree_index"] = obj["tree_index"];
@@ -66,7 +75,25 @@ class OrchardManagementServiceNode : public rclcpp::Node {
         if (include_field("col") && obj.contains("col")) out["col"] = obj["col"];
         if (include_field("lat") && obj.contains("lat")) out["lat"] = obj["lat"];
         if (include_field("lon") && obj.contains("lon")) out["lon"] = obj["lon"];
+        if (out.contains("lat") && out.contains("lon")) {
+          this->add_meters_to_gps(
+              out["lat"].get<double>(), out["lon"].get<double>(),
+              x_offset, y_offset,
+              adj_lat, adj_lon);
+          out["lat"] = adj_lat;
+          out["lon"] = adj_lon;
+        }
         if (include_field("row_waypoints") && obj.contains("row_waypoints")) out["row_waypoints"] = obj["row_waypoints"];
+        if (out["row_waypoints"].is_array()) {
+          for (auto &wp : out["row_waypoints"]) {
+            this->add_meters_to_gps(
+                wp[ROW_WAYPOINT_LAT], wp[ROW_WAYPOINT_LON],
+                x_offset, y_offset,
+                adj_lat, adj_lon);
+            wp[ROW_WAYPOINT_LAT] = adj_lat;
+            wp[ROW_WAYPOINT_LON] = adj_lon;
+          }
+        }
         return out;
       };
       if (!data.is_array()) {
@@ -121,6 +148,21 @@ class OrchardManagementServiceNode : public rclcpp::Node {
       RCLCPP_ERROR(this->get_logger(), "Service error: %s", e.what());
       response->json = std::string("[]");
     }
+  }
+
+  void add_meters_to_gps(
+      double lat_deg, double lon_deg,
+      double dx_east_m, double dy_north_m,
+      double &out_lat_deg, double &out_lon_deg)
+  {
+    double lat_rad = lat_deg * M_PI / 180.0;
+
+    // Meters → degrees
+    double dlat = dy_north_m / EARTH_RADIUS_M;
+    double dlon = dx_east_m / (EARTH_RADIUS_M * std::cos(lat_rad));
+
+    out_lat_deg = lat_deg + (dlat * 180.0 / M_PI);
+    out_lon_deg = lon_deg + (dlon * 180.0 / M_PI);
   }
 
   rclcpp::Service<GetTreeInfo>::SharedPtr service_;

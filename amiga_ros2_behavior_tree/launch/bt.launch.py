@@ -35,6 +35,16 @@ def generate_launch_description():
                 default_value="/orchard/tree_info_json",
                 description="Topic to publish orchard JSON",
             ),
+            DeclareLaunchArgument(
+                "x_offset",
+                default_value="0.0",
+                description="Offset in meters to add to longitude (east/west)",
+            ),
+            DeclareLaunchArgument(
+                "y_offset",
+                default_value="0.0",
+                description="Offset in meters to add to latitude (north/south)",
+            ),
 
             Node(
                 package="amiga_ros2_behavior_tree",
@@ -65,6 +75,13 @@ def generate_launch_description():
                 name="orchard_management",
                 output="screen",
                 condition=IfCondition(LaunchConfiguration("expect_json")),
+                parameters=[
+                    {
+                        "json_topic": LaunchConfiguration("orchard_topic"),
+                        "x_offset": LaunchConfiguration("x_offset"),
+                        "y_offset": LaunchConfiguration("y_offset"),
+                    }
+                ],
             ),
         ]
     )
