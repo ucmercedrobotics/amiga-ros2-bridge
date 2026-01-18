@@ -118,6 +118,31 @@ main() {
     wait_for_container
 
     while true; do
+        read -r -p "Do you want to run the Kortex MoveIt stack? [y/N]: " ans
+        case "$ans" in
+            [Yy]* )
+                # MoveIt (main arm control)
+                run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit"
+
+                # Vision camera streams
+                run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=10.55.155.10" "vision"
+
+                # Leaf segmentation (YOLO)
+                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
+
+                # Arm control (arm_commander + target_manager)
+                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
+
+                # Nanospec sensor service
+                run "ros2 run nanospec NSP32_service_node" "nanospec"
+                break;;
+            [Nn]* )
+                break;;
+            * ) echo "Please answer y or n." ;;
+        esac
+    done
+
+    while true; do
         read -r -p "Do you want to run CAN bus nodes? [y/N]: " ans
         case "$ans" in
             [Yy]* )
@@ -180,33 +205,6 @@ main() {
                 break;;
             [Nn]* )
                 break ;;
-            * ) echo "Please answer y or n." ;;
-        esac
-    done
-    while true; do
-        read -r -p "Do you want to run the Kortex MoveIt stack? [y/N]: " ans
-        case "$ans" in
-            [Yy]* )
-                # MoveIt (main arm control)
-                run "ros2 launch kortex_move robot.launch.py robot_ip:=192.168.0.10 vision:=true" "moveit"
-
-                # Wait for MoveIt to initialize before starting other nodes
-                sleep 2
-
-                # Vision camera streams
-                run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=192.168.0.10" "vision"
-
-                # Leaf segmentation (YOLO)
-                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
-
-                # Arm control (arm_commander + target_manager)
-                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
-
-                # Nanospec sensor service
-                run "ros2 run nanospec NSP32_service_node" "nanospec"
-                break;;
-            [Nn]* )
-                break;;
             * ) echo "Please answer y or n." ;;
         esac
     done

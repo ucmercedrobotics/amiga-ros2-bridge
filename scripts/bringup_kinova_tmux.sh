@@ -85,13 +85,11 @@ main() {
     wait_for_container
 
     # MoveIt (main arm control)
-    run "ros2 launch kortex_move robot.launch.py robot_ip:=192.168.0.10 vision:=true" "moveit"
+    run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit"
 
-    # Wait for MoveIt to initialize before starting other nodes
-    sleep 2
 
     # Vision camera streams
-    run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=192.168.0.10" "vision"
+    run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=10.55.155.10" "vision"
 
     # Leaf segmentation (YOLO)
     run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
