@@ -93,3 +93,11 @@ mission-interface:
 
 amiga:
 	./scripts/bringup_amiga_tmux.sh
+
+kortex-home:
+	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \
+	joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], \
+	points: [ \
+	{ positions: [0.0, -0.785398, -2.0, 0.0, -0.436332, 1.5708], time_from_start: { sec: 10 } }, \
+	] \
+	}" -1

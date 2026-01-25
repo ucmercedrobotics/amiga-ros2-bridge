@@ -1,7 +1,7 @@
 /oak0:
   ros__parameters:
     camera:
-      i_ip: 10.95.76.20
+      i_ip: 10.95.76.21
       i_pipeline_type: RGBD
       i_nn_type: none
       i_laser_dot_brightness: 1000
@@ -31,7 +31,7 @@
 /oak1:
   ros__parameters:
     camera:
-      i_ip: 10.95.76.21
+      i_ip: 10.95.76.20
       i_pipeline_type: RGBD
       i_nn_type: none
       i_laser_dot_brightness: 1000

@@ -84,6 +84,8 @@ main() {
     start_container
     wait_for_container
 
+    sudo make udev -B
+
     # MoveIt (main arm control)
     run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit"
 
