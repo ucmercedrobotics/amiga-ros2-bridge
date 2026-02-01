@@ -181,6 +181,7 @@ main() {
 
                 # Foxglove
                 run "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8766";
+                # run "rviz2";
 
                 # URDF
                 run "ros2 launch amiga_ros2_description urdf.launch.py ${USE_SENSOR_TOWER} ${GPS_LINK} ${VECTOR_NAV}";
@@ -193,11 +194,12 @@ main() {
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
-                run "ros2 run amiga_navigation lidar_object_navigator";
+                # run "ros2 run nav2_collision_monitor collision_monitor --ros-args --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
+                run "ros2 run amiga_navigation lidar_object_navigator --ros-args -p safety_distance:=1.0";
                 run "ros2 run amiga_navigation waypoint_follower.py";
                 # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
-                run "ros2 run amiga_navigation navigate_to_pose_in_frame"
-                # run "ros2 run amiga_navigation linear_velo";
+                # run "ros2 run amiga_navigation navigate_to_pose_in_frame"
+                run "ros2 run amiga_navigation linear_velo";
                 run "ros2 run amiga_navigation yolo_person_follower.py"
 
                 # Behavior Tree

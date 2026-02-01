@@ -21,11 +21,14 @@
     stereo:
       i_align_depth: true
       i_subpixel: true
-      i_stereo_conf_threshold: 110
-      i_enable_brightness_filter: false
-      i_brightness_filter_min_brightness: 1
-      i_brightness_filter_max_brightness: 225
+      i_stereo_conf_threshold: 75
+      i_enable_brightness_filter: true
+      i_brightness_filter_min_brightness: 0
+      i_brightness_filter_max_brightness: 200
       i_enable_decimation_filter: true
+      i_enable_speckle_filter: true
+      i_speckle_filter_max_size: 10
+      i_enable_temporal_filter: false
       i_publish_left_rect: false
       i_publish_right_rect: false
 
@@ -52,10 +55,13 @@
     stereo:
       i_align_depth: true
       i_subpixel: true
-      i_stereo_conf_threshold: 110
-      i_enable_brightness_filter: false
-      i_brightness_filter_min_brightness: 1
-      i_brightness_filter_max_brightness: 225
+      i_stereo_conf_threshold: 75
+      i_enable_brightness_filter: true
+      i_brightness_filter_min_brightness: 0
+      i_brightness_filter_max_brightness: 200
       i_enable_decimation_filter: true
+      i_enable_speckle_filter: true
+      i_speckle_filter_max_size: 10
+      i_enable_temporal_filter: false
       i_publish_left_rect: false
       i_publish_right_rect: false
