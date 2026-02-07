@@ -1,0 +1,45 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>i need to sample trees 10 and 60</Mission>
+
+  <BehaviorTree ID="Sample_Trees_10_60">
+    <Sequence>
+
+      <!-- ===== TREE 10 ===== -->
+      <RetryUntilSuccessful num_attempts="3">
+        <Sequence>
+          <MoveToTreeID name="GoToTree10"
+                        action_name="follow_tree_id_waypoint"
+                        id="10"
+                        approach_tree="true"/>
+          <SampleLeaf name="SampleTree10"
+                      action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+
+      <!-- Traverse without sampling -->
+      <Sequence>
+        <MoveToTreeID name="ExitToTopRowCol2"
+                      action_name="follow_tree_id_waypoint"
+                      id="2"
+                      approach_tree="false"/>
+        <MoveToTreeID name="TraverseTopRowToCol4"
+                      action_name="follow_tree_id_waypoint"
+                      id="4"
+                      approach_tree="false"/>
+      </Sequence>
+
+      <!-- ===== TREE 60 ===== -->
+      <RetryUntilSuccessful num_attempts="3">
+        <Sequence>
+          <MoveToTreeID name="GoToTree60"
+                        action_name="follow_tree_id_waypoint"
+                        id="60"
+                        approach_tree="true"/>
+          <SampleLeaf name="SampleTree60"
+                      action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+
+    </Sequence>
+  </BehaviorTree>
+</root>

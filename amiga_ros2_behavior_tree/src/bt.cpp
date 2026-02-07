@@ -30,8 +30,11 @@ int main(int argc, char **argv) {
   std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
   nh->declare_parameter<std::string>("mission_topic", std::string("/mission/xml"));
+  nh->declare_parameter<bool>("xml_validation", true);
   std::string mission_topic;
+  bool xml_validation_enabled;
   nh->get_parameter("mission_topic", mission_topic);
+  nh->get_parameter("xml_validation", xml_validation_enabled);
 
   BehaviorTreeFactory factory;
   RosNodeParams ros_params;
@@ -90,7 +93,7 @@ int main(int argc, char **argv) {
     Tree tree;
     try {
       std::string err;
-      if (!xml_validation::validate(mission_in, schema_path, err)) {
+      if (xml_validation_enabled && !xml_validation::validate(mission_in, schema_path, err)) {
         RCLCPP_ERROR(nh->get_logger(),
                      "Mission XML schema validation failed: %s", err.c_str());
         continue;
