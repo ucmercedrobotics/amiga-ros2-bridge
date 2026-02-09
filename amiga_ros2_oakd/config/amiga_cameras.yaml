@@ -8,16 +8,16 @@
       i_laser_dot_brightness: 1000
     rgb:
       i_publish_topic: true
-      i_fps: 30.0
+      i_fps: 10.0
       i_isp_num: 1
       i_isp_den: 3
       i_output_isp: true
     left:
       i_publish_topic: false
-      i_fps: 30.0
+      i_fps: 10.0
     right:
       i_publish_topic: false
-      i_fps: 30.0
+      i_fps: 10.0
     stereo:
       i_align_depth: true
       i_subpixel: true
@@ -42,7 +42,7 @@
       i_laser_dot_brightness: 1000
     rgb:
       i_publish_topic: true
-      i_fps: 30.0
+      i_fps: 10.0
       i_isp_num: 1
       i_isp_den: 3
       i_output_isp: true
