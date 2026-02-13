@@ -1,17 +1,17 @@
 #pragma once
 
-#include <amiga_navigation_interfaces/action/move_in_frame.hpp>
+#include <amiga_navigation_interfaces/action/rotate_in_frame.hpp>
 #include <behaviortree_ros2/bt_action_node.hpp>
 #include <behaviortree_ros2/ros_node_params.hpp>
 
 namespace amiga_bt {
 
-using MoveInFrame =
-    amiga_navigation_interfaces::action::MoveInFrame;
+using RotateInFrame =
+    amiga_navigation_interfaces::action::RotateInFrame;
 
-class MoveToRelativeLocation : public BT::RosActionNode<MoveInFrame> {
+class OrientRobotHeading : public BT::RosActionNode<RotateInFrame> {
  public:
-  MoveToRelativeLocation(const std::string &name, const BT::NodeConfig &config,
+  OrientRobotHeading(const std::string &name, const BT::NodeConfig &config,
                          const BT::RosNodeParams &params);
 
   static BT::PortsList providedPorts();

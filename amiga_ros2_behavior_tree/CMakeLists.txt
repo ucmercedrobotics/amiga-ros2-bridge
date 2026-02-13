@@ -41,11 +41,10 @@ add_executable(bt_runner
   src/actions/check_value.cpp
   src/actions/assert_true.cpp
   src/actions/follow_person.cpp
+  src/actions/orient_robot_heading.cpp
 )
 
 add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
-
-add_executable(dummy_ntp_server src/mocks/dummy_ntp_server.cpp)
 
 add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 
@@ -79,12 +78,6 @@ ament_target_dependencies(dummy_wp_server
   nav2_msgs
   geometry_msgs
   geographic_msgs
-)
-
-ament_target_dependencies(dummy_ntp_server
-  rclcpp
-  rclcpp_action
-  amiga_navigation_interfaces
 )
 
 ament_target_dependencies(dummy_nav2_ntp_server
@@ -129,9 +122,6 @@ install(TARGETS bt_runner
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_wp_server
-  DESTINATION lib/${PROJECT_NAME})
-
-install(TARGETS dummy_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_nav2_ntp_server

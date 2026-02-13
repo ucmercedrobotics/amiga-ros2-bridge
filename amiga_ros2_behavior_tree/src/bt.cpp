@@ -15,6 +15,7 @@
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/orient_robot_heading.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/actions/follow_person.hpp"
 #include "amiga_ros2_behavior_tree/xml_validation.hpp"
@@ -44,7 +45,7 @@ int main(int argc, char **argv) {
   factory.registerNodeType<MoveToTreeID>("MoveToTreeID", ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("MoveToRelativeLocation",
                                                    ros_params);
-  factory.registerNodeType<MoveToRelativeLocation>("OrientRobotHeading",
+  factory.registerNodeType<OrientRobotHeading>("OrientRobotHeading",
                                                    ros_params);
   factory.registerNodeType<FollowPerson>("FollowPerson", ros_params);
   factory.registerNodeType<SampleLeaf>("SampleLeaf", ros_params);
