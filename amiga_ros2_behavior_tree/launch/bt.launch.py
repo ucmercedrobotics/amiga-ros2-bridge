@@ -16,6 +16,11 @@ def generate_launch_description():
                 description="TCP server port for tcp_demux_node",
             ),
             DeclareLaunchArgument(
+                "xml_validation",
+                default_value="true",
+                description="Whether to validate incoming XML against the mission schema",
+            ),
+            DeclareLaunchArgument(
                 "payload_length_included",
                 default_value="true",
                 description="Whether payload frames include a 4-byte length prefix",
@@ -51,6 +56,12 @@ def generate_launch_description():
                 executable="bt_runner",
                 name="bt_runner",
                 output="screen",
+                parameters=[
+                    {
+                        "mission_topic": LaunchConfiguration("mission_topic"),
+                        "xml_validation": LaunchConfiguration("xml_validation"),
+                    }
+                ],
             ),
             Node(
                 package="amiga_ros2_behavior_tree",

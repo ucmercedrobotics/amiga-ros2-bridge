@@ -70,13 +70,15 @@ ask_parameters() {
                 GPS_LINK="gps_link_name:=gps_link"
                 VECTOR_NAV="use_vectornav:=False"
                 CAM_CONFIG="camera_config:=amiga_cameras.yaml"
+                YAW_OFFSET="--ros-args -p yaw_offset:=0.0"
                 break ;;
             [Nn]* | "" )
                 # Reza preset: VectorNav IMU, gps_antenna, sensor tower
                 USE_SENSOR_TOWER="use_lidar:=True"
                 GPS_LINK="gps_link_name:=gps_antenna"
-                VECTOR_NAV="use_vectornav:=False"
+                VECTOR_NAV="use_vectornav:=True"
                 CAM_CONFIG="camera_config:=reza_cameras.yaml"
+                YAW_OFFSET=""
                 break ;;
             * ) echo "Please answer y or n." ;;
         esac
@@ -86,6 +88,7 @@ ask_parameters() {
     export GPS_LINK
     export VECTOR_NAV
     export CAM_CONFIG
+    export YAW_OFFSET
 
     # Machine selection remains: AGX or Brain
     while true; do
@@ -162,8 +165,7 @@ main() {
                 sudo make udev -B
 
                 if [[ "$VECTOR_NAV" == *"True"* ]]; then
-                    run "ros2 run vectornav vectornav --ros-args -p port:=/dev/vectornav";
-                    run "ros2 run vectornav vn_sensor_msgs";
+                    run "ros2 launch vectornav vectornav.launch.py";
                 else
                     echo "Defaulting to BNO085 IMU.";
                     run "ros2 run amiga_localization bno085_node --ros-args --params-file \
@@ -196,14 +198,15 @@ main() {
                 run "ros2 launch amiga_navigation navigation.launch.py";
                 # run "ros2 run nav2_collision_monitor collision_monitor --ros-args --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
                 run "ros2 run amiga_navigation lidar_object_navigator --ros-args -p safety_distance:=1.0";
-                run "ros2 run amiga_navigation waypoint_follower.py";
+                run "ros2 run amiga_navigation waypoint_follower.py ${YAW_OFFSET}";
                 # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
                 # run "ros2 run amiga_navigation navigate_to_pose_in_frame"
                 run "ros2 run amiga_navigation linear_velo";
                 run "ros2 run amiga_navigation yolo_person_follower.py"
 
                 # Behavior Tree
-                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=0.0 y_offset:=0.0";
+                # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=57.0 y_offset:=-1.0";
+                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
                 break;;
             [Nn]* )
                 break ;;

@@ -37,7 +37,8 @@ BT::NodeStatus SampleLeaf::onResultReceived(const WrappedResult &result) {
     RCLCPP_WARN(logger(), "Leaf sampling was canceled");
     return BT::NodeStatus::FAILURE;
   } else {
-    RCLCPP_ERROR(logger(), "Leaf sampling was aborted");
+    RCLCPP_ERROR(logger(), "Leaf sampling was aborted: %s",
+                 result.result->message.c_str());
     return BT::NodeStatus::FAILURE;
   }
 }

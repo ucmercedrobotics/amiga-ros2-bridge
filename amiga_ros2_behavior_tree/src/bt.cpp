@@ -15,6 +15,7 @@
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/orient_robot_heading.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/actions/follow_person.hpp"
 #include "amiga_ros2_behavior_tree/xml_validation.hpp"
@@ -30,8 +31,11 @@ int main(int argc, char **argv) {
   std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
   nh->declare_parameter<std::string>("mission_topic", std::string("/mission/xml"));
+  nh->declare_parameter<bool>("xml_validation", true);
   std::string mission_topic;
+  bool xml_validation_enabled;
   nh->get_parameter("mission_topic", mission_topic);
+  nh->get_parameter("xml_validation", xml_validation_enabled);
 
   BehaviorTreeFactory factory;
   RosNodeParams ros_params;
@@ -41,7 +45,7 @@ int main(int argc, char **argv) {
   factory.registerNodeType<MoveToTreeID>("MoveToTreeID", ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("MoveToRelativeLocation",
                                                    ros_params);
-  factory.registerNodeType<MoveToRelativeLocation>("OrientRobotHeading",
+  factory.registerNodeType<OrientRobotHeading>("OrientRobotHeading",
                                                    ros_params);
   factory.registerNodeType<FollowPerson>("FollowPerson", ros_params);
   factory.registerNodeType<SampleLeaf>("SampleLeaf", ros_params);
@@ -90,7 +94,7 @@ int main(int argc, char **argv) {
     Tree tree;
     try {
       std::string err;
-      if (!xml_validation::validate(mission_in, schema_path, err)) {
+      if (xml_validation_enabled && !xml_validation::validate(mission_in, schema_path, err)) {
         RCLCPP_ERROR(nh->get_logger(),
                      "Mission XML schema validation failed: %s", err.c_str());
         continue;

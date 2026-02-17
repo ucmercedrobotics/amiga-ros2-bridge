@@ -25,9 +25,8 @@
       i_enable_brightness_filter: true
       i_brightness_filter_min_brightness: 0
       i_brightness_filter_max_brightness: 200
-      i_enable_decimation_filter: true
-      i_enable_speckle_filter: true
-      i_speckle_filter_max_size: 10
+      i_enable_decimation_filter: false
+      i_enable_speckle_filter: false
       i_enable_temporal_filter: false
       i_publish_left_rect: false
       i_publish_right_rect: false
@@ -59,9 +58,8 @@
       i_enable_brightness_filter: true
       i_brightness_filter_min_brightness: 0
       i_brightness_filter_max_brightness: 200
-      i_enable_decimation_filter: true
-      i_enable_speckle_filter: true
-      i_speckle_filter_max_size: 10
+      i_enable_decimation_filter: false
+      i_enable_speckle_filter: false
       i_enable_temporal_filter: false
       i_publish_left_rect: false
       i_publish_right_rect: false

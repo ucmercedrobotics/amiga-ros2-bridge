@@ -1,41 +1,42 @@
-#include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
+#include "amiga_ros2_behavior_tree/actions/orient_robot_heading.hpp"
 
 #include <rclcpp_action/rclcpp_action.hpp>
 
 namespace amiga_bt {
 
-MoveToRelativeLocation::MoveToRelativeLocation(const std::string &name,
+OrientRobotHeading::OrientRobotHeading(const std::string &name,
                                                const BT::NodeConfig &config,
                                                const BT::RosNodeParams &params)
-    : BT::RosActionNode<MoveInFrame>(name, config, params) {}
+    : BT::RosActionNode<RotateInFrame>(name, config, params) {}
 
-BT::PortsList MoveToRelativeLocation::providedPorts() {
+BT::PortsList OrientRobotHeading::providedPorts() {
   return providedBasicPorts(
-      {BT::InputPort<double>("x"), BT::InputPort<double>("y")});
+      {BT::InputPort<double>("yaw"), BT::InputPort<bool>("absolute")});
 }
 
-bool MoveToRelativeLocation::setGoal(Goal &goal) {
-  double x = 0.0, y = 0.0;
+bool OrientRobotHeading::setGoal(Goal &goal) {
+  double yaw = 0.0;
+  bool absolute = false;
 
-  if (getInput("x", x) && getInput("y", y)) {
-    RCLCPP_DEBUG(logger(), "Received x/y input. Making relative movement.");
+  if (getInput("yaw", yaw) && getInput("absolute", absolute)) {
+    RCLCPP_DEBUG(logger(), "Received yaw/absolute input.");
   } else {
-    RCLCPP_ERROR(logger(), "Missing x/y input");
+    RCLCPP_ERROR(logger(), "Missing yaw/absolute input");
     return false;
   }
 
   // Set the goal pose
-  goal.x = x;
-  goal.y = y;
+  goal.yaw = yaw;
+  goal.absolute = absolute;
 
   RCLCPP_INFO(logger(),
-              "Moving to relative location: (x=%.2f, y=%.2f)",
-              x, y);
+              "Orienting robot heading: yaw=%.2f rad, absolute=%s",
+              yaw, absolute ? "true" : "false");
 
   return true;
 }
 
-BT::NodeStatus MoveToRelativeLocation::onResultReceived(
+BT::NodeStatus OrientRobotHeading::onResultReceived(
     const WrappedResult &result) {
   RCLCPP_INFO(logger(), "Navigation finished with code: %d", int(result.code));
 
@@ -52,11 +53,12 @@ BT::NodeStatus MoveToRelativeLocation::onResultReceived(
   }
 }
 
-BT::NodeStatus MoveToRelativeLocation::onFeedback(
+BT::NodeStatus OrientRobotHeading::onFeedback(
     const std::shared_ptr<const Feedback> feedback) {
   RCLCPP_INFO(logger(),
-              "Distance remaining: %.2f m",
-              feedback->distance_remaining);
+              "Yaw remaining: %.2f rad (%.1f deg)",
+              feedback->yaw_remaining,
+              feedback->yaw_remaining * 180.0 / M_PI);
   return BT::NodeStatus::RUNNING;
 }
 
