@@ -16,6 +16,8 @@ bool SampleLeaf::setGoal(Goal &goal) {
   // I might add number of leaves to sample as a goal in the future
   (void)goal;
 
+  sleep(20);
+
   RCLCPP_INFO(logger(), "Starting leaf sampling/segmentation...");
   return true;
 }
