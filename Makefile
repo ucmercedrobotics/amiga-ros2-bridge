@@ -30,7 +30,7 @@ shell:
 
 manifest:
 	mkdir -p manifests
-	rsync -av --include '*/' --include 'package.xml' --exclude '*' amiga* manifests/
+	rsync -av --include '*/' --include 'package.xml' --exclude '*' amiga* zed-ros2-wrapper manifests/
 
 build-image: manifest
 	docker build --platform ${PLATFORM} . -t ${IMAGE}:${ARCH_TAG} --target base --build-arg BASE_IMAGE=${BASE_IMAGE}
@@ -82,6 +82,8 @@ foxglove:
 oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
+zed:
+	ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 

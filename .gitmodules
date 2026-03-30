@@ -7,3 +7,6 @@
 [submodule "ros2-kortex-control"]
 	path = ros2-kortex-control
 	url = git@github.com:ucmercedrobotics/ros2-kortex-control.git
+[submodule "zed-ros2-wrapper"]
+	path = zed-ros2-wrapper
+	url = git@github.com:stereolabs/zed-ros2-wrapper.git
