@@ -83,7 +83,7 @@ oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
 zed:
-	ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
+	ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i depth.depth_mode:=NONE
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 
