@@ -10,3 +10,6 @@
 [submodule "zed-ros2-wrapper"]
 	path = zed-ros2-wrapper
 	url = git@github.com:stereolabs/zed-ros2-wrapper.git
+[submodule "amiga-vlm"]
+	path = amiga-vlm
+	url = git@github.com:alieabd/amiga-vlm.git
