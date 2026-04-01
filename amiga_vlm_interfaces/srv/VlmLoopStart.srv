@@ -1,0 +1,6 @@
+string prompt
+string output_file
+float64 interval_sec
+---
+bool success
+string error
