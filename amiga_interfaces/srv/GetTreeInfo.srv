@@ -1,6 +1,7 @@
 uint8 TREE_INDEX = 0
 uint8 ROW_INDEX = 1
 uint8 COL_INDEX = 2
+uint8 AISLE_INDEX = 3
 # Request fields
 uint8 index_type
 uint8[] indicies

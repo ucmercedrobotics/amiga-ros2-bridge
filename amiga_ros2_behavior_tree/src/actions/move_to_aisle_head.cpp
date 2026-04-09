@@ -1,33 +1,30 @@
-#include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
+#include "amiga_ros2_behavior_tree/actions/move_to_aisle_head.hpp"
 
 namespace amiga_bt {
 
-MoveToTreeID::MoveToTreeID(const std::string &name,
+MoveToAisleHead::MoveToAisleHead(const std::string &name,
                                      const BT::NodeConfig &config,
                                      const BT::RosNodeParams &params)
-    : BT::RosActionNode<TreeIDWaypoint>(name, config, params) {}
+    : BT::RosActionNode<MoveToAisleHeadAction>(name, config, params) {}
 
-BT::PortsList MoveToTreeID::providedPorts() {
-  return providedBasicPorts({BT::InputPort<uint32_t>("id"),
-                             BT::InputPort<bool>("approach_tree")});
+BT::PortsList MoveToAisleHead::providedPorts() {
+  return providedBasicPorts({BT::InputPort<uint32_t>("id")});
 }
 
-bool MoveToTreeID::setGoal(Goal &goal) {
+bool MoveToAisleHead::setGoal(Goal &goal) {
   uint32_t id;
-  bool approach_tree;
 
-  if (!getInput("id", id) || !getInput("approach_tree", approach_tree)) {
-    RCLCPP_ERROR(logger(), "Missing tree ID input or approach_tree flag");
+  if (!getInput("id", id)) {
+    RCLCPP_ERROR(logger(), "Missing aisle ID input");
     return false;
   }
 
-  goal.tree_id = id;
-  goal.approach_tree = approach_tree;
-  RCLCPP_INFO(logger(), "Moving to tree ID: %u", id);
+  goal.aisle_id = id;
+  RCLCPP_INFO(logger(), "Moving out of aisle: %u", id);
   return true;
 }
 
-BT::NodeStatus MoveToTreeID::onResultReceived(
+BT::NodeStatus MoveToAisleHead::onResultReceived(
     const WrappedResult &result) {
   RCLCPP_INFO(logger(), "Navigation finished with code: %d", int(result.code));
   // Check if the action succeeded
@@ -43,7 +40,7 @@ BT::NodeStatus MoveToTreeID::onResultReceived(
   }
 }
 
-BT::NodeStatus MoveToTreeID::onFeedback(
+BT::NodeStatus MoveToAisleHead::onFeedback(
     const std::shared_ptr<const Feedback> feedback) {
   RCLCPP_INFO(logger(), "Distance from goal: (%.6f)", feedback->dist);
   return BT::NodeStatus::RUNNING;

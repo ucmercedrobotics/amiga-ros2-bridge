@@ -35,6 +35,7 @@ add_executable(bt_runner
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
   src/actions/move_to_tree_id.cpp
+  src/actions/move_to_aisle_head.cpp
   src/actions/move_to_relative_location.cpp
   src/actions/detect_object.cpp
   src/actions/sample_leaf.cpp
