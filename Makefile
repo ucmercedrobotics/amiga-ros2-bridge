@@ -15,7 +15,12 @@ ifneq (,$(filter $(ARCH),arm64 aarch64))
 	ARCH_TAG:=arm64
 	CUDA_MOUNT:= --runtime=nvidia \
 			 -v /usr/local/cuda:/usr/local/cuda:ro \
-		     -v /usr/lib/aarch64-linux-gnu/:/usr/lib/aarch64-linux-gnu-host/:ro \
+		     -v /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu-host:ro \
+		     -v /usr/include/aarch64-linux-gnu:/usr/include/aarch64-linux-gnu-host:ro \
+		     -v /usr/src/tensorrt:/usr/src/tensorrt:ro \
+		     -v /usr/lib/python3.10/dist-packages/tensorrt:/usr/lib/python3.10/dist-packages/tensorrt:ro \
+		     -v /usr/lib/python3.10/dist-packages/tensorrt-10.3.0.dist-info:/usr/lib/python3.10/dist-packages/tensorrt-10.3.0.dist-info:ro \
+		     -e PYTHONPATH=/usr/lib/python3.10/dist-packages \
 			 --device /dev/nvhost-gpu \
 			 --device /dev/nvmap 
 endif
