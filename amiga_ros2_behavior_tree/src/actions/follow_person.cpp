@@ -37,7 +37,12 @@ BT::NodeStatus FollowPerson::onResultReceived(
 
 BT::NodeStatus FollowPerson::onFeedback(
     const std::shared_ptr<const Feedback> feedback) {
-  RCLCPP_INFO(logger(), "Following status: (%s)", feedback->status.c_str());
+  RCLCPP_DEBUG(logger(), "Following status: (%s)", feedback->status.c_str());
+  static std::string last_status;
+  if (feedback->status != last_status) {
+    RCLCPP_INFO(logger(), "Following status changed: (%s)", feedback->status.c_str());
+    last_status = feedback->status;
+  }
   return BT::NodeStatus::RUNNING;
 }
 

@@ -65,9 +65,9 @@ ask_parameters() {
         read -r -p "Is this Carpin Amiga? [y/N]: " ans
         case "$ans" in
             [Yy]* )
-                # Carpin preset: BNO085 IMU, gps_link, ublox driver, no sensor tower
+                # Carpin preset: VectorNav IMU, gps_link, ublox driver, no sensor tower
                 USE_SENSOR_TOWER="use_lidar:=False"
-                GPS_LINK="gps_link_name:=gps_link"
+                GPS_LINK="gps_link_name:=gps_antenna"
                 VECTOR_NAV="use_vectornav:=False"
                 CAM_CONFIG="camera_config:=amiga_cameras.yaml"
                 YAW_OFFSET="-p yaw_offset:=0.0"
