@@ -68,9 +68,9 @@ ask_parameters() {
                 # Carpin preset: VectorNav IMU, gps_link, ublox driver, no sensor tower
                 USE_SENSOR_TOWER="use_lidar:=False"
                 GPS_LINK="gps_link_name:=gps_antenna"
-                VECTOR_NAV="use_vectornav:=False"
+                VECTOR_NAV="use_vectornav:=True"
                 CAM_CONFIG="camera_config:=amiga_cameras.yaml"
-                YAW_OFFSET="-p yaw_offset:=0.0"
+                YAW_OFFSET="-p yaw_offset:=1.57"
                 break ;;
             [Nn]* | "" )
                 # Reza preset: VectorNav IMU, gps_antenna, sensor tower
