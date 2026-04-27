@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <algorithm>
+#include <unordered_map>
 
 using GetTreeInfo = amiga_interfaces::srv::GetTreeInfo;
 using json = nlohmann::json;
@@ -65,41 +66,82 @@ class OrchardManagementServiceNode : public rclcpp::Node {
         return fields.empty() || std::find(fields.begin(), fields.end(), k) != fields.end();
       };
 
-      double adj_lat, adj_lon;
       double x_offset = this->get_parameter("x_offset").as_double();
       double y_offset = this->get_parameter("y_offset").as_double();
-      auto project_obj = [&](const json &obj) {
-        json out = json::object();
-        if (include_field("tree_index") && obj.contains("tree_index")) out["tree_index"] = obj["tree_index"];
-        if (include_field("row") && obj.contains("row")) out["row"] = obj["row"];
-        if (include_field("col") && obj.contains("col")) out["col"] = obj["col"];
-        if (include_field("lat") && obj.contains("lat")) out["lat"] = obj["lat"];
-        if (include_field("lon") && obj.contains("lon")) out["lon"] = obj["lon"];
-        if (out.contains("lat") && out.contains("lon")) {
+      auto apply_offset_to_keys = [&](json &obj, const char *lat_key, const char *lon_key) {
+        if (!obj.contains(lat_key) || !obj.contains(lon_key) ||
+            !obj[lat_key].is_number() || !obj[lon_key].is_number()) {
+          return;
+        }
+        double adj_lat = 0.0;
+        double adj_lon = 0.0;
+        this->add_meters_to_gps(
+            obj[lat_key].get<double>(), obj[lon_key].get<double>(),
+            x_offset, y_offset,
+            adj_lat, adj_lon);
+        obj[lat_key] = adj_lat;
+        obj[lon_key] = adj_lon;
+      };
+
+      auto apply_offset_to_row_waypoints = [&](json &waypoints) {
+        if (!waypoints.is_array()) {
+          return;
+        }
+        for (auto &wp : waypoints) {
+          if (!wp.is_array() || wp.size() <= ROW_WAYPOINT_LON ||
+              !wp[ROW_WAYPOINT_LAT].is_number() || !wp[ROW_WAYPOINT_LON].is_number()) {
+            continue;
+          }
+          double adj_lat = 0.0;
+          double adj_lon = 0.0;
           this->add_meters_to_gps(
-              out["lat"].get<double>(), out["lon"].get<double>(),
+              wp[ROW_WAYPOINT_LAT].get<double>(), wp[ROW_WAYPOINT_LON].get<double>(),
               x_offset, y_offset,
               adj_lat, adj_lon);
-          out["lat"] = adj_lat;
-          out["lon"] = adj_lon;
+          wp[ROW_WAYPOINT_LAT] = adj_lat;
+          wp[ROW_WAYPOINT_LON] = adj_lon;
         }
-        if (include_field("row_waypoints") && obj.contains("row_waypoints")) out["row_waypoints"] = obj["row_waypoints"];
-        if (out["row_waypoints"].is_array()) {
-          for (auto &wp : out["row_waypoints"]) {
-            this->add_meters_to_gps(
-                wp[ROW_WAYPOINT_LAT], wp[ROW_WAYPOINT_LON],
-                x_offset, y_offset,
-                adj_lat, adj_lon);
-            wp[ROW_WAYPOINT_LAT] = adj_lat;
-            wp[ROW_WAYPOINT_LON] = adj_lon;
+      };
+
+      auto project_obj = [&](const json &obj) {
+        json out = json::object();
+        for (const char *field : {"tree_index", "row", "col", "lat", "lon", "row_waypoints", "aisle_entrances"}) {
+          if (include_field(field) && obj.contains(field)) {
+            out[field] = obj[field];
+          }
+        }
+        apply_offset_to_keys(out, "lat", "lon");
+
+        if (out.contains("row_waypoints")) {
+          apply_offset_to_row_waypoints(out["row_waypoints"]);
+        }
+
+        if (out.contains("aisle_entrances") && out["aisle_entrances"].is_array()) {
+          for (auto &entrance : out["aisle_entrances"]) {
+            if (!entrance.is_object()) {
+              continue;
+            }
+            apply_offset_to_keys(entrance, "lat", "lon");
           }
         }
         return out;
       };
-      if (!data.is_array()) {
+
+      // New JSON format is a wrapped object with at least:
+      // - "trees": array of tree records
+      // - "aisle_entrances": array of entrance records
+      // - "aisle_to_entrance_indices": object mapping aisle id -> [entrance_index...]
+      if (!data.is_object()) {
         response->json = std::string("[]");
         return;
       }
+
+      const auto trees_it = data.find("trees");
+      if (trees_it == data.end() || !trees_it->is_array()) {
+        response->json = std::string("[]");
+        return;
+      }
+      const json &trees = *trees_it;
 
       // Determine filter key based on index_type
       std::string key;
@@ -110,6 +152,8 @@ class OrchardManagementServiceNode : public rclcpp::Node {
           key = "row"; break;
         case amiga_interfaces::srv::GetTreeInfo::Request::COL_INDEX:
           key = "col"; break;
+        case amiga_interfaces::srv::GetTreeInfo::Request::AISLE_INDEX:
+          key = "aisle_index"; break;
         default:
           key.clear();
       }
@@ -132,18 +176,73 @@ class OrchardManagementServiceNode : public rclcpp::Node {
       }
 
       json arr = json::array();
-      for (const auto &obj : data) {
-        if (!key.empty()) {
-          if (!obj.contains(key) || !obj[key].is_number()) continue;
-          int val = obj[key].get<int>();
-          if (!filters.empty() && std::find(filters.begin(), filters.end(), val) == filters.end()) {
+
+      if (request->index_type == amiga_interfaces::srv::GetTreeInfo::Request::AISLE_INDEX) {
+        if (!data.contains("aisle_to_entrance_indices") || !data["aisle_to_entrance_indices"].is_object() ||
+            !data.contains("aisle_entrances") || !data["aisle_entrances"].is_array()) {
+          response->json = std::string("[]");
+          return;
+        }
+
+        std::unordered_map<int, json> entrance_by_index;
+        for (const auto &entrance : data["aisle_entrances"]) {
+          if (!entrance.is_object() || !entrance.contains("entrance_index") || !entrance["entrance_index"].is_number_integer()) {
             continue;
           }
+          json projected = entrance;
+          apply_offset_to_keys(projected, "lat", "lon");
+          entrance_by_index[projected["entrance_index"].get<int>()] = projected;
         }
-        arr.push_back(project_obj(obj));
+
+        std::vector<int> aisle_ids = filters;
+        if (aisle_ids.empty()) {
+          for (auto it = data["aisle_to_entrance_indices"].begin(); it != data["aisle_to_entrance_indices"].end(); ++it) {
+            try {
+              aisle_ids.push_back(std::stoi(it.key()));
+            } catch (...) {
+            }
+          }
+        }
+
+        for (int aisle_id : aisle_ids) {
+          const std::string aisle_key = std::to_string(aisle_id);
+          if (!data["aisle_to_entrance_indices"].contains(aisle_key) ||
+              !data["aisle_to_entrance_indices"][aisle_key].is_array()) {
+            continue;
+          }
+
+          json out = json::object();
+          out["aisle_index"] = aisle_id;
+          if (include_field("aisle_entrances")) {
+            out["aisle_entrances"] = json::array();
+            for (const auto &idx : data["aisle_to_entrance_indices"][aisle_key]) {
+              if (!idx.is_number_integer()) {
+                continue;
+              }
+              const int entrance_idx = idx.get<int>();
+              auto it = entrance_by_index.find(entrance_idx);
+              if (it != entrance_by_index.end()) {
+                out["aisle_entrances"].push_back(it->second);
+              }
+            }
+          }
+          arr.push_back(out);
+        }
+      } else {
+        for (const auto &obj : trees) {
+          if (!key.empty()) {
+            if (!obj.contains(key) || !obj[key].is_number()) continue;
+            int val = obj[key].get<int>();
+            if (!filters.empty() && std::find(filters.begin(), filters.end(), val) == filters.end()) {
+              continue;
+            }
+          }
+          arr.push_back(project_obj(obj));
+        }
       }
+
       response->json = arr.dump();
-      RCLCPP_INFO(this->get_logger(), "Returning %zu trees", arr.size());
+      RCLCPP_INFO(this->get_logger(), "Returning %zu records", arr.size());
     } catch (const std::exception &e) {
       RCLCPP_ERROR(this->get_logger(), "Service error: %s", e.what());
       response->json = std::string("[]");
