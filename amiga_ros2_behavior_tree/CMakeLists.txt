@@ -43,6 +43,7 @@ add_executable(bt_runner
   src/actions/assert_true.cpp
   src/actions/follow_person.cpp
   src/actions/orient_robot_heading.cpp
+  src/actions/arm_move_to.cpp
 )
 
 add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
@@ -70,6 +71,7 @@ ament_target_dependencies(bt_runner
   kortex_interfaces
   sensor_msgs
   std_msgs
+  tf2
 )
 
 ament_target_dependencies(dummy_wp_server

@@ -125,19 +125,25 @@ main() {
         case "$ans" in
             [Yy]* )
                 # MoveIt (main arm control)
-                run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit"
+                run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit";
+
+                # standard movement node in (x,y,z,r,p,y)
+                run "ros2 run kortex_move moveto \
+                --ros-args -r /robot_description:=/kinova/robot_description \
+                -r /joint_states:=/kinova/joint_states" "moveit-moveto";
 
                 # Vision camera streams
-                run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=10.55.155.10" "vision"
+                run "ros2 launch kinova_vision kinova_vision.launch.py \
+                depth_registration:=true device:=10.55.155.10" "vision";
 
                 # Leaf segmentation (YOLO)
-                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
+                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation";
 
                 # Arm control (arm_commander + target_manager)
-                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
+                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control";
 
                 # Nanospec sensor service
-                run "ros2 run nanospec NSP32_service_node" "nanospec"
+                run "ros2 run nanospec NSP32_service_node" "nanospec";
                 break;;
             [Nn]* )
                 break;;
@@ -208,7 +214,7 @@ main() {
                 # Behavior Tree
                 # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=59.5 y_offset:=-7.5";
 		        # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=-3.0 y_offset:=5.0";
-                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
+                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py expect_json:=false payload_length_included:=false";
                 break;;
             [Nn]* )
                 break ;;
