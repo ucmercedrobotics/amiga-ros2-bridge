@@ -56,6 +56,7 @@ bash: udev
 	--privileged \
 	${CUDA_MOUNT} \
 	--env="DISPLAY=:2" \
+	--env-file .env \
 	-v .:/${WORKSPACE}:Z \
 	-v /${WORKSPACE}/manifests \
 	-v ~/.ssh:/root/.ssh:ro \
