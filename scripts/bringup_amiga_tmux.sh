@@ -65,12 +65,12 @@ ask_parameters() {
         read -r -p "Is this Carpin Amiga? [y/N]: " ans
         case "$ans" in
             [Yy]* )
-                # Carpin preset: BNO085 IMU, gps_link, ublox driver, no sensor tower
+                # Carpin preset: VectorNav IMU, gps_link, ublox driver, no sensor tower
                 USE_SENSOR_TOWER="use_lidar:=False"
-                GPS_LINK="gps_link_name:=gps_link"
-                VECTOR_NAV="use_vectornav:=False"
+                GPS_LINK="gps_link_name:=gps_antenna"
+                VECTOR_NAV="use_vectornav:=True"
                 CAM_CONFIG="camera_config:=amiga_cameras.yaml"
-                YAW_OFFSET="-p yaw_offset:=0.0"
+                YAW_OFFSET="-p yaw_offset:=1.57"
                 break ;;
             [Nn]* | "" )
                 # Reza preset: VectorNav IMU, gps_antenna, sensor tower
@@ -125,19 +125,25 @@ main() {
         case "$ans" in
             [Yy]* )
                 # MoveIt (main arm control)
-                run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit"
+                run "ros2 launch kortex_move robot.launch.py robot_ip:=10.55.155.10 vision:=true" "moveit";
+
+                # standard movement node in (x,y,z,r,p,y)
+                run "ros2 run kortex_move moveto \
+                --ros-args -r /robot_description:=/kinova/robot_description \
+                -r /joint_states:=/kinova/joint_states" "moveit-moveto";
 
                 # Vision camera streams
-                run "ros2 launch kinova_vision kinova_vision.launch.py depth_registration:=true device:=10.55.155.10" "vision"
+                run "ros2 launch kinova_vision kinova_vision.launch.py \
+                depth_registration:=true device:=10.55.155.10" "vision";
 
                 # Leaf segmentation (YOLO)
-                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation"
+                run "ros2 launch kortex_vision leaf_segmentation.launch.py" "segmentation";
 
                 # Arm control (arm_commander + target_manager)
-                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control"
+                run "ros2 launch leaf_grasping_move arm_control.launch.py" "arm-control";
 
                 # Nanospec sensor service
-                run "ros2 run nanospec NSP32_service_node" "nanospec"
+                run "ros2 run nanospec NSP32_service_node" "nanospec";
                 break;;
             [Nn]* )
                 break;;
@@ -196,18 +202,21 @@ main() {
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
-                # run "ros2 run nav2_collision_monitor collision_monitor --ros-args --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
+                run "ros2 run nav2_collision_monitor collision_monitor --ros-args \
+                    --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
                 run "ros2 run amiga_navigation lidar_object_navigator --ros-args -p safety_distance:=0.8";
                 run "ros2 run amiga_navigation waypoint_follower.py --ros-args ${YAW_OFFSET}";
                 # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
                 # run "ros2 run amiga_navigation navigate_to_pose_in_frame"
                 run "ros2 run amiga_navigation linear_velo --ros-args \
-                    -p min_linear_velocity:=0.3 -p max_linear_velocity:=1.0 -p yaw_slowdown:=0.8 -p max_angular_velocity:=0.7 ${YAW_OFFSET}";
+                    -p min_linear_velocity:=0.3 -p max_linear_velocity:=1.0 \
+                    -p yaw_slowdown:=0.8 -p max_angular_velocity:=0.7 ${YAW_OFFSET}";
                 run "ros2 run amiga_navigation yolo_person_follower.py";
 
                 # Behavior Tree
                 # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=59.5 y_offset:=-7.5";
-		        # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=-3.0 y_offset:=5.0";
+		# run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=2.0 y_offset:=-5.0";
+                # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py expect_json:=false payload_length_included:=false";
                 run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
                 break;;
             [Nn]* )
