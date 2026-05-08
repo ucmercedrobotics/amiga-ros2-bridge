@@ -202,19 +202,22 @@ main() {
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
-                # run "ros2 run nav2_collision_monitor collision_monitor --ros-args --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
+                run "ros2 run nav2_collision_monitor collision_monitor --ros-args \
+                    --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
                 run "ros2 run amiga_navigation lidar_object_navigator --ros-args -p safety_distance:=0.8";
                 run "ros2 run amiga_navigation waypoint_follower.py --ros-args ${YAW_OFFSET}";
                 # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
                 # run "ros2 run amiga_navigation navigate_to_pose_in_frame"
                 run "ros2 run amiga_navigation linear_velo --ros-args \
-                    -p min_linear_velocity:=0.3 -p max_linear_velocity:=1.0 -p yaw_slowdown:=0.8 -p max_angular_velocity:=0.7 ${YAW_OFFSET}";
+                    -p min_linear_velocity:=0.3 -p max_linear_velocity:=1.0 \
+                    -p yaw_slowdown:=0.8 -p max_angular_velocity:=0.7 ${YAW_OFFSET}";
                 run "ros2 run amiga_navigation yolo_person_follower.py";
 
                 # Behavior Tree
                 # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=59.5 y_offset:=-7.5";
-		        # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=-3.0 y_offset:=5.0";
-                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py expect_json:=false payload_length_included:=false";
+		# run "ros2 launch amiga_ros2_behavior_tree bt.launch.py x_offset:=2.0 y_offset:=-5.0";
+                # run "ros2 launch amiga_ros2_behavior_tree bt.launch.py expect_json:=false payload_length_included:=false";
+                run "ros2 launch amiga_ros2_behavior_tree bt.launch.py";
                 break;;
             [Nn]* )
                 break ;;
