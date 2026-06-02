@@ -12,6 +12,7 @@
 #include "amiga_ros2_behavior_tree/actions/assert_true.hpp"
 #include "amiga_ros2_behavior_tree/actions/check_value.hpp"
 #include "amiga_ros2_behavior_tree/actions/detect_object.hpp"
+#include "amiga_ros2_behavior_tree/actions/approach_gps_waypoint.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_aisle_head.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
@@ -44,6 +45,7 @@ int main(int argc, char **argv) {
   ros_params.nh = nh;
 
   factory.registerNodeType<MoveToGPSLocation>("MoveToGPSLocation", ros_params);
+  factory.registerNodeType<ApproachGPSWaypoint>("ApproachGPSWaypoint", ros_params);
   factory.registerNodeType<MoveToTreeID>("MoveToTreeID", ros_params);
   factory.registerNodeType<MoveToAisleHead>("MoveToAisleHead", ros_params);
   factory.registerNodeType<MoveToRelativeLocation>("MoveToRelativeLocation",

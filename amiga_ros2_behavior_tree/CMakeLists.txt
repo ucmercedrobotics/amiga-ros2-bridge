@@ -34,6 +34,7 @@ add_executable(bt_runner
   src/bt.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
+  src/actions/approach_gps_waypoint.cpp
   src/actions/move_to_tree_id.cpp
   src/actions/move_to_aisle_head.cpp
   src/actions/move_to_relative_location.cpp

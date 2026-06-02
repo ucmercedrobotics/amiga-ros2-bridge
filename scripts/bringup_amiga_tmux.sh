@@ -202,8 +202,6 @@ main() {
 
                 # Nav2
                 run "ros2 launch amiga_navigation navigation.launch.py";
-                run "ros2 run nav2_collision_monitor collision_monitor --ros-args \
-                    --params-file amiga-ros2-nav/amiga_navigation/config/nav2_params.yaml";
                 run "ros2 run amiga_navigation lidar_object_navigator --ros-args -p safety_distance:=0.8";
                 run "ros2 run amiga_navigation waypoint_follower.py --ros-args ${YAW_OFFSET}";
                 # NOTE: the commented node does the same as the below node using only /cmd/vel (no collision avoidance)
