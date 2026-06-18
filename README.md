@@ -46,7 +46,7 @@ cd amiga-ros2-bridge
 
 [Optional, but highly recommended] Create a new virtual environment
 ```bash
-python3 -m venv venv
+python3.10 -m venv venv # need python 3.10 for A2A
 source venv/bin/activate
 pip install --upgrade pip
 ```
