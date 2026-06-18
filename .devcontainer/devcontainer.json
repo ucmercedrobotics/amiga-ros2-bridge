@@ -1,0 +1,27 @@
+{
+  "name": "Amiga ROS2 Bridge",
+  "image": "ghcr.io/sloretz/ros:humble-desktop-full-2025-12-07",
+  "remoteUser": "root",
+  "mounts": [
+    "source=${localEnv:HOME}/.ssh,target=/root/.ssh,type=bind,consistency=cached",
+    "source=/dev,target=/dev,type=bind"
+  ],
+  "privileged": true,
+  "networkMode": "host",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.cpptools",
+        "ms-ros.ros"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "ros.distro": "humble"
+      }
+    }
+  },
+  "postCreateCommand": "cd /amiga-ros2-bridge && colcon build --symlink-install && source install/setup.bash",
+  "forwardPorts": [8080, 8765, 8766, 12346]
+}
