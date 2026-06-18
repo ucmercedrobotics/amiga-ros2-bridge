@@ -61,16 +61,11 @@ cd ..
 Note, this bridge works even if you're not using Nav2! We've added support for Nav2 assuming you are using a UBlox module.
 We use a UBlox RTK Zed-F9P module to get RTK corrections from a base station instead of using NTRIP over IP as is provided from FarmNG on the Amiga.
 
-3. After, build your ROS2 container. Note you can run either on your own machine becausce of gRPC or directly on the Amiga:
+3. After, build your ROS2 container. Note you can run either on your own machine because of gRPC or directly on the Amiga:
 
-To build on your own machine,
+Build the image with:
 ```bash
-make build-dev
-```
-
-To build on the Amiga,
-```bash
-make build-prod
+make build-image
 ```
 
 4. [Optional, for application requiring GUIs] Next, standup the noVNC container to forward X11 to your web browser.
