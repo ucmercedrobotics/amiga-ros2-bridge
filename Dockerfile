@@ -23,6 +23,6 @@ RUN . /.venv/bin/activate && \
 WORKDIR ${WORKSPACE_ROOT}
 
 COPY manifests/ /manifests/
-RUN rosdep install --from-paths /manifests --ignore-src -r -y
+RUN rosdep update && rosdep install --from-paths /manifests --ignore-src -r -y
 
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
