@@ -147,6 +147,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv_a2a
 env/
 venv/
 ENV/
@@ -186,4 +187,4 @@ cython_debug/
 
 rosbag2*
 
-runs/
+runs/.venv_a2a/
