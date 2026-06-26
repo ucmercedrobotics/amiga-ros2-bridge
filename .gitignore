@@ -146,6 +146,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv_a2a
 env/
 venv/
 ENV/
@@ -188,4 +189,4 @@ meshes/
 
 rosbag2*
 
-runs/
+runs/.venv_a2a/
