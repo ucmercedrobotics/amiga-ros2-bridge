@@ -3,8 +3,10 @@ from threading import Lock, Thread
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseWithCovarianceStamped
-from sensor_msgs.msg import BatteryState
+from nav2_msgs.action import NavigateToPose
+from amiga_navigation_interfaces.action import TreeIDWaypoint
+from kortex_interfaces.action import SegmentLeaves
+from action_msgs.msg import GoalStatusArray
 from std_msgs.msg import String
 
 import uvicorn
@@ -18,70 +20,143 @@ from .a2a_server import WorldStateHandler
 
 @dataclass
 class RobotContext:
-    # holds the current state of the robot, including position, battery status, and mission status
-    position: dict = field(default_factory=dict)
-    battery_pct: float = 0.0
-    battery_voltage: float = 0.0
+    # NavigateToPose feedback
+    nav_pose: dict = field(default_factory=dict)
+    nav_distance_remaining: float = 0.0
+    nav_status: str = "idle"
+    # TreeIDWaypoint feedback + status
+    tree_distance_remaining: float = 0.0
+    tree_status: str = "idle"
+    # SegmentLeaves feedback + status
+    segment_state: str = ""
+    segment_status: str = "idle"
+    # bt_runner mission string
     mission_status: str = "idle"
     last_updated: str = ""
 
 
 class WorldStateNode(Node):
     def __init__(self):
-        #calls the constructor of the Node class with the name "world_state"
         super().__init__("world_state")
-        #lock so only on thread can read and write at the same time, since the ROS subscriptions will be running in a separate thread from the A2A server
         self._lock = Lock()
-        #initialize the robot context
         self._state = RobotContext()
 
-        #subscribe to the ROS topics 
+        # --- Feedback subscriptions ---
         self.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self._on_pose, 10
+            NavigateToPose.Impl.FeedbackMessage,
+            "/navigate_to_pose/_action/feedback",
+            self._on_nav_feedback, 10,
         )
         self.create_subscription(
-            BatteryState, "/battery_state", self._on_battery, 10
+            TreeIDWaypoint.Impl.FeedbackMessage,
+            "/follow_tree_id_waypoint/_action/feedback",
+            self._on_tree_feedback, 10,
         )
+        self.create_subscription(
+            SegmentLeaves.Impl.FeedbackMessage,
+            "/segment_leaves/_action/feedback",
+            self._on_segment_feedback, 10,
+        )
+
+        # --- Status subscriptions ---
+        self.create_subscription(
+            GoalStatusArray,
+            "/navigate_to_pose/_action/status",
+            self._on_nav_status, 10,
+        )
+        self.create_subscription(
+            GoalStatusArray,
+            "/follow_tree_id_waypoint/_action/status",
+            self._on_tree_status, 10,
+        )
+        self.create_subscription(
+            GoalStatusArray,
+            "/segment_leaves/_action/status",
+            self._on_segment_status, 10,
+        )
+
+        # --- Mission string from bt_runner ---
         self.create_subscription(
             String, "/mission_status", self._on_mission_status, 10
         )
-        #print a log message to indicate that the node has started and is listening to the relevant topics
+
         self.get_logger().info(
-            "WorldStateNode started — listening on /amcl_pose, /battery_state, /mission_status"
+            "WorldStateNode started — listening on action feedback/status topics"
         )
-    #returns curr state or robot as a dict
+
     def get_state(self) -> dict:
         with self._lock:
             return asdict(self._state)
 
-    #get x, y , z from pose msg & update state   
-    def _on_pose(self, msg):
+    # ------------------------------------------------------------------
+    # Feedback callbacks — extract rich payload from dummy servers
+    # ------------------------------------------------------------------
+
+    def _on_nav_feedback(self, msg):
         with self._lock:
-            p = msg.pose.pose.position
-            self._state.position = {"x": p.x, "y": p.y, "z": p.z}
-            self._state.last_updated = str(msg.header.stamp.sec)
-    
-    #get battery percentage and voltage & update state
-    def _on_battery(self, msg):
+            p = msg.feedback.current_pose.pose.position
+            self._state.nav_pose = {"x": p.x, "y": p.y, "z": p.z}
+            self._state.nav_distance_remaining = msg.feedback.distance_remaining
+            self._state.last_updated = str(
+                msg.feedback.current_pose.header.stamp.sec
+            )
+
+    def _on_tree_feedback(self, msg):
+        # dummy_tree_id_server publishes feedback->dist (float, metres remaining)
         with self._lock:
-            self._state.battery_pct = msg.percentage
-            self._state.battery_voltage = msg.voltage
-    
-    #get status string & update state        
+            self._state.tree_distance_remaining = msg.feedback.dist
+
+    def _on_segment_feedback(self, msg):
+        # dummy_segment_leaves_server publishes feedback->current_state (string)
+        with self._lock:
+            self._state.segment_state = msg.feedback.current_state
+
+    # ------------------------------------------------------------------
+    # Status callbacks — goal lifecycle (accepted / executing / succeeded …)
+    # ------------------------------------------------------------------
+
+    def _on_nav_status(self, msg):
+        with self._lock:
+            if msg.status_list:
+                self._state.nav_status = self._status_str(
+                    msg.status_list[-1].status
+                )
+
+    def _on_tree_status(self, msg):
+        with self._lock:
+            if msg.status_list:
+                self._state.tree_status = self._status_str(
+                    msg.status_list[-1].status
+                )
+
+    def _on_segment_status(self, msg):
+        with self._lock:
+            if msg.status_list:
+                self._state.segment_status = self._status_str(
+                    msg.status_list[-1].status
+                )
+
     def _on_mission_status(self, msg):
         with self._lock:
             self._state.mission_status = msg.data
 
+    @staticmethod
+    def _status_str(code: int) -> str:
+        return {
+            1: "accepted",
+            2: "executing",
+            4: "succeeded",
+            5: "canceled",
+            6: "aborted",
+        }.get(code, "unknown")
+
 
 def main():
-    #innitialize ROS2 and create the WorldStateNode
     rclpy.init()
     node = WorldStateNode()
 
-    #start the ROS2 spin loop in a separate thread so that it doesn't block the A2A server
     Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
-    #create the WorldStateHandler and A2AStarletteApplication app, then run the server on port 10004
     handler = WorldStateHandler(node)
     task_store = InMemoryTaskStore()
     app = A2AStarletteApplication(
@@ -91,5 +166,4 @@ def main():
             task_store=task_store,
         ),
     )
-    #run the A2A server using uvicorn on port 10004
     uvicorn.run(app.build(), host="0.0.0.0", port=10004, log_level="info")
