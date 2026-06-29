@@ -3,14 +3,16 @@
 <package format="3">
   <name>amiga_ros2_world_state</name>
   <version>0.0.0</version>
-  <description>World State A2A agent — aggregates robot context from ROS2 topics</description>
+  <description>World State A2A agent — aggregates robot context from ROS2 action feedback</description>
   <maintainer email="appuser@todo.todo">appuser</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
-  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>amiga_navigation_interfaces</depend>
+  <depend>kortex_interfaces</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
