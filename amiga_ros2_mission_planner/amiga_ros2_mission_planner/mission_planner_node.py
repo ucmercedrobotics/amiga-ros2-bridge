@@ -1,21 +1,20 @@
 """
 mission_planner_node.py
 
-ROS2 mission planner that:
-- Subscribes to /mission/xml, /rosout, /bt/status_change
-- On BT failure: fetches last 3 world-state frames + log context
-- Calls a local LLM (Ollama/Gemma4) to edit the XML plan by 1-3 lines
-- Republishes the edited XML to /mission/xml
-- Keeps a compact memory of prior attempts (same limits as amiga_ros2_agents)
+Pure ROS2 node — no a2a-sdk / uvicorn imports here on purpose.
+On BT failure: fetches last 3 world-state frames + log context, calls a
+local LLM (Ollama/Gemma4) to edit the active XML plan by 1-3 lines, and
+republishes it. Keeps a compact memory of prior attempts.
 
-Also serves a lightweight A2A status endpoint on port 10001.
+A2A status serving (port 10001) lives in mission_planner_a2a_main.py so
+this module can be imported/run with plain ROS2 python — no a2a-sdk or
+its newer protobuf pin required.
 """
 
 import json
 import os
 import re
 import textwrap
-from dataclasses import asdict, dataclass, field
 from threading import Lock, Thread
 from typing import Dict, List, Optional
 
@@ -24,14 +23,6 @@ import rclpy
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
-
-import uvicorn
-from a2a.server.apps import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-
-from .agent_card import AGENT_CARD
-from .a2a_server import MissionPlannerHandler
 
 # ---------------------------------------------------------------------------
 # Context-window limits — kept identical to amiga_ros2_agents
