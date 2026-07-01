@@ -298,19 +298,3 @@ def _summarize_edit(original: str, edited: str) -> str:
     return "; ".join(changes[:3]) if changes else "no visible change"
 
 
-def main():
-    rclpy.init()
-    node = MissionPlannerNode()
-
-    Thread(target=rclpy.spin, args=(node,), daemon=True).start()
-
-    handler = MissionPlannerHandler(node)
-    task_store = InMemoryTaskStore()
-    app = A2AStarletteApplication(
-        agent_card=AGENT_CARD,
-        http_handler=DefaultRequestHandler(
-            agent_executor=handler,
-            task_store=task_store,
-        ),
-    )
-    uvicorn.run(app.build(), host="0.0.0.0", port=10001, log_level="info")

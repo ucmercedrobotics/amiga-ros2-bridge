@@ -25,7 +25,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "world_state = amiga_ros2_world_state.world_state_node:main",
+            "world_state = amiga_ros2_world_state.world_state_a2a_main:main",
+
         ],
     },
 )

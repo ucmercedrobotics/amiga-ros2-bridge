@@ -1,5 +1,17 @@
+"""
+world_state_node.py
+
+Pure ROS2 node — no a2a-sdk / uvicorn imports here on purpose.
+Aggregates robot context from action feedback/status topics into a
+thread-safe RobotContext.
+
+A2A serving (port 10004) lives in world_state_a2a_main.py so this module
+can be imported/run with plain ROS2 python — no a2a-sdk or its newer
+protobuf pin required.
+"""
+
 from dataclasses import dataclass, field, asdict
-from threading import Lock, Thread
+from threading import Lock
 
 import rclpy
 from rclpy.node import Node
@@ -9,13 +21,6 @@ from kortex_interfaces.action import SegmentLeaves
 from action_msgs.msg import GoalStatusArray
 from std_msgs.msg import String
 
-import uvicorn
-from a2a.server.apps import A2AStarletteApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-
-from .agent_card import AGENT_CARD
-from .a2a_server import WorldStateHandler
 
 
 @dataclass
@@ -150,20 +155,3 @@ class WorldStateNode(Node):
             6: "aborted",
         }.get(code, "unknown")
 
-
-def main():
-    rclpy.init()
-    node = WorldStateNode()
-
-    Thread(target=rclpy.spin, args=(node,), daemon=True).start()
-
-    handler = WorldStateHandler(node)
-    task_store = InMemoryTaskStore()
-    app = A2AStarletteApplication(
-        agent_card=AGENT_CARD,
-        http_handler=DefaultRequestHandler(
-            agent_executor=handler,
-            task_store=task_store,
-        ),
-    )
-    uvicorn.run(app.build(), host="0.0.0.0", port=10004, log_level="info")
