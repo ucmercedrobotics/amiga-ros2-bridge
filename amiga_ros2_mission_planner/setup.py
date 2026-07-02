@@ -23,7 +23,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "mission_planner = amiga_ros2_mission_planner.mission_planner_a2a_main:main",
+            "mission_planner = amiga_ros2_mission_planner.mission_planner_node:main",
         ],
     },
 )
