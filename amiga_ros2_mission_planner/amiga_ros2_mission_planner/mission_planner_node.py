@@ -1,14 +1,18 @@
 """
 mission_planner_node.py
 
-Pure ROS2 node — no a2a-sdk / uvicorn imports here on purpose.
-On BT failure: fetches last 3 world-state frames + log context, calls a
-local LLM (Ollama/Gemma4) to edit the active XML plan by 1-3 lines, and
-republishes it. Keeps a compact memory of prior attempts.
+ROS2 mission planner that:
+- Subscribes to /mission/xml, /rosout, /bt/status_change
+- On BT failure: fetches last 3 world-state frames + log context
+- Calls a local LLM (Ollama/Gemma4) to edit the XML plan by 1-3 lines
+- Republishes the edited XML to /mission/xml
+- Keeps a compact memory of prior attempts (same limits as amiga_ros2_agents)
 
-A2A status serving (port 10001) lives in mission_planner_a2a_main.py so
-this module can be imported/run with plain ROS2 python — no a2a-sdk or
-its newer protobuf pin required.
+Edits are validated against the real BT.CPP XSD (amiga_ros2_behavior_tree's
+installed schemas/amiga_btcpp.xsd) before being published — an invalid
+edit is dropped rather than sent to the robot.
+
+Also serves a lightweight A2A status endpoint on port 10001.
 """
 
 import json
@@ -16,33 +20,44 @@ import os
 import re
 import textwrap
 from threading import Lock, Thread
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 import rclpy
+from ament_index_python.packages import get_package_share_directory
+from lxml import etree
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
 
+import uvicorn
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+
+from .agent_card import AGENT_CARD
+from .a2a_server import MissionPlannerHandler
+
 # ---------------------------------------------------------------------------
 # Context-window limits — kept identical to amiga_ros2_agents
 # ---------------------------------------------------------------------------
-LOG_WINDOW_SEC = 30.0
-FAILURE_CONTEXT_SEC = 3.0
-RESULT_HISTORY_CHARS = 1000
-MAX_RETRIES = 20
-COMPRESS_AFTER = 3
-WORLD_STATE_FRAMES = 3
+LOG_WINDOW_SEC = 30.0        # rolling /rosout window kept in memory
+FAILURE_CONTEXT_SEC = 3.0    # log slice sent to LLM (±N sec around failure)
+RESULT_HISTORY_CHARS = 1000  # max chars of any single result in memory
+MAX_RETRIES = 20             # max planning attempts before giving up (= MAX_STEPS)
+COMPRESS_AFTER = 3           # compress memory beyond the last N entries
+WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4")
 WORLD_STATE_URL = os.environ.get("WORLD_STATE_URL", "http://localhost:10004/")
+AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 LEVEL_MAP = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR", 50: "FATAL"}
 
 # ---------------------------------------------------------------------------
-# System prompt
+# System prompt — tight constraints on what the LLM is allowed to do
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
 You are a mission planner for an autonomous agricultural robot called Amiga.
@@ -63,6 +78,8 @@ active XML plan so the robot can recover and continue.
 - If the same edit was already tried (see ## Prior attempts), try a DIFFERENT fix.
 - If the robot has low battery or a navigation failure, prefer skipping trees or \
   shortening the route over adding new steps.
+- Your edit MUST validate against the XSD schema provided below. Pay close \
+  attention to required attributes and fixed action_name values.
 """
 
 
@@ -73,28 +90,44 @@ class MissionPlannerNode(Node):
         super().__init__("mission_planner")
         self._lock = Lock()
 
+        # State
         self.current_mission_xml: Optional[str] = None
         self.log_buffer: List[Dict] = []
-        self.memory: List[Dict] = []
-        self._republishing = False
-        self._last_status: Dict = {
+        self.memory: List[Dict] = []           # across-session history
+        self._republishing = False             # echo-loop guard (same as amiga_ros2_agents)
+        self._last_status: Dict = {            # exposed via A2A
             "mission_xml_received": False,
             "sessions": 0,
             "last_event": None,
             "last_edit_summary": None,
         }
 
+        # BT.CPP XSD — loaded once at startup from amiga_ros2_behavior_tree's
+        # installed share directory (single source of truth with the BT executor)
+        self.xsd_schema = self._load_xsd()
+        self.xsd_text = self._read_xsd_text()
+
+        # Subscriptions
         self.create_subscription(String, "/mission/xml", self._on_mission, 10)
         self.create_subscription(Log, "/rosout", self._on_log, 100)
         self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
 
+        # Publisher
         self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
 
         self.get_logger().info("MissionPlannerNode started — waiting for /mission/xml")
 
+    # ------------------------------------------------------------------
+    # Public API (called from A2A handler)
+    # ------------------------------------------------------------------
+
     def get_status(self) -> Dict:
         with self._lock:
             return dict(self._last_status)
+
+    # ------------------------------------------------------------------
+    # ROS2 callbacks
+    # ------------------------------------------------------------------
 
     def _on_mission(self, msg: String):
         if not self._republishing:
@@ -132,9 +165,16 @@ class MissionPlannerNode(Node):
                 if failure_sec - FAILURE_CONTEXT_SEC <= e["stamp"] <= failure_sec + FAILURE_CONTEXT_SEC
             ]
 
+        # Run planner in a background thread so the spin loop stays responsive
+        # (Ollama calls can take 30-60 s)
         Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # Planner
+    # ------------------------------------------------------------------
+
     def _run_planner(self, event: Dict, log_context: List[Dict]):
+        """One planning session: fetch context → call LLM → publish edit."""
         with self._lock:
             xml = self.current_mission_xml
             sessions_done = self._last_status["sessions"]
@@ -149,8 +189,10 @@ class MissionPlannerNode(Node):
 
         self.get_logger().info(_box(f"Mission Planner — session {sessions_done + 1}"))
 
+        # 1. Fetch world state
         world_state = self._fetch_world_state()
 
+        # 2. Compact memory relevant to this failure node (last COMPRESS_AFTER entries)
         failure_node = event.get("node", "unknown")
         relevant = [m for m in self.memory if m["event"].get("node") == failure_node]
         memory_summary = [
@@ -162,6 +204,7 @@ class MissionPlannerNode(Node):
             for i, m in enumerate(relevant[-COMPRESS_AFTER:])
         ]
 
+        # 3. Build prompt (same field order as amiga_ros2_agents initial_user)
         log_excerpt = json.dumps(log_context, indent=2)
         if len(log_excerpt) > RESULT_HISTORY_CHARS:
             log_excerpt = log_excerpt[:RESULT_HISTORY_CHARS] + "\n… [truncated]"
@@ -169,6 +212,8 @@ class MissionPlannerNode(Node):
         prompt = (
             f"## Failure event\n{json.dumps(event, indent=2)}\n\n"
             f"## Active mission XML\n{xml}\n\n"
+            f"## Mission XML Schema (XSD) — the edit MUST validate against this\n"
+            f"{self.xsd_text}\n\n"
             f"## World state (last {len(world_state)} updates)\n"
             f"{json.dumps(world_state, indent=2)}\n\n"
             f"## Recent ROS logs (±{FAILURE_CONTEXT_SEC}s around failure)\n"
@@ -183,24 +228,30 @@ class MissionPlannerNode(Node):
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries"
         )
 
+        # 4. Call LLM
         try:
             edited_xml = self._call_ollama(prompt)
         except Exception as exc:
             self.get_logger().error(f"  LLM call failed: {exc}")
             return
 
-        if "<BehaviorTree" not in edited_xml or "<root" not in edited_xml:
+        # 5. Validate the response against the real BT.CPP XSD
+        is_valid, xsd_error = self._validate_xml(edited_xml)
+        if not is_valid:
             self.get_logger().error(
-                "  LLM did not return valid BT XML — not publishing\n"
+                "  LLM edit failed XSD validation — not publishing\n"
+                f"  {xsd_error}\n"
                 f"  Response preview: {edited_xml[:200]}"
             )
             return
 
+        # 6. Summarise what changed
         edit_summary = _summarize_edit(xml, edited_xml)
         self.get_logger().info(
             f"  Edit: {textwrap.shorten(edit_summary, 120, placeholder='…')}"
         )
 
+        # 7. Publish
         out_msg = String()
         out_msg.data = edited_xml
         self._republishing = True
@@ -208,6 +259,7 @@ class MissionPlannerNode(Node):
         self._republishing = False
         self.get_logger().info("  Published edited mission XML to /mission/xml")
 
+        # 8. Store in memory and update status
         with self._lock:
             self.memory.append({
                 "event": event,
@@ -219,6 +271,10 @@ class MissionPlannerNode(Node):
             self._last_status["last_edit_summary"] = edit_summary
 
         self.get_logger().info("─" * 60)
+
+    # ------------------------------------------------------------------
+    # World state client — identical SSE pattern from test_llm_world_state.py
+    # ------------------------------------------------------------------
 
     def _fetch_world_state(self) -> List[Dict]:
         frames: List[Dict] = []
@@ -260,6 +316,10 @@ class MissionPlannerNode(Node):
             self.get_logger().warn(f"World state fetch failed: {exc}")
         return frames
 
+    # ------------------------------------------------------------------
+    # LLM client — same Ollama pattern from test_llm_world_state.py
+    # ------------------------------------------------------------------
+
     def _call_ollama(self, prompt: str) -> str:
         response = requests.post(
             OLLAMA_URL,
@@ -276,10 +336,68 @@ class MissionPlannerNode(Node):
         response.raise_for_status()
         return response.json()["message"]["content"].strip()
 
+    # ------------------------------------------------------------------
+    # XSD schema — loaded once from amiga_ros2_behavior_tree's installed share dir
+    # ------------------------------------------------------------------
+
+    def _resolve_xsd_path(self) -> str:
+        if AMIGA_XSD_PATH:
+            return AMIGA_XSD_PATH
+        try:
+            share_dir = get_package_share_directory("amiga_ros2_behavior_tree")
+        except Exception as exc:
+            self.get_logger().error(
+                f"Could not resolve amiga_ros2_behavior_tree share dir: {exc}"
+            )
+            return ""
+        return os.path.join(share_dir, "schemas", "amiga_btcpp.xsd")
+
+    def _load_xsd(self) -> Optional["etree.XMLSchema"]:
+        path = self._resolve_xsd_path()
+        if not path:
+            return None
+        try:
+            with open(path, "rb") as f:
+                return etree.XMLSchema(etree.parse(f))
+        except (OSError, etree.XMLSyntaxError, etree.XMLSchemaParseError) as exc:
+            self.get_logger().error(f"Failed to load mission XSD from {path}: {exc}")
+            return None
+
+    def _read_xsd_text(self) -> str:
+        path = self._resolve_xsd_path()
+        if not path:
+            return ""
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except OSError as exc:
+            self.get_logger().error(f"Failed to read mission XSD text from {path}: {exc}")
+            return ""
+
+    def _validate_xml(self, xml_str: str) -> Tuple[bool, str]:
+        """Returns (is_valid, error_message)."""
+        if self.xsd_schema is None:
+            return True, "schema unavailable — skipped validation"
+        try:
+            doc = etree.fromstring(xml_str.encode("utf-8"))
+        except etree.XMLSyntaxError as exc:
+            return False, f"not well-formed XML: {exc}"
+        if self.xsd_schema.validate(doc):
+            return True, ""
+        return False, str(self.xsd_schema.error_log)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _stamp_to_sec(stamp) -> float:
         return stamp.sec + stamp.nanosec * 1e-9
 
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
 
 def _box(title: str, width: int = 60) -> str:
     bar = "─" * (width - 2)
@@ -287,6 +405,7 @@ def _box(title: str, width: int = 60) -> str:
 
 
 def _summarize_edit(original: str, edited: str) -> str:
+    """Return a compact description of what changed between the two XML strings."""
     orig_lines = original.splitlines()
     edit_lines = edited.splitlines()
     changes = []
@@ -298,3 +417,24 @@ def _summarize_edit(original: str, edited: str) -> str:
     return "; ".join(changes[:3]) if changes else "no visible change"
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    rclpy.init()
+    node = MissionPlannerNode()
+
+    # Spin in a background thread so uvicorn can run in the main thread
+    Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+
+    handler = MissionPlannerHandler(node)
+    task_store = InMemoryTaskStore()
+    app = A2AStarletteApplication(
+        agent_card=AGENT_CARD,
+        http_handler=DefaultRequestHandler(
+            agent_executor=handler,
+            task_store=task_store,
+        ),
+    )
+    uvicorn.run(app.build(), host="0.0.0.0", port=10001, log_level="info")
