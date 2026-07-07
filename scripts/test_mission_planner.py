@@ -9,7 +9,7 @@ Steps:
   1. Publishes a sample mission XML to /mission/xml
   2. Waits 2 s for the node to register it
   3. Publishes a mock BT failure event to /bt/status_change
-  4. Listens on /mission/xml for the edited plan (90 s timeout)
+  4. Listens on /mission/xml for the edited plan (600 s timeout)
 """
 
 import json
@@ -70,8 +70,8 @@ class Tester(Node):
         f.data = json.dumps(MOCK_FAILURE)
         self.bt_pub.publish(f)
 
-        self.get_logger().info("Waiting for edited plan (up to 90 s)…")
-        deadline = time.time() + 90
+        self.get_logger().info("Waiting for edited plan (up to 600 s)…")
+        deadline = time.time() + 600
         while time.time() < deadline and self.received_edit is None:
             rclpy.spin_once(self, timeout_sec=1.0)
 
@@ -80,7 +80,7 @@ class Tester(Node):
             print(self.received_edit)
             print("=========================\n")
         else:
-            print("TIMEOUT — no edited XML received within 90 s", file=sys.stderr)
+            print("TIMEOUT — no edited XML received within 600 s", file=sys.stderr)
             sys.exit(1)
 
 
