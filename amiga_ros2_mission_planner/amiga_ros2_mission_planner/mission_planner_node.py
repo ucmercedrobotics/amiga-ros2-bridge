@@ -220,7 +220,9 @@ class MissionPlannerNode(Node):
             f"{log_excerpt}\n\n"
             f"## Prior attempts for node '{failure_node}' (do not repeat)\n"
             f"{json.dumps(memory_summary, indent=2)}\n\n"
-            "Return the corrected XML (1-3 line edit only)."
+            "Return ONLY the corrected XML. Do not use code fences or markdown. "
+            "Only use MoveToTreeID or SampleLeaf as leaf node types — do not invent new node types. "
+            "Change at most 1-3 lines from the original XML shown above."
         )
 
         self.get_logger().info(
@@ -232,8 +234,10 @@ class MissionPlannerNode(Node):
         try:
             edited_xml = self._call_ollama(prompt)
         except Exception as exc:
-            self.get_logger().error(f"  LLM call failed: {exc}")
-            return
+             self.get_logger().error(f"  LLM call failed: {exc}")
+             return  
+
+        edited_xml = _strip_code_fence(edited_xml)
 
         # 5. Validate the response against the real BT.CPP XSD
         is_valid, xsd_error = self._validate_xml(edited_xml)
@@ -331,7 +335,7 @@ class MissionPlannerNode(Node):
                 ],
                 "stream": False,
             },
-            timeout=90,
+            timeout= 600,
         )
         response.raise_for_status()
         return response.json()["message"]["content"].strip()
@@ -415,6 +419,17 @@ def _summarize_edit(original: str, edited: str) -> str:
     if len(edit_lines) != len(orig_lines):
         changes.append(f"line count {len(orig_lines)} → {len(edit_lines)}")
     return "; ".join(changes[:3]) if changes else "no visible change"
+
+def _strip_code_fence(text: str) -> str:
+    """Remove a leading/trailing markdown code fence if the LLM added one anyway."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = lines[1:]  # drop opening ``` or ```xml
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
 
 
 # ---------------------------------------------------------------------------

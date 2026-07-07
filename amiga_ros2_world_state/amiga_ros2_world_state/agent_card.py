@@ -1,22 +1,29 @@
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
 #Agent Card for the World State Node
-#Defines the agent's "job" and capabilities, including the skill to get the robot context (position, battery, mission status)
+#Defines the agent's "job" and capabilities: aggregated robot context from
+#navigation, tree-waypoint, and leaf-segmentation action feedback/status.
 AGENT_CARD = AgentCard(
     name="Amiga World State",
-    description="Provides current robot context: position, battery, and mission status.",
+    description=(
+        "Provides current robot context: navigation pose/status, tree-waypoint "
+        "distance/status, leaf-segmentation state/status, and overall mission status."
+    ),
     url="http://localhost:10004",
     version="1.0.0",
     capabilities=AgentCapabilities(streaming=True),
-    default_input_modes=["text"],
-    default_output_modes=["data"],
+    defaultInputModes=["text"],
+    defaultOutputModes=["data"],
     skills=[
         AgentSkill(
             id="get_robot_context",
             name="Get Robot Context",
-            description="Returns current position, battery level, and mission status.",
-            input_modes=["text"],
-            output_modes=["data"],
+            description=(
+                "Returns nav_pose, nav_distance_remaining, nav_status, "
+                "tree_distance_remaining, tree_status, segment_state, "
+                "segment_status, mission_status, and last_updated."
+            ),
+            inputModes=["text"],
+            outputModes=["data"],
             tags=["robot", "world-state"],
         )
     ],

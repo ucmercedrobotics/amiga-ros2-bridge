@@ -9,6 +9,8 @@ AGENT_CARD = AgentCard(
     url="http://localhost:10001",
     version="1.0.0",
     capabilities=AgentCapabilities(streaming=False),
+    defaultInputModes=["text"],
+    defaultOutputModes=["data"],
     skills=[
         AgentSkill(
             id="get_planner_status",
