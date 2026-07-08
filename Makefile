@@ -8,7 +8,7 @@ PORT:=12346
 PAYLOAD:=true
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
-ARCH_TAG:=x86_64
+ARCH_TAG:=amd64
 CUDA_MOUNT:=
 ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
@@ -98,6 +98,11 @@ mission-interface:
 
 amiga:
 	./scripts/bringup_amiga_tmux.sh
+
+# Full-stack Gazebo simulation (run inside the container).
+# Append headless:=true on machines without a display.
+sim:
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \
