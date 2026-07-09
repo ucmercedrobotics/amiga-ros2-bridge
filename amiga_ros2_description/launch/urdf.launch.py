@@ -38,6 +38,11 @@ def generate_launch_description():
                 default_value="false",
                 description="Whether to use VectorNav IMU instead of BNO085",
             ),
+            DeclareLaunchArgument(
+                name="joint_states_topic",
+                default_value="/joint_states",
+                description="Joint-state topic for robot_state_publisher",
+            ),
             Node(
                 package="joint_state_publisher",
                 executable="joint_state_publisher",
@@ -68,6 +73,9 @@ def generate_launch_description():
                             value_type=str,
                         )
                     }
+                ],
+                remappings=[
+                    ("joint_states", LaunchConfiguration("joint_states_topic")),
                 ],
             ),
         ]

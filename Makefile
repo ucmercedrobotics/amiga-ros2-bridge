@@ -8,11 +8,25 @@ PORT:=12346
 PAYLOAD:=true
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
-ARCH_TAG:=x86_64
+ARCH_TAG:=amd64
 CUDA_MOUNT:=
+
+# Select the build platform/tag purely from the CPU architecture.
 ifneq (,$(filter $(ARCH),arm64 aarch64))
 	PLATFORM := linux/arm64/v8
 	ARCH_TAG:=arm64
+endif
+
+# GPU detection is independent of architecture:
+#   - Jetson boards expose /etc/nv_tegra_release and need the Tegra-specific
+#     device/library mounts below.
+#   - Any other machine with a working NVIDIA driver (desktop discrete GPU) is
+#     detected via nvidia-smi and just needs --gpus all through the NVIDIA
+#     Container Toolkit.
+IS_JETSON := $(shell test -f /etc/nv_tegra_release && echo 1)
+HAS_NVIDIA_GPU := $(shell command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1 && echo 1)
+
+ifeq ($(IS_JETSON),1)
 	CUDA_MOUNT:= --runtime=nvidia \
 			 -v /usr/local/cuda:/usr/local/cuda:ro \
 		     -v /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu-host:ro \
@@ -22,7 +36,9 @@ ifneq (,$(filter $(ARCH),arm64 aarch64))
 		     -v /usr/lib/python3.10/dist-packages/tensorrt-10.3.0.dist-info:/usr/lib/python3.10/dist-packages/tensorrt-10.3.0.dist-info:ro \
 		     -e PYTHONPATH=/usr/lib/python3.10/dist-packages \
 			 --device /dev/nvhost-gpu \
-			 --device /dev/nvmap 
+			 --device /dev/nvmap
+else ifeq ($(HAS_NVIDIA_GPU),1)
+	CUDA_MOUNT:= --gpus all
 endif
 
 repo-init:
@@ -98,6 +114,11 @@ mission-interface:
 
 amiga:
 	./scripts/bringup_amiga_tmux.sh
+
+# Full-stack Gazebo simulation (run inside the container).
+# Append headless:=true on machines without a display.
+sim:
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \
