@@ -17,9 +17,9 @@
 
     <!-- Physics ─────────────────────────────────────────────────── -->
     <physics name="fast" type="ode">
-      <max_step_size>0.004</max_step_size>
+      <max_step_size>0.01</max_step_size>
       <real_time_factor>1.0</real_time_factor>
-      <real_time_update_rate>250</real_time_update_rate>
+      <real_time_update_rate>100</real_time_update_rate>
     </physics>
 
     <!-- Required plugins -->
@@ -534,8 +534,8 @@
       </link>
     </model>
 
-    
-    
+
+
     <!-- Levels system: per-alley dynamic loading by performer position.
          In an alley, the FULL row on the robot's right and the FULL row on
          its left load (the two adjacent strings); the far third row stays

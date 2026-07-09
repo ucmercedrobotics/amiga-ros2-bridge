@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y git wget python3-full python3-pip vim n
     ros-${ROS_DISTRO}-joint-trajectory-controller ros-${ROS_DISTRO}-joint-state-broadcaster \
     ros-${ROS_DISTRO}-gripper-controllers ros-${ROS_DISTRO}-topic-tools \
     ros-${ROS_DISTRO}-robot-localization \
+    ros-${ROS_DISTRO}-diagnostic-updater \
     tmux \
     rhash librhash-dev
 

@@ -10,6 +10,7 @@ with use_sim_time forced true for the whole tree.
 
 The real-robot bringup path is untouched.
 """
+
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -28,9 +29,7 @@ from launch_ros.actions import Node, SetParameter
 def _include(package, launch_file, **launch_args):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory(package), "launch", launch_file
-            )
+            os.path.join(get_package_share_directory(package), "launch", launch_file)
         ),
         launch_arguments={k: v for k, v in launch_args.items()}.items(),
     )
@@ -49,7 +48,6 @@ def generate_launch_description():
         actions=[
             # Force sim clock on every node started below (includes too).
             SetParameter(name="use_sim_time", value=True),
-
             # ── Hardware layer replacement ──────────────────────────────
             _include(
                 "amiga_ros2_gazebo",
@@ -63,9 +61,14 @@ def generate_launch_description():
                 executable="sim_joint_state_filter.py",
                 name="amiga_base_joint_state_filter",
                 output="screen",
-                parameters=[{"use_sim_time": True, "input_topic": "/joint_states", "mode": "amiga"}],
+                parameters=[
+                    {
+                        "use_sim_time": True,
+                        "input_topic": "/joint_states",
+                        "mode": "amiga",
+                    }
+                ],
             ),
-
             # ── Identical-to-hardware stack ─────────────────────────────
             # Robot description / TF (base). publish_joints:=false because
             # the joint_state_broadcaster is the source, filtered to base joints.
@@ -140,6 +143,23 @@ def generate_launch_description():
                     }
                 ],
             ),
+            Node(
+                package="amiga_navigation",
+                executable="lidar_object_navigator",
+                name="lidar_object_navigator",
+                output="screen",
+                parameters=[
+                    {
+                        "safety_distance": 0.8,
+                        "lidar_topic": "/ouster/points",
+                        "azimuth_tolerance": 0.5,
+                        "min_object_height": 0.1,
+                        "max_object_height": 1.5,
+                        "min_object_distance": 1.0,
+                        "max_object_distance": 5.0,
+                    }
+                ],
+            ),
         ],
     )
 
@@ -153,21 +173,26 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument("world", default_value=os.path.join(
-                get_package_share_directory("amiga_ros2_gazebo"),
-                "worlds", "orchard_nbv.sdf")),
+            DeclareLaunchArgument(
+                "world",
+                default_value=os.path.join(
+                    get_package_share_directory("amiga_ros2_gazebo"),
+                    "worlds",
+                    "orchard_nbv.sdf",
+                ),
+            ),
             DeclareLaunchArgument("headless", default_value="false"),
-            DeclareLaunchArgument("use_lidar", default_value="false"),
+            DeclareLaunchArgument("use_lidar", default_value="true"),
             DeclareLaunchArgument("use_gps", default_value="true"),
             DeclareLaunchArgument("launch_nav", default_value="true"),
             DeclareLaunchArgument("launch_arm", default_value="true"),
             DeclareLaunchArgument("launch_rviz", default_value="false"),
             DeclareLaunchArgument(
                 "launch_helpers",
-                default_value="false",
+                default_value="true",
                 description="Start waypoint_follower + linear_velo (as in tmux bringup)",
             ),
-            DeclareLaunchArgument("launch_bt", default_value="false"),
+            DeclareLaunchArgument("launch_bt", default_value="true"),
             DeclareLaunchArgument(
                 "yaw_offset",
                 default_value="0.0",

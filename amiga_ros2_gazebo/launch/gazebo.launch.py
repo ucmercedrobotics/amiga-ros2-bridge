@@ -13,6 +13,7 @@ Starts:
 Controller names match the real ros2-kortex-control stack so kortex_move /
 MoveIt run unchanged (see config/ros2_controllers_sim.yaml).
 """
+
 import os
 import re
 import subprocess
@@ -125,9 +126,18 @@ def launch_setup(context, *args, **kwargs):
         package="ros_gz_sim",
         executable="create",
         arguments=[
-            "-file", tmp_model.name,
-            "-name", "amiga_kinova",
-            "-x", spawn_x, "-y", spawn_y, "-z", spawn_z, "-Y", spawn_yaw,
+            "-file",
+            tmp_model.name,
+            "-name",
+            "amiga_kinova",
+            "-x",
+            spawn_x,
+            "-y",
+            spawn_y,
+            "-z",
+            spawn_z,
+            "-Y",
+            spawn_yaw,
         ],
         output="screen",
         parameters=[use_sim_time],
@@ -158,8 +168,8 @@ def launch_setup(context, *args, **kwargs):
             "/realsense/image@sensor_msgs/msg/Image[ignition.msgs.Image",
             "/realsense/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
             "/realsense/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
-            # 2D lidar (frame lidar_link matches the amiga URDF when use_lidar:=true)
-            "/scan@sensor_msgs/msg/LaserScan[ignition.msgs.LaserScan",
+            # 3D lidar (frame lidar_link matches the amiga URDF when use_lidar:=true)
+            "/ouster/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
         ],
     )
 
@@ -169,12 +179,18 @@ def launch_setup(context, *args, **kwargs):
         actions=[
             ExecuteProcess(
                 cmd=[
-                    "ign", "service",
-                    "-s", f"/world/{world_name}/level/set_performer",
-                    "--reqtype", "ignition.msgs.StringMsg",
-                    "--reptype", "ignition.msgs.Boolean",
-                    "--timeout", "2000",
-                    "--req", 'data: "amiga_kinova"',
+                    "ign",
+                    "service",
+                    "-s",
+                    f"/world/{world_name}/level/set_performer",
+                    "--reqtype",
+                    "ignition.msgs.StringMsg",
+                    "--reptype",
+                    "ignition.msgs.Boolean",
+                    "--timeout",
+                    "2000",
+                    "--req",
+                    'data: "amiga_kinova"',
                 ],
                 output="screen",
             )
@@ -188,8 +204,10 @@ def launch_setup(context, *args, **kwargs):
             executable="spawner",
             arguments=[
                 controller,
-                "-c", "/controller_manager",
-                "--controller-manager-timeout", "120",
+                "-c",
+                "/controller_manager",
+                "--controller-manager-timeout",
+                "120",
             ],
             output="screen",
             parameters=[use_sim_time],
@@ -202,9 +220,15 @@ def launch_setup(context, *args, **kwargs):
 
     chain = [
         RegisterEventHandler(OnProcessExit(target_action=spawn, on_exit=[spawn_jsb])),
-        RegisterEventHandler(OnProcessExit(target_action=spawn_jsb, on_exit=[spawn_diff])),
-        RegisterEventHandler(OnProcessExit(target_action=spawn_diff, on_exit=[spawn_jtc])),
-        RegisterEventHandler(OnProcessExit(target_action=spawn_jtc, on_exit=[spawn_gripper])),
+        RegisterEventHandler(
+            OnProcessExit(target_action=spawn_jsb, on_exit=[spawn_diff])
+        ),
+        RegisterEventHandler(
+            OnProcessExit(target_action=spawn_diff, on_exit=[spawn_jtc])
+        ),
+        RegisterEventHandler(
+            OnProcessExit(target_action=spawn_jtc, on_exit=[spawn_gripper])
+        ),
     ]
 
     return [gazebo, gz_description_server, spawn, bridge, set_performer] + chain
