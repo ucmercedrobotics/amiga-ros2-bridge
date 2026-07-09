@@ -49,7 +49,7 @@ COMPRESS_AFTER = 3           # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
 WORLD_STATE_URL = os.environ.get("WORLD_STATE_URL", "http://localhost:10004/")
 AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
 
@@ -68,10 +68,11 @@ active XML plan so the robot can recover and continue.
 
 ## Hard rules
 - Return ONLY the complete corrected XML. No explanation, no code fences, no markdown.
+- The file created MUST NOT start with ``` xml and MUST NOT end with ```.
 - Change at most 1-3 lines from the original XML.
 - Never rewrite the whole plan — only the smallest change that addresses the failure.
 - Preserve all XML structure, indentation, and attribute quoting exactly.
-- Valid leaf node types: MoveToTreeID, SampleLeaf.
+- Valid leaf node types: MoveToTreeID, SampleLeaf — and ONLY these two. Never use <Action>, <Task>, or any other tag name for a leaf.
   - MoveToTreeID attrs: name, action_name="follow_tree_id_waypoint", id (int), approach_tree (true/false)
   - SampleLeaf attrs: name, action_name="segment_leaves"
 - Valid control nodes: Sequence, Fallback, Retry (with num_cycles attr).
@@ -221,7 +222,8 @@ class MissionPlannerNode(Node):
             f"## Prior attempts for node '{failure_node}' (do not repeat)\n"
             f"{json.dumps(memory_summary, indent=2)}\n\n"
             "Return ONLY the corrected XML. Do not use code fences or markdown. "
-            "Only use MoveToTreeID or SampleLeaf as leaf node types — do not invent new node types. "
+            "The edited XML MUST NOT start with ``` and MUST NOT end with ```"
+            "The ONLY valid leaf elements are <MoveToTreeID> and <SampleLeaf> — never <Action>, <Task>, or any other tag name."
             "Change at most 1-3 lines from the original XML shown above."
         )
 
@@ -323,7 +325,7 @@ class MissionPlannerNode(Node):
     # ------------------------------------------------------------------
     # LLM client — same Ollama pattern from test_llm_world_state.py
     # ------------------------------------------------------------------
-
+    # 
     def _call_ollama(self, prompt: str) -> str:
         response = requests.post(
             OLLAMA_URL,
@@ -334,8 +336,9 @@ class MissionPlannerNode(Node):
                     {"role": "user", "content": prompt},
                 ],
                 "stream": False,
+                "options": {"temperature": 0.1},
             },
-            timeout= 600,
+            timeout=300,
         )
         response.raise_for_status()
         return response.json()["message"]["content"].strip()
@@ -453,3 +456,7 @@ def main():
         ),
     )
     uvicorn.run(app.build(), host="0.0.0.0", port=10001, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

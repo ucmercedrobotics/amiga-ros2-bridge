@@ -147,3 +147,24 @@ def main():
         ),
     )
     uvicorn.run(app.build(), host="0.0.0.0", port=10004, log_level="info")
+
+def main():
+    rclpy.init()
+    node = WorldStateNode()
+
+    Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+
+    handler = WorldStateHandler(node)
+    task_store = InMemoryTaskStore()
+    app = A2AStarletteApplication(
+        agent_card=AGENT_CARD,
+        http_handler=DefaultRequestHandler(
+            agent_executor=handler,
+            task_store=task_store,
+        ),
+    )
+    uvicorn.run(app.build(), host="0.0.0.0", port=10004, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
