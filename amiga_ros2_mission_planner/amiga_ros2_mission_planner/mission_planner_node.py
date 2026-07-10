@@ -4,7 +4,7 @@ mission_planner_node.py
 ROS2 mission planner that:
 - Subscribes to /mission/xml, /rosout, /bt/status_change
 - On BT failure: fetches last 3 world-state frames + log context
-- Calls a local LLM (Ollama/Gemma4) to edit the XML plan by 1-3 lines
+- Calls OpenAI's gpt-4o to edit the XML plan by 1-3 lines
 - Republishes the edited XML to /mission/xml
 - Keeps a compact memory of prior attempts (same limits as amiga_ros2_agents)
 
@@ -17,6 +17,7 @@ Also serves a lightweight A2A status endpoint on port 10001.
 
 import json
 import os
+import time
 import re
 import textwrap
 from threading import Lock, Thread
@@ -25,10 +26,14 @@ from typing import Dict, List, Optional, Tuple
 import requests
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from dotenv import load_dotenv
 from lxml import etree
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
+
+import litellm
+from litellm import completion
 
 import uvicorn
 from a2a.server.apps import A2AStarletteApplication
@@ -37,6 +42,8 @@ from a2a.server.tasks import InMemoryTaskStore
 
 from .agent_card import AGENT_CARD
 from .a2a_server import MissionPlannerHandler
+
+litellm.drop_params = True
 
 # ---------------------------------------------------------------------------
 # Context-window limits — kept identical to amiga_ros2_agents
@@ -48,10 +55,14 @@ MAX_RETRIES = 20             # max planning attempts before giving up (= MAX_STE
 COMPRESS_AFTER = 3           # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
+CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+CLOUD_MODEL_TEMPERATURE = float(os.environ.get("CLOUD_MODEL_TEMPERATURE", "0.2"))
+CLOUD_MODEL_MAX_TOKENS = int(os.environ.get("CLOUD_MODEL_MAX_TOKENS", "4096"))
+ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
 WORLD_STATE_URL = os.environ.get("WORLD_STATE_URL", "http://localhost:10004/")
 AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
+
+load_dotenv(ENV_FILE_PATH)
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 LEVEL_MAP = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR", 50: "FATAL"}
@@ -226,15 +237,14 @@ class MissionPlannerNode(Node):
             "The ONLY valid leaf elements are <MoveToTreeID> and <SampleLeaf> — never <Action>, <Task>, or any other tag name."
             "Change at most 1-3 lines from the original XML shown above."
         )
-
         self.get_logger().info(
-            f"  Calling Ollama ({OLLAMA_MODEL}) — "
+            f"  Calling OpenAI ({CLOUD_MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries"
         )
 
         # 4. Call LLM
         try:
-            edited_xml = self._call_ollama(prompt)
+            edited_xml = self._call_openai(prompt)
         except Exception as exc:
              self.get_logger().error(f"  LLM call failed: {exc}")
              return  
@@ -323,25 +333,30 @@ class MissionPlannerNode(Node):
         return frames
 
     # ------------------------------------------------------------------
-    # LLM client — same Ollama pattern from test_llm_world_state.py
+    # LLM client
     # ------------------------------------------------------------------
     # 
-    def _call_ollama(self, prompt: str) -> str:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-                "options": {"temperature": 0.1},
-            },
-            timeout=300,
-        )
-        response.raise_for_status()
-        return response.json()["message"]["content"].strip()
+
+    def _call_openai(self, prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        answered = False
+        cmp = None
+        while not answered:
+            try:
+                cmp = completion(
+                    model=CLOUD_MODEL,
+                    messages=messages,
+                    temperature=CLOUD_MODEL_TEMPERATURE,
+                    max_tokens=CLOUD_MODEL_MAX_TOKENS,
+                )
+                answered = True
+            except litellm.exceptions.RateLimitError as exc:
+                self.get_logger().warn(f"  OpenAI rate limited, retrying in 1s: {exc}")
+                time.sleep(1)
+        return cmp.choices[0].message.content.strip()
 
     # ------------------------------------------------------------------
     # XSD schema — loaded once from amiga_ros2_behavior_tree's installed share dir

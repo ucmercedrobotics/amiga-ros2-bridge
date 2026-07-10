@@ -41,6 +41,12 @@ MOCK_FAILURE = {
     "reason": "action server returned ABORTED — obstacle detected near tree 60",
 }
 
+MOCK_FAILURE_2 = {
+    "node": "Visit_Tree_10",
+    "status": "FAILURE",
+    "timestamp_ms": int(time.time() * 1000),
+    "reason": "action server returned ABORTED — obstacle detected near tree 10",
+}
 
 class Tester(Node):
     def __init__(self):
@@ -67,7 +73,7 @@ class Tester(Node):
 
         self.get_logger().info("Publishing mock BT failure…")
         f = String()
-        f.data = json.dumps(MOCK_FAILURE)
+        f.data = json.dumps([MOCK_FAILURE, MOCK_FAILURE_2])
         self.bt_pub.publish(f)
 
         self.get_logger().info("Waiting for edited plan (up to 300 s)…")

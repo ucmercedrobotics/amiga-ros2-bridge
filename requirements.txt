@@ -9,6 +9,9 @@ protobuf==5.29.5
 farm-ng-amiga
 utm
 uvicorn
+litellm
+python-dotenv
+
 
 #for xml schema validation by agent
 lxml
