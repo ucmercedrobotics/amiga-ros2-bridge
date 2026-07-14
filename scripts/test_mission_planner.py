@@ -1,6 +1,4 @@
 """
-End-to-end smoke test for the Mission Planner node.
-
 Usage (run inside the container with ROS2 sourced):
   # Terminal 1: ros2 run amiga_ros2_mission_planner mission_planner
   # Terminal 2: python3 scripts/test_mission_planner.py
@@ -34,6 +32,7 @@ SAMPLE_XML = """\
   </BehaviorTree>
 </root>"""
 
+
 MOCK_FAILURE = {
     "node": "Visit_Tree_60",
     "status": "FAILURE",
@@ -42,26 +41,36 @@ MOCK_FAILURE = {
 }
 
 MOCK_FAILURE_2 = {
-    "node": "Visit_Tree_10",
+    "node": "Visit_Tree_60",
     "status": "FAILURE",
-    "timestamp_ms": int(time.time() * 1000),
-    "reason": "action server returned ABORTED — obstacle detected near tree 10",
+    "timestamp_ms": 0,  # set at publish time
+    "reason": (
+        "action server returned ABORTED — still cannot reach tree 60 after "
+        "3 retry attempts; obstacle appears permanent (fallen tree across row)"
+    ),
 }
-
 class Tester(Node):
     def __init__(self):
         super().__init__("mission_planner_tester")
         self.xml_pub = self.create_publisher(String, "/mission/xml", 10)
         self.bt_pub = self.create_publisher(String, "/bt/status_change", 10)
-        self.received_edit = None
+        self.received_edits = []                        # CHANGED: list instead of single value
 
         self.create_subscription(String, "/mission/xml", self._on_xml, 10)
 
-    def _on_xml(self, msg: String):
+    def _on_xml(self, msg: String):                     # CHANGED: collect every distinct edit
         if msg.data == SAMPLE_XML:
             return
-        self.received_edit = msg.data
-        self.get_logger().info("Received edited XML!")
+        if msg.data in self.received_edits:
+            return
+        self.received_edits.append(msg.data)
+        self.get_logger().info(f"Received edited XML #{len(self.received_edits)}!")
+
+    def _wait_for_edit(self, count: int, timeout_sec: float = 300.0) -> bool:   # NEW helper
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline and len(self.received_edits) < count:
+            rclpy.spin_once(self, timeout_sec=1.0)
+        return len(self.received_edits) >= count
 
     def run(self):
         self.get_logger().info("Publishing sample mission XML…")
@@ -71,24 +80,37 @@ class Tester(Node):
 
         time.sleep(2.0)
 
-        self.get_logger().info("Publishing mock BT failure…")
+        # --- Failure 1: obstacle at tree 60 ---
+        self.get_logger().info("Publishing mock BT failure 1…")
+        MOCK_FAILURE["timestamp_ms"] = int(time.time() * 1000)
         f = String()
-        f.data = json.dumps([MOCK_FAILURE, MOCK_FAILURE_2])
+        f.data = json.dumps(MOCK_FAILURE)
         self.bt_pub.publish(f)
 
-        self.get_logger().info("Waiting for edited plan (up to 300 s)…")
-        deadline = time.time() + 300
-        while time.time() < deadline and self.received_edit is None:
-            rclpy.spin_once(self, timeout_sec=1.0)
-
-        if self.received_edit:
-            print("\n=== Edited mission XML ===")
-            print(self.received_edit)
-            print("=========================\n")
-        else:
-            print("TIMEOUT — no edited XML received within 300 s", file=sys.stderr)
+        self.get_logger().info("Waiting for edited plan 1 (up to 300 s)…")
+        if not self._wait_for_edit(1):
+            print("TIMEOUT — no edited XML for failure 1", file=sys.stderr)
             sys.exit(1)
 
+        time.sleep(2.0)   # let the planner ingest its own edit #1
+
+        # --- Failure 2: retries exhausted at tree 60 ---
+        self.get_logger().info("Publishing mock BT failure 2 (retries exhausted)…")
+        MOCK_FAILURE_2["timestamp_ms"] = int(time.time() * 1000)
+        f2 = String()
+        f2.data = json.dumps(MOCK_FAILURE_2)
+        self.bt_pub.publish(f2)
+
+        self.get_logger().info("Waiting for edited plan 2 (up to 300 s)…")
+        if not self._wait_for_edit(2):
+            print("TIMEOUT — no edited XML for failure 2", file=sys.stderr)
+            sys.exit(1)
+        # ========================================
+
+        for i, xml in enumerate(self.received_edits, 1):
+            print(f"\n=== Edited mission XML #{i} ===")
+            print(xml)
+            print("=" * 30)
 
 def main():
     rclpy.init()

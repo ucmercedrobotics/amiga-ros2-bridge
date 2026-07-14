@@ -80,13 +80,15 @@ active XML plan so the robot can recover and continue.
 ## Hard rules
 - Return ONLY the complete corrected XML. No explanation, no code fences, no markdown.
 - The file created MUST NOT start with ``` xml and MUST NOT end with ```.
-- Change at most 1-3 lines from the original XML.
-- Never rewrite the whole plan — only the smallest change that addresses the failure.
+- Make the smallest edit that addresses the failure — typically 1-4 lines. Moving an existing step to a different position in the plan (e.g. deferring a blocked tree to the end of the row) counts as a small edit.
+- Never rewrite the whole plan.
+- Prefer edits that preserve all mission objectives. Dropping a task is a last resort; reordering or retrying tasks is preferred when a failure appears temporary.
 - Preserve all XML structure, indentation, and attribute quoting exactly.
 - Valid leaf node types: MoveToTreeID, SampleLeaf — and ONLY these two. Never use <Action>, <Task>, or any other tag name for a leaf.
   - MoveToTreeID attrs: name, action_name="follow_tree_id_waypoint", id (int), approach_tree (true/false)
   - SampleLeaf attrs: name, action_name="segment_leaves"
-- Valid control nodes: Sequence, Fallback, Retry (with num_cycles attr).
+- Valid control nodes: Sequence, ReactiveSequence, Fallback, RetryUntilSuccessful (with required num_attempts attr).
+- RetryUntilSuccessful may only wrap a Sequence or ReactiveSequence — never a leaf node directly. To retry a single action, wrap it: <RetryUntilSuccessful num_attempts="3"><Sequence>…the action…</Sequence></RetryUntilSuccessful>
 - If the same edit was already tried (see ## Prior attempts), try a DIFFERENT fix.
 - If the robot has low battery or a navigation failure, prefer skipping trees or \
   shortening the route over adding new steps.
@@ -235,7 +237,8 @@ class MissionPlannerNode(Node):
             "Return ONLY the corrected XML. Do not use code fences or markdown. "
             "The edited XML MUST NOT start with ``` and MUST NOT end with ```"
             "The ONLY valid leaf elements are <MoveToTreeID> and <SampleLeaf> — never <Action>, <Task>, or any other tag name."
-            "Change at most 1-3 lines from the original XML shown above."
+            "Make the smallest edit that addresses the failure; moving a step later in the plan is allowed."
+            "Prefer edits that preserve all mission objectives. Dropping a task is a last resort; reordering or retrying tasks is preferred when a failure appears temporary."
         )
         self.get_logger().info(
             f"  Calling OpenAI ({CLOUD_MODEL}) — "
