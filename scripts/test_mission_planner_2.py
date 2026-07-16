@@ -40,13 +40,14 @@ SAMPLE_XML = f"""\
 </root>"""
 
 MOCK_FAILURE = {
-    "node": "Visit_Tree_3",
+    "node": "Visit_Tree_6",
     "status": "FAILURE",
-    "timestamp_ms": int(time.time() * 1000),
+    "timestamp_ms": 0,  # set at publish time in run()
     "reason": (
-        "action server returned ABORTED — cannot approach tree 3: "
-        "a farm vehicle is temporarily parked in the approach path and is "
-        "expected to move within the hour. All other trees are unobstructed."
+        "action server returned ABORTED — no tree found at waypoint for tree ID 6: "
+        "reached the row waypoint successfully but no tree is present at this "
+        "position (tree appears to have been removed from the orchard); "
+        "tree 6 is permanently unavailable"
     ),
 }
 
@@ -74,7 +75,7 @@ class Tester(Node):
 
         time.sleep(2.0)
 
-        self.get_logger().info("Publishing mock BT failure (Visit_Tree_3, approach blocked)…")
+        self.get_logger().info("Publishing mock BT failure ")
         MOCK_FAILURE["timestamp_ms"] = int(time.time() * 1000)
         f = String()
         f.data = json.dumps(MOCK_FAILURE)
