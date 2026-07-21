@@ -42,6 +42,9 @@ from .a2a_server import ArbiterHandler
 # ---------------------------------------------------------------------------
 MAX_CHANGED_LINE_RATIO = 0.5   # reject if > 50% of lines differ from active plan
 MIN_ACCEPT_INTERVAL_SEC = 5.0  # reject if last accepted plan was < N sec ago
+MAX_DROPPED_TREES = 0          # trees the edit may drop vs. the original mission…
+PERMANENT_DROP_ALLOWANCE = 1   # …unless the failure is permanent, then allow this many
+PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist", "no tree")
 
 AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
 
@@ -54,6 +57,8 @@ class ArbiterNode(Node):
         self._lock = Lock()
 
         self.active_mission_xml: Optional[str] = None
+        self.original_objectives: Optional[set] = None  # tree set of the pristine mission
+        self._last_failure_reason: str = ""
         self._last_accept_time = 0.0
         self._publishing = False  # ignore our own /mission/xml echo
         self._last_status: Dict = {
@@ -67,6 +72,7 @@ class ArbiterNode(Node):
 
         self.create_subscription(String, "/mission/candidate_xml", self._on_candidate, 10)
         self.create_subscription(String, "/mission/xml", self._on_mission, 10)
+        self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
         self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
         self.rejection_pub = self.create_publisher(String, "/mission/rejection", 10)
 
@@ -85,10 +91,22 @@ class ArbiterNode(Node):
     # ------------------------------------------------------------------
 
     def _on_mission(self, msg: String):
-        """Track the active plan (initial mission or our own accepted edit)."""
-        if not self._publishing:
-            with self._lock:
-                self.active_mission_xml = msg.data
+        """Track the active plan, and capture the ORIGINAL mission's objective
+        tree set the first time we see a plan (before any edits)."""
+        if self._publishing:
+            return
+        with self._lock:
+            self.active_mission_xml = msg.data
+            if self.original_objectives is None:
+                try:
+                    doc = etree.fromstring(msg.data.encode("utf-8"))
+                    self.original_objectives = self._objective_tree_ids(doc)
+                    self.get_logger().info(
+                        f"Captured original mission objectives: "
+                        f"trees {sorted(self.original_objectives)}"
+                    )
+                except etree.XMLSyntaxError:
+                    pass
 
     def _on_candidate(self, msg: String):
         candidate = msg.data
@@ -121,6 +139,18 @@ class ArbiterNode(Node):
             })
             self.rejection_pub.publish(rej)
 
+    def _on_bt_failure(self, msg: String):
+        """The arbiter listens to failures only to know WHY the planner is
+        editing — used to relax the objective-preservation policy when a tree
+        is permanently unavailable."""
+        try:
+            event = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        if isinstance(event, dict):
+            with self._lock:
+                self._last_failure_reason = str(event.get("reason", ""))
+
     # ------------------------------------------------------------------
     # Checks
     # ------------------------------------------------------------------
@@ -142,8 +172,13 @@ class ArbiterNode(Node):
         ok, reason = self._check_no_orphan_sample(doc)
         if not ok:
             return False, reason
+        
+        # 4. Semantic: objective preservation vs. the original mission
+        ok, reason = self._check_objective_preserved(doc)
+        if not ok:
+            return False, reason
 
-        # 4. Edit-size limit (only when we know the active plan)
+        # 5. Semantic: edit-size limit (only when we know the active plan)
         with self._lock:
             active = self.active_mission_xml
         if active is not None:
@@ -154,7 +189,7 @@ class ArbiterNode(Node):
                     f"(limit {MAX_CHANGED_LINE_RATIO:.0%})"
                 )
 
-        # 5. Rate limit
+        # 6. Rate limit
         with self._lock:
             since = time.monotonic() - self._last_accept_time
         if self._last_accept_time > 0 and since < MIN_ACCEPT_INTERVAL_SEC:
@@ -196,6 +231,44 @@ class ArbiterNode(Node):
             return 1.0
         changed = sum(1 for line in edit_lines if line not in orig_lines)
         return changed / len(edit_lines)
+    
+
+    @staticmethod
+    def _objective_tree_ids(doc) -> set:
+        """The mission's objectives = the set of tree IDs the robot is meant to
+        approach (approach_tree="true"). Transit moves (approach_tree="false")
+        are not objectives and are ignored."""
+        ids = set()
+        for mv in doc.iter("MoveToTreeID"):
+            if mv.get("approach_tree", "").lower() == "true":
+                tid = mv.get("id")
+                if tid is not None:
+                    ids.add(tid)
+        return ids
+
+    def _check_objective_preserved(self, doc) -> Tuple[bool, str]:
+        """Reject candidates that drop more objective trees than policy allows.
+        The allowance loosens when the current failure looks permanent."""
+        with self._lock:
+            original = self.original_objectives
+            reason = self._last_failure_reason.lower()
+        if not original:
+            return True, ""  # never saw a pristine mission — nothing to compare
+
+        candidate_objs = self._objective_tree_ids(doc)
+        dropped = original - candidate_objs
+
+        allowed = MAX_DROPPED_TREES
+        if any(kw in reason for kw in PERMANENT_KEYWORDS):
+            allowed = max(allowed, PERMANENT_DROP_ALLOWANCE)
+
+        if len(dropped) > allowed:
+            return False, (
+                f"objective not preserved: candidate drops {len(dropped)} "
+                f"objective tree(s) {sorted(dropped)} vs. original mission "
+                f"{sorted(original)} (policy allows {allowed} for this failure)"
+            )
+        return True, ""
 
     # ------------------------------------------------------------------
     # XSD — same single-source-of-truth loading as the mission planner
