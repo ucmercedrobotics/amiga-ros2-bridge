@@ -52,6 +52,7 @@ LOG_WINDOW_SEC = 30.0        # rolling /rosout window kept in memory
 FAILURE_CONTEXT_SEC = 3.0    # log slice sent to LLM (±N sec around failure)
 RESULT_HISTORY_CHARS = 1000  # max chars of any single result in memory
 MAX_RETRIES = 20             # max planning attempts before giving up (= MAX_STEPS)
+MAX_REJECTION_RETRIES = 3    # max arbiter-rejection retries per single BT failure
 COMPRESS_AFTER = 3           # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 
@@ -126,8 +127,15 @@ class MissionPlannerNode(Node):
         self.create_subscription(Log, "/rosout", self._on_log, 100)
         self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
 
-        # Publisher
-        self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
+        # Publisher — candidates only; the Arbiter owns /mission/xml
+        self.mission_pub = self.create_publisher(String, "/mission/candidate_xml", 10)
+        self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
+
+        # Arbiter feedback state
+        self._rejection_retries = 0          # counts retries for the *current* BT failure
+        self._last_failure_event = None      # the event we're currently trying to fix
+        self._last_rejection_reason = None   # feedback to inject into the retry prompt
+
 
         self.get_logger().info("MissionPlannerNode started — waiting for /mission/xml")
 
@@ -183,12 +191,52 @@ class MissionPlannerNode(Node):
         # (Ollama calls can take 30-60 s)
         Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
 
+    def _on_rejection(self, msg: String):
+        """Arbiter rejected our last candidate — retry with the reason as feedback,bounded by MAX_REJECTION_RETRIES per BT failure."""
+        try:
+            rejection = json.loads(msg.data)
+            
+        except json.JSONDecodeError:
+            self.get_logger().error("Could not parse /mission/rejection payload")
+            return
+
+        reason = rejection.get("reason", "unknown")
+
+        with self._lock:
+            # Correct the memory record — this edit was never actually published
+            if self.memory:
+                self.memory[-1]["outcome"] = f"rejected by arbiter: {reason}"
+
+            event = self._last_failure_event
+            if event is None:
+                return  # nothing to retry
+
+            if self._rejection_retries >= MAX_REJECTION_RETRIES:
+                self.get_logger().error(
+                    f"Arbiter rejected {MAX_REJECTION_RETRIES} candidates for "
+                    f"node '{event.get('node')}' — giving up on this failure"
+                )
+                self._last_status["last_edit_summary"] = (
+                    f"gave up after {MAX_REJECTION_RETRIES} rejections: {reason}"
+                )
+                return
+
+            self._rejection_retries += 1
+            self._last_rejection_reason = reason
+            attempt = self._rejection_retries
+
+        self.get_logger().warn(
+            f"Candidate rejected ({reason}) — retry {attempt}/{MAX_REJECTION_RETRIES}"
+        )
+        Thread(target=self._run_planner, args=(event, []), daemon=True).start()
+
+
     # ------------------------------------------------------------------
     # Planner
     # ------------------------------------------------------------------
 
     def _run_planner(self, event: Dict, log_context: List[Dict]):
-        """One planning session: fetch context → call LLM → publish edit."""
+        """One planning session: fetch context → call LLM → publish candidate."""
         with self._lock:
             xml = self.current_mission_xml
             sessions_done = self._last_status["sessions"]
@@ -201,12 +249,21 @@ class MissionPlannerNode(Node):
             self.get_logger().warn(f"Reached MAX_RETRIES ({MAX_RETRIES}) — no more replanning")
             return
 
+        # Track which failure this session addresses. A genuinely new failure
+        # (different node) resets the arbiter-rejection counter.
+        with self._lock:
+            prev = self._last_failure_event
+            if prev is None or prev.get("node") != event.get("node"):
+                self._rejection_retries = 0
+                self._last_rejection_reason = None
+            self._last_failure_event = event
+
         self.get_logger().info(_box(f"Mission Planner — session {sessions_done + 1}"))
 
         # 1. Fetch world state
         world_state = self._fetch_world_state()
 
-        # 2. Compact memory relevant to this failure node (last COMPRESS_AFTER entries)
+        # 2. Compact memory relevant to this failure node
         failure_node = event.get("node", "unknown")
         relevant = [m for m in self.memory if m["event"].get("node") == failure_node]
         memory_summary = [
@@ -218,12 +275,23 @@ class MissionPlannerNode(Node):
             for i, m in enumerate(relevant[-COMPRESS_AFTER:])
         ]
 
-        # 3. Build prompt (same field order as amiga_ros2_agents initial_user)
+        # 3. Build prompt
         log_excerpt = json.dumps(log_context, indent=2)
         if len(log_excerpt) > RESULT_HISTORY_CHARS:
             log_excerpt = log_excerpt[:RESULT_HISTORY_CHARS] + "\n… [truncated]"
 
+        with self._lock:
+            rejection_note = self._last_rejection_reason
+        rejection_block = ""
+        if rejection_note:
+            rejection_block = (
+                f"## IMPORTANT: your previous candidate was REJECTED by the arbiter\n"
+                f"Reason: {rejection_note}\n"
+                f"Produce a DIFFERENT edit that fixes this specific problem.\n\n"
+            )
+
         prompt = (
+            f"{rejection_block}"
             f"## Failure event\n{json.dumps(event, indent=2)}\n\n"
             f"## Active mission XML\n{xml}\n\n"
             f"## Mission XML Schema (XSD) — the edit MUST validate against this\n"
@@ -237,11 +305,11 @@ class MissionPlannerNode(Node):
             "Return ONLY the corrected XML. Do not use code fences or markdown. "
             "The edited XML MUST NOT start with ``` and MUST NOT end with ```"
             "The ONLY valid leaf elements are <MoveToTreeID> and <SampleLeaf> — never <Action>, <Task>, or any other tag name."
-            "Make the smallest edit that addresses the failure; moving a step later in the plan is allowed."
-            "Prefer edits that preserve all mission objectives. Dropping a task is a last resort; reordering or retrying tasks is preferred when a failure appears temporary."
+            "Change at most 1-3 lines from the original XML shown above."
         )
+
         self.get_logger().info(
-            f"  Calling OpenAI ({CLOUD_MODEL}) — "
+            f"  Calling Cloud Model ({CLOUD_MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries"
         )
 
@@ -249,12 +317,12 @@ class MissionPlannerNode(Node):
         try:
             edited_xml = self._call_openai(prompt)
         except Exception as exc:
-             self.get_logger().error(f"  LLM call failed: {exc}")
-             return  
+            self.get_logger().error(f"  LLM call failed: {exc}")
+            return
 
         edited_xml = _strip_code_fence(edited_xml)
 
-        # 5. Validate the response against the real BT.CPP XSD
+        # 5. Validate against the real BT.CPP XSD
         is_valid, xsd_error = self._validate_xml(edited_xml)
         if not is_valid:
             self.get_logger().error(
@@ -270,27 +338,24 @@ class MissionPlannerNode(Node):
             f"  Edit: {textwrap.shorten(edit_summary, 120, placeholder='…')}"
         )
 
-        # 7. Publish
+        # 7. Publish candidate to the Arbiter
         out_msg = String()
         out_msg.data = edited_xml
-        self._republishing = True
         self.mission_pub.publish(out_msg)
-        self._republishing = False
-        self.get_logger().info("  Published edited mission XML to /mission/xml")
+        self.get_logger().info("  Published candidate XML to /mission/candidate_xml")
 
         # 8. Store in memory and update status
         with self._lock:
             self.memory.append({
                 "event": event,
                 "edit_summary": edit_summary,
-                "outcome": "published",
+                "outcome": "submitted",
             })
             self._last_status["sessions"] += 1
             self._last_status["last_event"] = event
             self._last_status["last_edit_summary"] = edit_summary
 
         self.get_logger().info("─" * 60)
-
     # ------------------------------------------------------------------
     # World state client — identical SSE pattern from test_llm_world_state.py
     # ------------------------------------------------------------------
