@@ -44,7 +44,7 @@ MAX_CHANGED_LINE_RATIO = 0.5   # reject if > 50% of lines differ from active pla
 MIN_ACCEPT_INTERVAL_SEC = 5.0  # reject if last accepted plan was < N sec ago
 MAX_DROPPED_TREES = 0          # trees the edit may drop vs. the original mission…
 PERMANENT_DROP_ALLOWANCE = 1   # …unless the failure is permanent, then allow this many
-PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist", "no tree")
+PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
 
