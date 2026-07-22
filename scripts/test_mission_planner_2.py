@@ -44,9 +44,9 @@ def _missing_tree_failure(tree_id: int) -> dict:
         "status": "FAILURE",
         "timestamp_ms": 0,  # set at publish time
         "reason": (
-            f"action server returned ABORTED — no tree found at waypoint for "
-            f"tree ID {tree_id}: reached the row waypoint successfully but no "
-            f"tree is present at this position "
+            f"action server returned ABORTED — no tree detected at waypoint for tree ID {tree_id}. "
+            f"Cause unknown: could be a sensor miss, temporary gap, or a spot being replanted. "
+            f"Tree may be present on a later pass."
         ),
     }
 
