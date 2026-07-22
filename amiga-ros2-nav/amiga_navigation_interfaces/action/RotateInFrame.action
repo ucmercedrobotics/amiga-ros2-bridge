@@ -1,0 +1,11 @@
+# Goal
+# Yaw in radians. If absolute is false, yaw is relative to current heading.
+float32 yaw
+bool absolute
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 yaw_remaining
