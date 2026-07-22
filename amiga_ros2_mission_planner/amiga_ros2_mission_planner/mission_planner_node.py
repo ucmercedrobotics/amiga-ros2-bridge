@@ -2,15 +2,16 @@
 mission_planner_node.py
 
 ROS2 mission planner that:
-- Subscribes to /mission/xml, /rosout, /bt/status_change
+- Subscribes to /mission/xml, /rosout, /bt/status_change, /mission/rejection, /mission/abort
 - On BT failure: fetches last 3 world-state frames + log context
-- Calls OpenAI's gpt-4o to edit the XML plan by 1-3 lines
-- Republishes the edited XML to /mission/xml
+- Calls a cloud LLM (gpt-4o via litellm) to edit the XML plan by 1-4 lines
+- Publishes the edit as a CANDIDATE to /mission/candidate_xml (the Arbiter gates it)
+- On arbiter rejection: retries with the reason as feedback (bounded)
+- On arbiter abort: halts replanning for the rest of the mission
 - Keeps a compact memory of prior attempts (same limits as amiga_ros2_agents)
 
 Edits are validated against the real BT.CPP XSD (amiga_ros2_behavior_tree's
-installed schemas/amiga_btcpp.xsd) before being published — an invalid
-edit is dropped rather than sent to the robot.
+installed schemas/amiga_btcpp.xsd) before being submitted.
 
 Also serves a lightweight A2A status endpoint on port 10001.
 """
@@ -126,16 +127,17 @@ class MissionPlannerNode(Node):
         self.create_subscription(String, "/mission/xml", self._on_mission, 10)
         self.create_subscription(Log, "/rosout", self._on_log, 100)
         self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
+        self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
+        self.create_subscription(String, "/mission/abort", self._on_abort, 10)
 
         # Publisher — candidates only; the Arbiter owns /mission/xml
         self.mission_pub = self.create_publisher(String, "/mission/candidate_xml", 10)
-        self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
 
         # Arbiter feedback state
         self._rejection_retries = 0          # counts retries for the *current* BT failure
         self._last_failure_event = None      # the event we're currently trying to fix
         self._last_rejection_reason = None   # feedback to inject into the retry prompt
-
+        self._mission_aborted = False        # set when arbiter declares non-viable
 
         self.get_logger().info("MissionPlannerNode started — waiting for /mission/xml")
 
@@ -174,10 +176,19 @@ class MissionPlannerNode(Node):
             ]
 
     def _on_bt_failure(self, msg: String):
+        if self._mission_aborted:
+            self.get_logger().warn("Mission aborted — ignoring further BT failures")
+            return
         try:
             event = json.loads(msg.data)
         except json.JSONDecodeError:
             self.get_logger().error("Could not parse /bt/status_change payload")
+            return
+
+        if not isinstance(event, dict):
+            self.get_logger().error(
+                f"/bt/status_change payload must be a JSON object, got {type(event).__name__}"
+            )
             return
 
         failure_sec = event.get("timestamp_ms", 0) / 1000.0
@@ -188,14 +199,13 @@ class MissionPlannerNode(Node):
             ]
 
         # Run planner in a background thread so the spin loop stays responsive
-        # (Ollama calls can take 30-60 s)
         Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
 
     def _on_rejection(self, msg: String):
-        """Arbiter rejected our last candidate — retry with the reason as feedback,bounded by MAX_REJECTION_RETRIES per BT failure."""
+        """Arbiter rejected our last candidate — retry with the reason as feedback,
+        bounded by MAX_REJECTION_RETRIES per BT failure."""
         try:
             rejection = json.loads(msg.data)
-            
         except json.JSONDecodeError:
             self.get_logger().error("Could not parse /mission/rejection payload")
             return
@@ -208,7 +218,7 @@ class MissionPlannerNode(Node):
                 self.memory[-1]["outcome"] = f"rejected by arbiter: {reason}"
 
             event = self._last_failure_event
-            if event is None:
+            if event is None or self._mission_aborted:
                 return  # nothing to retry
 
             if self._rejection_retries >= MAX_REJECTION_RETRIES:
@@ -230,6 +240,22 @@ class MissionPlannerNode(Node):
         )
         Thread(target=self._run_planner, args=(event, []), daemon=True).start()
 
+    def _on_abort(self, msg: String):
+        """Arbiter declared the mission non-viable — stop replanning entirely.
+        Clearing _last_failure_event makes any in-flight rejection a no-op."""
+        try:
+            info = json.loads(msg.data)
+        except json.JSONDecodeError:
+            info = {}
+        reason = info.get("reason", "unknown")
+        with self._lock:
+            self._last_failure_event = None
+            self._rejection_retries = 0
+            self._mission_aborted = True
+            self._last_status["last_edit_summary"] = f"MISSION ABORTED: {reason}"
+        self.get_logger().error(
+            f"Mission aborted by arbiter — {reason}. Halting replanning."
+        )
 
     # ------------------------------------------------------------------
     # Planner
@@ -240,6 +266,10 @@ class MissionPlannerNode(Node):
         with self._lock:
             xml = self.current_mission_xml
             sessions_done = self._last_status["sessions"]
+            aborted = self._mission_aborted
+
+        if aborted:
+            return
 
         if xml is None:
             self.get_logger().warn("No mission XML yet — skipping replan")
@@ -305,7 +335,7 @@ class MissionPlannerNode(Node):
             "Return ONLY the corrected XML. Do not use code fences or markdown. "
             "The edited XML MUST NOT start with ``` and MUST NOT end with ```"
             "The ONLY valid leaf elements are <MoveToTreeID> and <SampleLeaf> — never <Action>, <Task>, or any other tag name."
-            "Change at most 1-3 lines from the original XML shown above."
+            "Make the smallest edit that addresses the failure — typically 1-4 lines from the original XML shown above."
         )
 
         self.get_logger().info(
@@ -356,6 +386,7 @@ class MissionPlannerNode(Node):
             self._last_status["last_edit_summary"] = edit_summary
 
         self.get_logger().info("─" * 60)
+
     # ------------------------------------------------------------------
     # World state client — identical SSE pattern from test_llm_world_state.py
     # ------------------------------------------------------------------
@@ -403,7 +434,6 @@ class MissionPlannerNode(Node):
     # ------------------------------------------------------------------
     # LLM client
     # ------------------------------------------------------------------
-    # 
 
     def _call_openai(self, prompt: str) -> str:
         messages = [
@@ -505,6 +535,7 @@ def _summarize_edit(original: str, edited: str) -> str:
     if len(edit_lines) != len(orig_lines):
         changes.append(f"line count {len(orig_lines)} → {len(edit_lines)}")
     return "; ".join(changes[:3]) if changes else "no visible change"
+
 
 def _strip_code_fence(text: str) -> str:
     """Remove a leading/trailing markdown code fence if the LLM added one anyway."""

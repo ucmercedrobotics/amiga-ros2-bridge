@@ -34,6 +34,7 @@ from ament_index_python.packages import get_package_share_directory
 from lxml import etree
 from rclpy.node import Node
 from std_msgs.msg import String
+from dotenv import load_dotenv
 
 from litellm import completion
 
@@ -55,7 +56,10 @@ PERMANENT_DROP_ALLOWANCE = 1   # extra NEW drops allowed when the failure is per
 PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 DEFAULT_VIABILITY_BUDGET = 2   # fallback total-drop budget if the model call fails
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
+CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
+
+load_dotenv(ENV_FILE_PATH)
 
 VIABILITY_SYSTEM = (
     "You assess agricultural mission viability. Given a mission and its target "
@@ -206,13 +210,13 @@ class ArbiterNode(Node):
         )
         try:
             cmp = completion(
-                model=OPENAI_MODEL,
+                model=CLOUD_MODEL,
                 messages=[
                     {"role": "system", "content": VIABILITY_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.0,
-                max_tokens=10,
+                temperature= 0.1,
+                max_tokens= 10,
             )
             text = cmp.choices[0].message.content.strip()
             n = int("".join(c for c in text if c.isdigit()))
