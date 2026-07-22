@@ -32,3 +32,6 @@ COPY manifests/ /manifests/
 RUN rosdep install --from-paths /manifests --ignore-src -r -y
 
 RUN echo "source ${WORKSPACE_ROOT}/install/setup.bash" >> /root/.bashrc
+
+COPY cyclonedds.xml /amiga-ros2-bridge/cyclonedds.xml
+ENV CYCLONEDDS_URI=file:///amiga-ros2-bridge/cyclonedds.xml
