@@ -1,12 +1,72 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
+
+
+def _p(ns, topic):
+    """Absolute topic name, namespaced under `ns` (ns="" leaves it unchanged)."""
+    topic = topic.lstrip("/")
+    return f"/{ns}/{topic}" if ns else f"/{topic}"
+
+
+def launch_setup(context, *args, **kwargs):
+    ns = LaunchConfiguration("namespace").perform(context)
+
+    return [
+        Node(
+            package="joint_state_publisher",
+            executable="joint_state_publisher",
+            name="joint_state_publisher",
+            namespace=ns,
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("publish_joints")),
+        ),
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            name="robot_state_publisher",
+            namespace=ns,
+            output="screen",
+            parameters=[
+                {
+                    "robot_description": ParameterValue(
+                        Command(
+                            [
+                                "xacro ",
+                                LaunchConfiguration("urdf"),
+                                " use_lidar:=",
+                                LaunchConfiguration("use_lidar"),
+                                " gps_link_name:=",
+                                LaunchConfiguration("gps_link_name"),
+                                " use_vectornav:=",
+                                LaunchConfiguration("use_vectornav"),
+                            ]
+                        ),
+                        value_type=str,
+                    )
+                }
+            ],
+            # tf2_ros hardcodes /tf, /tf_static as absolute regardless of
+            # node namespace (same quirk already handled elsewhere in this
+            # namespacing pass) — without this remap, robot_state_publisher
+            # keeps broadcasting the URDF's static transforms to the global
+            # root /tf_static for EVERY robot, so a namespaced robot's own
+            # /<ns>/tf_static stays empty and anything needing its static
+            # frames (e.g. EKF resolving an IMU frame into base_link) never
+            # gets them.
+            remappings=[
+                ("joint_states", LaunchConfiguration("joint_states_topic")),
+                ("/tf", _p(ns, "tf")),
+                ("/tf_static", _p(ns, "tf_static")),
+            ],
+        ),
+    ]
 
 
 def generate_launch_description():
@@ -43,40 +103,11 @@ def generate_launch_description():
                 default_value="/joint_states",
                 description="Joint-state topic for robot_state_publisher",
             ),
-            Node(
-                package="joint_state_publisher",
-                executable="joint_state_publisher",
-                name="joint_state_publisher",
-                output="screen",
-                condition=IfCondition(LaunchConfiguration("publish_joints")),
+            DeclareLaunchArgument(
+                name="namespace",
+                default_value="",
+                description="ROS namespace for the RSP/JSP nodes (per-robot, e.g. 'amiga1')",
             ),
-            Node(
-                package="robot_state_publisher",
-                executable="robot_state_publisher",
-                name="robot_state_publisher",
-                output="screen",
-                parameters=[
-                    {
-                        "robot_description": ParameterValue(
-                            Command(
-                                [
-                                    "xacro ",
-                                    LaunchConfiguration("urdf"),
-                                    " use_lidar:=",
-                                    LaunchConfiguration("use_lidar"),
-                                    " gps_link_name:=",
-                                    LaunchConfiguration("gps_link_name"),
-                                    " use_vectornav:=",
-                                    LaunchConfiguration("use_vectornav"),
-                                ]
-                            ),
-                            value_type=str,
-                        )
-                    }
-                ],
-                remappings=[
-                    ("joint_states", LaunchConfiguration("joint_states_topic")),
-                ],
-            ),
+            OpaqueFunction(function=launch_setup),
         ]
     )

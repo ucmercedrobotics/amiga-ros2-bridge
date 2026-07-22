@@ -9,6 +9,20 @@ the SAME launch files the real robot uses (see scripts/bringup_amiga_tmux.sh),
 with use_sim_time forced true for the whole tree.
 
 The real-robot bringup path is untouched.
+
+Two robots are spawned in Gazebo (see gazebo.launch.py): robot1 is the
+original, completely unnamespaced instance; robot2 (namespaced under the
+`robot2_name` arg, default "amiga2") is a second, fully independent robot —
+base, arm, localization (wheel odom + dual EKF + navsat), and Nav2 (own
+`/<robot2_name>/navigate_to_pose` action server), all under its own
+namespace (see amiga_localization/bringup.launch.py and
+amiga_navigation/navigation.launch.py for how those two — living in the
+amiga-ros2-nav submodule — were made namespace-safe). The custom
+mission/behavior-tree layer (amiga_ros2_behavior_tree: bt_runner,
+waypoint_follower/linear_velo/lidar_object_navigator helpers,
+orchard_management) stays single-instance, wired to robot1 only — those
+still hardcode several absolute topic/action/service names (and one raw TCP
+port) in their own submodules, out of scope here.
 """
 
 import os
@@ -17,10 +31,9 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    GroupAction,
     IncludeLaunchDescription,
+    OpaqueFunction,
 )
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
@@ -35,92 +48,171 @@ def _include(package, launch_file, **launch_args):
     )
 
 
-def generate_launch_description():
+def launch_setup(context, *args, **kwargs):
+    world = LaunchConfiguration("world")
+    headless = LaunchConfiguration("headless")
     use_lidar = LaunchConfiguration("use_lidar")
     use_gps = LaunchConfiguration("use_gps")
-    launch_nav = LaunchConfiguration("launch_nav")
-    launch_arm = LaunchConfiguration("launch_arm")
-    launch_helpers = LaunchConfiguration("launch_helpers")
-    launch_bt = LaunchConfiguration("launch_bt")
+    launch_rviz = LaunchConfiguration("launch_rviz")
     yaw_offset = LaunchConfiguration("yaw_offset")
+    robot2_name = LaunchConfiguration("robot2_name").perform(context)
 
-    sim_stack = GroupAction(
-        actions=[
-            # Force sim clock on every node started below (includes too).
-            SetParameter(name="use_sim_time", value=True),
-            # ── Hardware layer replacement ──────────────────────────────
+    launch_nav = LaunchConfiguration("launch_nav").perform(context).lower() == "true"
+    launch_arm = LaunchConfiguration("launch_arm").perform(context).lower() == "true"
+    launch_helpers = (
+        LaunchConfiguration("launch_helpers").perform(context).lower() == "true"
+    )
+    launch_bt = LaunchConfiguration("launch_bt").perform(context).lower() == "true"
+
+    actions = [
+        # Force sim clock on every node started below (includes too).
+        SetParameter(name="use_sim_time", value=True),
+        # ── Hardware layer replacement: spawns BOTH robot1 (unnamespaced)
+        # and robot2 (namespaced under robot2_name) — see gazebo.launch.py.
+        _include(
+            "amiga_ros2_gazebo",
+            "gazebo.launch.py",
+            world=world,
+            headless=headless,
+            robot2_name=robot2_name,
+        ),
+        _include(
+            "amiga_ros2_gazebo",
+            "sim_hardware_shims.launch.py",
+            robot2_name=robot2_name,
+        ),
+        # ── robot1: identical-to-hardware stack (unchanged) ─────────────
+        # publish_joints:=false because the joint_state_broadcaster is the
+        # source, filtered to base joints.
+        Node(
+            package="amiga_ros2_gazebo",
+            executable="sim_joint_state_filter.py",
+            name="amiga_base_joint_state_filter",
+            output="screen",
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    "input_topic": "/joint_states",
+                    "mode": "amiga",
+                }
+            ],
+        ),
+        _include(
+            "amiga_ros2_description",
+            "urdf.launch.py",
+            publish_joints="false",
+            namespace="",
+            joint_states_topic="/amiga/joint_states",
+            use_lidar=use_lidar,
+            gps_link_name="gps_antenna",
+            use_vectornav="false",
+        ),
+        # Localization: wheel odometry + dual EKF + navsat (unchanged,
+        # robot1 only — see module docstring).
+        _include(
+            "amiga_localization",
+            "bringup.launch.py",
+            use_vectornav="false",
+            use_gps=use_gps,
+            gps_topic="/gps/pvt",
+            namespace="",
+        ),
+        # ── robot2: base description/TF (own namespace) ──────────────────
+        # Localization/Nav2 for robot2 are included further below, gated by
+        # launch_nav (same flag as robot1's), not here — this block only
+        # covers the always-on base description/TF layer.
+        Node(
+            package="amiga_ros2_gazebo",
+            executable="sim_joint_state_filter.py",
+            name="amiga_base_joint_state_filter",
+            namespace=robot2_name,
+            output="screen",
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    "input_topic": f"/{robot2_name}/joint_states",
+                    "mode": "amiga",
+                }
+            ],
+            remappings=[
+                ("/amiga/joint_states", f"/{robot2_name}/amiga/joint_states"),
+            ],
+        ),
+        _include(
+            "amiga_ros2_description",
+            "urdf.launch.py",
+            publish_joints="false",
+            namespace=robot2_name,
+            joint_states_topic=f"/{robot2_name}/amiga/joint_states",
+            use_lidar=use_lidar,
+            gps_link_name="gps_antenna",
+            use_vectornav="false",
+        ),
+    ]
+
+    if launch_nav:
+        actions.append(
             _include(
-                "amiga_ros2_gazebo",
-                "gazebo.launch.py",
-                world=LaunchConfiguration("world"),
-                headless=LaunchConfiguration("headless"),
-            ),
-            _include("amiga_ros2_gazebo", "sim_hardware_shims.launch.py"),
-            Node(
-                package="amiga_ros2_gazebo",
-                executable="sim_joint_state_filter.py",
-                name="amiga_base_joint_state_filter",
-                output="screen",
-                parameters=[
-                    {
-                        "use_sim_time": True,
-                        "input_topic": "/joint_states",
-                        "mode": "amiga",
-                    }
-                ],
-            ),
-            # ── Identical-to-hardware stack ─────────────────────────────
-            # Robot description / TF (base). publish_joints:=false because
-            # the joint_state_broadcaster is the source, filtered to base joints.
-            _include(
-                "amiga_ros2_description",
-                "urdf.launch.py",
-                publish_joints="false",
-                joint_states_topic="/amiga/joint_states",
-                use_lidar=use_lidar,
-                gps_link_name="gps_antenna",
-                use_vectornav="false",
-            ),
-            # Localization: wheel odometry + dual EKF + navsat (unchanged).
+                "amiga_navigation",
+                "navigation.launch.py",
+                use_sim_time="True",
+                # Explicit, not omitted: LaunchConfiguration("namespace") is
+                # global across the whole launch tree, not scoped per
+                # include — omitting this would let robot2's includes (which
+                # set it explicitly) leak into robot1's stack depending on
+                # action ordering. Always pass it explicitly at every call
+                # site that reaches a file declaring a "namespace" arg.
+                namespace="",
+            )
+        )
+        # robot2's own localization (wheel odom + dual EKF + navsat) and
+        # Nav2 stack, fully namespaced — see amiga_localization/bringup.launch.py
+        # and amiga_navigation/navigation.launch.py for the namespacing details.
+        actions.append(
             _include(
                 "amiga_localization",
                 "bringup.launch.py",
                 use_vectornav="false",
                 use_gps=use_gps,
-                gps_topic="/gps/pvt",
-            ),
-        ]
-    )
-
-    nav_stack = GroupAction(
-        condition=IfCondition(launch_nav),
-        actions=[
-            SetParameter(name="use_sim_time", value=True),
+                gps_topic=f"/{robot2_name}/gps/pvt",
+                namespace=robot2_name,
+            )
+        )
+        actions.append(
             _include(
                 "amiga_navigation",
                 "navigation.launch.py",
                 use_sim_time="True",
-            ),
-        ],
-    )
+                namespace=robot2_name,
+            )
+        )
 
-    arm_stack = GroupAction(
-        condition=IfCondition(launch_arm),
-        actions=[
-            SetParameter(name="use_sim_time", value=True),
+    if launch_arm:
+        # robot1's arm (also the only instance carrying kortex_move's
+        # `moveto` node, see sim_arm.launch.py). robot_name explicit for the
+        # same reason as the "namespace" args above.
+        actions.append(
             _include(
                 "amiga_ros2_gazebo",
                 "sim_arm.launch.py",
-                launch_rviz=LaunchConfiguration("launch_rviz"),
-            ),
-        ],
-    )
+                launch_rviz=launch_rviz,
+                robot_name="",
+            )
+        )
+        # robot2's arm, fully namespaced, controllable via its own
+        # move_group (no `moveto` wrapper — see sim_arm.launch.py).
+        actions.append(
+            _include(
+                "amiga_ros2_gazebo",
+                "sim_arm.launch.py",
+                launch_rviz=launch_rviz,
+                robot_name=robot2_name,
+            )
+        )
 
-    # Optional helper nodes mirroring the production tmux session.
-    helpers = GroupAction(
-        condition=IfCondition(launch_helpers),
-        actions=[
-            SetParameter(name="use_sim_time", value=True),
+    # Optional helper nodes mirroring the production tmux session (robot1 only).
+    if launch_helpers:
+        actions += [
             Node(
                 package="amiga_navigation",
                 executable="waypoint_follower.py",
@@ -160,17 +252,15 @@ def generate_launch_description():
                     }
                 ],
             ),
-        ],
-    )
+        ]
 
-    bt_stack = GroupAction(
-        condition=IfCondition(launch_bt),
-        actions=[
-            SetParameter(name="use_sim_time", value=True),
-            _include("amiga_ros2_behavior_tree", "bt.launch.py"),
-        ],
-    )
+    if launch_bt:
+        actions.append(_include("amiga_ros2_behavior_tree", "bt.launch.py"))
 
+    return actions
+
+
+def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -194,16 +284,17 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
             DeclareLaunchArgument(
+                "robot2_name",
+                default_value="amiga2",
+                description="Spawn name / ROS namespace for the second robot",
+            ),
+            DeclareLaunchArgument(
                 "yaw_offset",
                 default_value="0.0",
                 description="Heading offset for waypoint helpers; sim GPS/IMU "
                 "are ENU-consistent so 0.0 (production uses 1.57 for the real "
                 "compass mounting)",
             ),
-            sim_stack,
-            nav_stack,
-            arm_stack,
-            helpers,
-            bt_stack,
+            OpaqueFunction(function=launch_setup),
         ]
     )

@@ -547,6 +547,11 @@
         <geometry><box><size>2 2 2</size></box></geometry>
       </performer>
 
+      <performer name="perf_amiga2">
+        <ref>amiga2</ref>
+        <geometry><box><size>2 2 2</size></box></geometry>
+      </performer>
+
       <level name="level_alley_south">
         <pose>11.00 -3.00 1.5 0 0 0</pose>
         <geometry><box><size>32 8 10</size></box></geometry>

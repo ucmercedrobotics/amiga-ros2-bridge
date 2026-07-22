@@ -2,18 +2,27 @@
 
 Identical to the hardware launch except:
   * NO ros2_control_node — the ign_ros2_control plugin inside Gazebo already
-    provides the root-namespace /controller_manager, and the controllers
-    (joint_trajectory_controller, robotiq_gripper_controller) are spawned by
-    gazebo.launch.py with the same names as on the real robot.
+    provides a per-robot /<robot_name>/controller_manager, and the
+    controllers (joint_trajectory_controller, robotiq_gripper_controller)
+    are spawned by gazebo.launch.py with the same names as on the real robot.
     * NO fault_controller / twist_controller (kortex hardware only). The
         KinovaCommandVelocity action is therefore unavailable in simulation;
         MoveTo (move_group / pilz) and the gripper action work unchanged.
-    * A sim-only joint-state filter republishes /kinova/joint_states from the
-        Gazebo joint-state stream, so MoveIt never sees the Amiga wheel joints.
+    * A sim-only joint-state filter republishes /<robot_name>/kinova/joint_states
+        from the Gazebo joint-state stream, so MoveIt never sees the Amiga
+        wheel joints.
 
-move_group and the kinova robot_state_publisher follow the hardware launch
-semantics (same /kinova/* remappings), so kortex_move nodes (moveto,
-kinova_motion_server, BT actions) run unchanged.
+Everything in this file (move_group, kinova robot_state_publisher,
+joint_state_filter, rviz) is namespaced under the `robot_name` launch
+argument (empty = unnamespaced, the original single-robot layout), so it can
+be instantiated once per robot (see sim_bringup.launch.py). The `moveto`
+convenience action server is the one exception: kortex_move (a separate
+git submodule, out of scope for this phase) hardcodes its action/service
+names (`/move_to`, `/gripper_control`, ...) as absolute, so two instances
+would collide regardless of node namespace — it is only launched for the
+unnamespaced (robot1) instance. A namespaced robot's arm is still fully
+controllable via its own move_group (MoveGroupInterface / RViz MotionPlanning
+panel), just not through this repo's `moveto` wrapper.
 """
 import os
 
@@ -28,14 +37,28 @@ from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
+def _p(ns, path):
+    """Absolute name, namespaced under `ns` (ns="" leaves it unchanged)."""
+    path = path.lstrip("/")
+    return f"/{ns}/{path}" if ns else f"/{path}"
+
+
 def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     launch_moveto = LaunchConfiguration("launch_moveto")
+    ns = LaunchConfiguration("robot_name").perform(context)
     use_sim_time = {"use_sim_time": True}
 
+    # Relative "from" patterns (not "/joint_states") so the remap matches
+    # regardless of this node's own namespace: move_group/RSP subscribe to
+    # the RELATIVE topic "joint_states", which resolves to /joint_states
+    # only when ns="" (robot1) — for a namespaced robot it resolves to
+    # /<ns>/joint_states BEFORE remapping, so an absolute "from" pattern
+    # would silently never match and these nodes would read the raw,
+    # unfiltered base+arm stream instead of the kinova-filtered one.
     kinova_remappings = [
-        ("/joint_states", "/kinova/joint_states"),
-        ("/robot_description", "/kinova/robot_description"),
+        ("joint_states", _p(ns, "kinova/joint_states")),
+        ("robot_description", _p(ns, "kinova/robot_description")),
     ]
 
     # Same description/mappings as kortex_move robot.launch.py, but with fake
@@ -76,6 +99,7 @@ def launch_setup(context, *args, **kwargs):
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
+        namespace=ns,
         output="screen",
         parameters=[moveit_config.to_dict(), kinematics_yaml, use_sim_time],
         remappings=kinova_remappings,
@@ -85,6 +109,7 @@ def launch_setup(context, *args, **kwargs):
         package="robot_state_publisher",
         executable="robot_state_publisher",
         name="kinova_robot_state_publisher",
+        namespace=ns,
         output="both",
         parameters=[moveit_config.robot_description, use_sim_time],
         remappings=kinova_remappings,
@@ -95,18 +120,15 @@ def launch_setup(context, *args, **kwargs):
         package="amiga_ros2_gazebo",
         executable="sim_joint_state_filter.py",
         name="kinova_joint_state_filter",
-        parameters=[use_sim_time, {"input_topic": "/joint_states", "mode": "kinova"}],
+        namespace=ns,
+        parameters=[
+            use_sim_time,
+            {"input_topic": _p(ns, "joint_states"), "mode": "kinova"},
+        ],
+        remappings=[
+            ("/kinova/joint_states", _p(ns, "kinova/joint_states")),
+        ],
         output="screen",
-    )
-
-    moveto_node = Node(
-        package="kortex_move",
-        executable="moveto",
-        name="moveto",
-        output="screen",
-        parameters=[use_sim_time],
-        remappings=kinova_remappings,
-        condition=IfCondition(launch_moveto),
     )
 
     rviz_config_file = (
@@ -118,6 +140,7 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(launch_rviz),
         executable="rviz2",
         name="rviz2_moveit",
+        namespace=ns,
         output="log",
         arguments=["-d", rviz_config_file],
         parameters=[
@@ -129,13 +152,24 @@ def launch_setup(context, *args, **kwargs):
         remappings=kinova_remappings,
     )
 
-    return [
-        robot_state_publisher,
-        joint_state_filter,
-        move_group_node,
-        moveto_node,
-        rviz_node,
-    ]
+    actions = [robot_state_publisher, joint_state_filter, move_group_node, rviz_node]
+
+    # kortex_move's moveto hardcodes /move_to, /gripper_control absolute —
+    # only safe to run once, on the unnamespaced (robot1) instance.
+    if not ns:
+        actions.append(
+            Node(
+                package="kortex_move",
+                executable="moveto",
+                name="moveto",
+                output="screen",
+                parameters=[use_sim_time],
+                remappings=kinova_remappings,
+                condition=IfCondition(launch_moveto),
+            )
+        )
+
+    return actions
 
 
 def generate_launch_description():
@@ -146,6 +180,13 @@ def generate_launch_description():
                 "launch_moveto",
                 default_value="true",
                 description="Start the kortex_move moveto node (as in production tmux)",
+            ),
+            DeclareLaunchArgument(
+                "robot_name",
+                default_value="",
+                description="Namespace for this robot's arm stack (move_group, "
+                "kinova RSP, joint_state_filter). Empty = unnamespaced (robot1, "
+                "also the only instance that gets the kortex_move `moveto` node).",
             ),
             OpaqueFunction(function=launch_setup),
         ]
