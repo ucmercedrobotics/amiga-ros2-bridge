@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def _p(ns, topic):
+def qualify_ros(ns, topic):
     """Absolute topic name, namespaced under `ns` (ns="" leaves it unchanged)."""
     topic = topic.lstrip("/")
     return f"/{ns}/{topic}" if ns else f"/{topic}"
@@ -25,19 +25,18 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # tf2_ros hardcodes /tf, /tf_static as absolute regardless of node
-    # namespace, so both EKF publish_tf:true nodes need an explicit remap
-    # (same quirk already handled for the sim side in amiga_ros2_gazebo).
-    # imu0 (/bno085/imu or /vectornav/imu) is baked into the yaml as an
-    # absolute string, but ROS 2 remap rules match the resolved runtime
-    # topic name regardless of whether it came from a param or a literal,
-    # so remapping it here still works.
+    # namespace, so both EKF publish_tf:true nodes need an explicit remap.
+    # imu0 (/bno085/imu or /vectornav/imu) is an absolute string baked into
+    # the yaml, but remap rules match the resolved runtime topic name
+    # regardless of whether it came from a param or a literal, so remapping
+    # it here still works.
     tf_remaps = [
-        ("/tf", _p(ns, "tf")),
-        ("/tf_static", _p(ns, "tf_static")),
+        ("/tf", qualify_ros(ns, "tf")),
+        ("/tf_static", qualify_ros(ns, "tf_static")),
     ]
     imu_remaps = [
-        ("/bno085/imu", _p(ns, "bno085/imu")),
-        ("/vectornav/imu", _p(ns, "vectornav/imu")),
+        ("/bno085/imu", qualify_ros(ns, "bno085/imu")),
+        ("/vectornav/imu", qualify_ros(ns, "vectornav/imu")),
     ]
 
     return [
@@ -75,13 +74,9 @@ def launch_setup(context, *args, **kwargs):
                 # -- Inputs
                 ("odometry/filtered", "odometry/filtered/global"),
                 # Relative "gps/fix" (not "/gps/fix"): navsat_transform_node
-                # subscribes to a RELATIVE "gps/fix" topic internally, which
-                # only resolves to "/gps/fix" when ns="" (root) — for a
-                # namespaced robot it resolves to "/<ns>/gps/fix" before
-                # remapping, so an absolute "from" pattern here would
-                # silently never match (same class of bug already found in
-                # move_group's "joint_states" and gz_description_server's
-                # "robot_description").
+                # subscribes to a relative "gps/fix" topic internally, which
+                # only resolves to "/gps/fix" when ns="" — an absolute "from"
+                # pattern would stop matching once this node is namespaced.
                 ("gps/fix", gps_topic),
             ]
             + tf_remaps,

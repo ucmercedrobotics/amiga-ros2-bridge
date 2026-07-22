@@ -9,7 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
-def _p(ns, topic):
+def qualify_ros(ns, topic):
     """Absolute topic name, namespaced under `ns` (ns="" leaves it unchanged)."""
     topic = topic.lstrip("/")
     return f"/{ns}/{topic}" if ns else f"/{topic}"
@@ -53,17 +53,16 @@ def launch_setup(context, *args, **kwargs):
                 }
             ],
             # tf2_ros hardcodes /tf, /tf_static as absolute regardless of
-            # node namespace (same quirk already handled elsewhere in this
-            # namespacing pass) — without this remap, robot_state_publisher
+            # node namespace — without this remap, robot_state_publisher
             # keeps broadcasting the URDF's static transforms to the global
-            # root /tf_static for EVERY robot, so a namespaced robot's own
+            # root /tf_static for every robot, so a namespaced robot's own
             # /<ns>/tf_static stays empty and anything needing its static
             # frames (e.g. EKF resolving an IMU frame into base_link) never
             # gets them.
             remappings=[
                 ("joint_states", LaunchConfiguration("joint_states_topic")),
-                ("/tf", _p(ns, "tf")),
-                ("/tf_static", _p(ns, "tf_static")),
+                ("/tf", qualify_ros(ns, "tf")),
+                ("/tf_static", qualify_ros(ns, "tf_static")),
             ],
         ),
     ]

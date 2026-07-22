@@ -6,7 +6,7 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def _p(ns, topic):
+def qualify_ros(ns, topic):
     """Absolute topic name, namespaced under `ns` (ns="" leaves it unchanged)."""
     topic = topic.lstrip("/")
     return f"/{ns}/{topic}" if ns else f"/{topic}"
@@ -22,11 +22,11 @@ def launch_setup(context, *args, **kwargs):
             name='wheel_odometry_node',
             namespace=ns,
             parameters=[os.path.join(get_package_share_directory("amiga_localization"), "config", "wheel_odom.yaml")],
-            # wheel_odom.py hardcodes these absolute in source (not parameterized),
-            # so they bypass namespace= entirely without an explicit remap.
+            # wheel_odom.py hardcodes these absolute in source (not
+            # parameterized), so they bypass namespace= without a remap.
             remappings=[
-                ("/canbus/twist", _p(ns, "canbus/twist")),
-                ("/wheel/odometry", _p(ns, "wheel/odometry")),
+                ("/canbus/twist", qualify_ros(ns, "canbus/twist")),
+                ("/wheel/odometry", qualify_ros(ns, "wheel/odometry")),
             ],
         ),
     ]

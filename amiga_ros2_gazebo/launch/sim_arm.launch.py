@@ -37,8 +37,8 @@ from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
-def _p(ns, path):
-    """Absolute name, namespaced under `ns` (ns="" leaves it unchanged)."""
+def qualify_ros(ns, path):
+    """Absolute ROS name, namespaced under `ns` (ns="" leaves it unchanged)."""
     path = path.lstrip("/")
     return f"/{ns}/{path}" if ns else f"/{path}"
 
@@ -57,8 +57,8 @@ def launch_setup(context, *args, **kwargs):
     # would silently never match and these nodes would read the raw,
     # unfiltered base+arm stream instead of the kinova-filtered one.
     kinova_remappings = [
-        ("joint_states", _p(ns, "kinova/joint_states")),
-        ("robot_description", _p(ns, "kinova/robot_description")),
+        ("joint_states", qualify_ros(ns, "kinova/joint_states")),
+        ("robot_description", qualify_ros(ns, "kinova/robot_description")),
     ]
 
     # Same description/mappings as kortex_move robot.launch.py, but with fake
@@ -123,10 +123,10 @@ def launch_setup(context, *args, **kwargs):
         namespace=ns,
         parameters=[
             use_sim_time,
-            {"input_topic": _p(ns, "joint_states"), "mode": "kinova"},
+            {"input_topic": qualify_ros(ns, "joint_states"), "mode": "kinova"},
         ],
         remappings=[
-            ("/kinova/joint_states", _p(ns, "kinova/joint_states")),
+            ("/kinova/joint_states", qualify_ros(ns, "kinova/joint_states")),
         ],
         output="screen",
     )

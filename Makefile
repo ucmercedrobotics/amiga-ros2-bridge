@@ -115,10 +115,16 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-# Full-stack Gazebo simulation (run inside the container).
+# Full-stack Gazebo simulation, single robot (run inside the container).
 # Append headless:=true on machines without a display.
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py
+
+# Same as `sim`, plus a second, fully independent robot ("amiga2" by
+# default — own base, arm, localization, and Nav2, all namespaced). See
+# amiga_ros2_gazebo/launch/sim_bringup.launch.py's module docstring.
+sim-dual:
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py dual_robot:=true
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

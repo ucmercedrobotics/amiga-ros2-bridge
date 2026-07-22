@@ -31,21 +31,14 @@ ABSOLUTE_NAV2_TOPICS = [
 # Top-level keys in nav2_params.yaml, each naming a node. ROS 2's yaml-params
 # loader only applies a section to a node whose fully qualified name matches
 # the section's key (or a **/ wildcard) — a bare key like "controller_server"
-# only matches a root-namespace node. RewrittenYaml's root_key looked like
-# the "correct" nav2 mechanism for this, but empirically it does NOT nest
-# the file the way this needed (verified: with root_key=ns, robot2's
-# controller_server silently fell back to nav2's built-in DWB default
-# instead of the RegulatedPurePursuitController this file actually
-# specifies) — so, same as ros2_controllers_sim.yaml and the EKF configs,
-# rewrite these directly with a wildcard instead: "**/<key>", NOT /**/<key>.
+# only matches a root-namespace node. RewrittenYaml's `root_key` looks like
+# the mechanism for this but does not nest the file the way a namespaced
+# match needs, so these are rewritten directly instead, as "**/<key>":
 # - No leading slash: rcl resolves a params-file key as <node
-#   namespace>/<key>, so a leading slash produces a double slash
-#   ("/amiga2//**/...") that rcl's arg parser rejects outright — confirmed:
-#   with the leading slash, every Nav2 node for robot2 crashed at startup
-#   with RCLInvalidROSArgsError.
+#   namespace>/<key>, so a leading slash produces an invalid double slash
+#   ("/amiga2//**/...") that rcl's arg parser rejects outright.
 # - Quoted: plain YAML treats a leading "*" as an alias reference, so
-#   **/key: unquoted is a YAML syntax error ("while scanning an alias"),
-#   not a wildcard — confirmed by launch itself failing to parse the file.
+#   **/key: unquoted is a YAML syntax error, not a wildcard.
 NAV2_PARAMS_TOP_LEVEL_KEYS = [
     "bt_navigator",
     "controller_server",

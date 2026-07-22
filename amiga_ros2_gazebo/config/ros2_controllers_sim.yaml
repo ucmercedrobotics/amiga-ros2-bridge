@@ -14,16 +14,15 @@
 # a root-namespace node, so ros2_control's per-controller `type` params
 # silently would not load for a namespaced instance.
 #
-# NOTE this file keeps the LEADING slash (/**/<name>), unlike
+# This file keeps the LEADING slash (/**/<name>), unlike
 # amiga_localization's EKF/wheel_odom yaml configs and amiga_navigation's
 # nav2_params.yaml, which use **/<name> (no leading slash). Those other
 # files are loaded by standalone processes via the standard
 # `--params-file` + `-r __ns:=` CLI path, where rcl resolves a key as
 # <node namespace>/<key> — a leading slash there produces an invalid
-# double-slash path and crashes the process at startup. This file is loaded
-# by ign_ros2_control through an embedded (non-CLI) parameter API inside
-# the Gazebo process, which does NOT have that bug, and is confirmed
-# working with the leading slash — do not "fix" this to match the others.
+# double-slash path. This file is loaded by ign_ros2_control through an
+# embedded (non-CLI) parameter API inside the Gazebo process, which does
+# not have that issue — keep the leading slash here.
 
 /**/controller_manager:
   ros__parameters:

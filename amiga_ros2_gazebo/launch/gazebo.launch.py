@@ -2,17 +2,18 @@
 
 Starts:
   * ign gazebo with the orchard world (levels enabled)
-  * robot1 ("amiga_kinova"): the ORIGINAL single-robot instance, completely
-    unnamespaced — every topic/node name is byte-for-byte what it always was.
-    This is intentional: amiga_localization/amiga_navigation/amiga_ros2_behavior_tree
-    (separate git submodules, out of scope here) hardcode absolute topics
-    like /bno085/imu and /oak0/points, and in this phase the single-instance
-    Nav2/EKF/BT stack (see sim_bringup.launch.py) still targets robot1. Do not
-    add a namespace to robot1 without also updating those configs.
-  * robot2 ("amiga2" by default): a second, fully independent robot spawned
-    under its own ROS namespace — own controller_manager, own sensor/bridge
-    topics, own hardware shims, own MoveIt arm stack. Driveable in parallel
-    with robot1, but not (yet) wired into Nav2/EKF/BT.
+  * robot1 ("amiga_kinova"): always present, completely unnamespaced — every
+    topic/node name is byte-for-byte what it always was. This is intentional:
+    amiga_localization/amiga_navigation/amiga_ros2_behavior_tree (separate
+    git submodules) hardcode absolute topics like /bno085/imu and
+    /oak0/points, and the single-instance Nav2/EKF/BT stack (see
+    sim_bringup.launch.py) targets robot1. Do not add a namespace to robot1
+    without also updating those configs.
+  * robot2 ("amiga2" by default): only spawned when `dual_robot:=true`. A
+    second, fully independent robot under its own ROS namespace — own
+    controller_manager, own sensor/bridge topics, own hardware shims, own
+    MoveIt arm stack. Driveable in parallel with robot1, but not wired into
+    Nav2/EKF/BT (see sim_bringup.launch.py's module docstring).
 
 Each namespaced robot's ign_ros2_control plugin instance gets a
 <ros><namespace> tag so its controller_manager and every controller's
@@ -138,6 +139,7 @@ def launch_setup(context, *args, **kwargs):
 
     world_path = LaunchConfiguration("world").perform(context)
     headless = LaunchConfiguration("headless").perform(context).lower() == "true"
+    dual_robot = LaunchConfiguration("dual_robot").perform(context).lower() == "true"
     use_sim_time = {"use_sim_time": True}
 
     robots = [
@@ -151,27 +153,28 @@ def launch_setup(context, *args, **kwargs):
             "yaw": LaunchConfiguration("robot1_yaw").perform(context),
             "spawn_delay": 0.0,
         },
-        {
-            "name": LaunchConfiguration("robot2_name").perform(context),
-            "ns": LaunchConfiguration("robot2_name").perform(context),
-            "x": LaunchConfiguration("robot2_x").perform(context),
-            "y": LaunchConfiguration("robot2_y").perform(context),
-            "z": LaunchConfiguration("robot2_z").perform(context),
-            "yaw": LaunchConfiguration("robot2_yaw").perform(context),
-            # Staggered relative to robot1: both robots' ign_ros2_control
-            # plugin instances (and their controller_manager objects) live
-            # inside this single `ign gazebo` process. If their controller
-            # spawner chains load plugins (joint_state_broadcaster,
-            # diff_drive_controller, ...) concurrently, pluginlib's class
-            # loader has known thread-safety gaps that intermittently throw
-            # "no factory exists for it" for one robot's controller. This
-            # delay doesn't eliminate that race, just shrinks the overlap
-            # window so it's far less likely to hit in practice.
-            "spawn_delay": float(
-                LaunchConfiguration("robot2_spawn_delay").perform(context)
-            ),
-        },
     ]
+    if dual_robot:
+        robots.append(
+            {
+                "name": LaunchConfiguration("robot2_name").perform(context),
+                "ns": LaunchConfiguration("robot2_name").perform(context),
+                "x": LaunchConfiguration("robot2_x").perform(context),
+                "y": LaunchConfiguration("robot2_y").perform(context),
+                "z": LaunchConfiguration("robot2_z").perform(context),
+                "yaw": LaunchConfiguration("robot2_yaw").perform(context),
+                # Both robots' ign_ros2_control plugin instances (and their
+                # controller_manager objects) live inside this single
+                # `ign gazebo` process; loading controller plugins for both
+                # at once hits a pluginlib class-loader thread-safety gap
+                # that can intermittently fail one robot's controller. This
+                # delay doesn't eliminate the race, just shrinks the overlap
+                # window.
+                "spawn_delay": float(
+                    LaunchConfiguration("robot2_spawn_delay").perform(context)
+                ),
+            }
+        )
 
     # ── Resolve world SDF (package:// -> file://) ────────────────────────
     with open(world_path) as f:
@@ -259,10 +262,9 @@ def launch_setup(context, *args, **kwargs):
             # "/tf"/"/tf_static" are correctly absolute here: tf2_ros
             # hardcodes those as absolute topics regardless of node
             # namespace. "robot_description"/"joint_states" must stay
-            # relative (no leading slash) — RSP requests them as relative
-            # topics, which only resolve to the absolute form below when
-            # ns="" (root); an absolute "from" pattern would silently fail
-            # to match once this node is namespaced.
+            # relative (no leading slash): RSP requests them as relative
+            # topics, so an absolute "from" pattern would stop matching
+            # once this node is namespaced.
             remappings=[
                 ("/tf", qualify_ros(ns, "gz_sim/tf")),
                 ("/tf_static", qualify_ros(ns, "gz_sim/tf_static")),
@@ -373,6 +375,11 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("world", default_value=default_world),
             DeclareLaunchArgument("headless", default_value="false"),
+            DeclareLaunchArgument(
+                "dual_robot",
+                default_value="false",
+                description="Spawn robot2 alongside robot1 (see module docstring)",
+            ),
             DeclareLaunchArgument("robot1_name", default_value="amiga_kinova"),
             DeclareLaunchArgument("robot1_x", default_value="-5.0"),
             DeclareLaunchArgument("robot1_y", default_value="-3.0"),

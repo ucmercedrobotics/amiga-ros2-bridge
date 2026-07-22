@@ -12,9 +12,7 @@
 # only matches a root-namespace node, so a namespaced node would silently
 # load none of these parameters (no odom0/imu0 inputs, etc.).
 # - No leading slash: rcl resolves a key as <node namespace>/<key>, so a
-#   leading "/" here produces a double slash ("/amiga2//**/...") that rcl's
-#   arg parser rejects outright (confirmed: crashed nav2 nodes with
-#   RCLInvalidROSArgsError until the leading slash was dropped).
+#   leading "/" here produces an invalid double slash ("/amiga2//**/...").
 # - Quoted: plain (unquoted) YAML treats a leading "*" as an alias
 #   reference, so "**/name:" unquoted is a YAML syntax error, not a wildcard.
 
