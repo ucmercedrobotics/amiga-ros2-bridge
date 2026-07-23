@@ -56,7 +56,22 @@ PERMANENT_DROP_ALLOWANCE = 1   # extra NEW drops allowed when the failure is per
 PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 DEFAULT_VIABILITY_BUDGET = 2   # fallback total-drop budget if the model call fails
-CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+
+
+# ---------------------------------------------------------------------------
+# LLM selection (viability-budget call)
+# ---------------------------------------------------------------------------
+# ACTIVE: local gpt-oss-20b served by vLLM on the Jetson.
+LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "hosted_vllm/openai/gpt-oss-20b")
+LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
+
+# BACKUP (not used for now): cloud gpt-4o via the OpenAI API.
+# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+# CLOUD_API_BASE = os.environ.get("CLOUD_API_BASE", "")
+
+ACTIVE_MODEL = LOCAL_MODEL
+ACTIVE_API_BASE = LOCAL_API_BASE
+
 ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
 
 load_dotenv(ENV_FILE_PATH)
@@ -210,16 +225,22 @@ class ArbiterNode(Node):
         )
         try:
             cmp = completion(
-                model=CLOUD_MODEL,
+                model=ACTIVE_MODEL,
                 messages=[
                     {"role": "system", "content": VIABILITY_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                temperature= 0.1,
-                max_tokens= 10,
+                temperature=0.0,
+                max_tokens=2048,            # was 10 — reasoning model needs room
+                api_base=ACTIVE_API_BASE or None,
             )
+            text = (cmp.choices[0].message.content or "").strip()   # guard None
+            digits = "".join(c for c in text if c.isdigit())
+            n = int(digits) if digits else DEFAULT_VIABILITY_BUDGET
             text = cmp.choices[0].message.content.strip()
             n = int("".join(c for c in text if c.isdigit()))
+
+            
         except Exception as exc:
             n = DEFAULT_VIABILITY_BUDGET
             self.get_logger().warn(f"Viability call failed ({exc}); default budget {n}")
