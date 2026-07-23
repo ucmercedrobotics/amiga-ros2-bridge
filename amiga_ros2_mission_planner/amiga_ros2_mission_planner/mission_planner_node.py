@@ -47,7 +47,7 @@ from .a2a_server import MissionPlannerHandler
 litellm.drop_params = True
 
 # ---------------------------------------------------------------------------
-# Context-window limits — kept identical to amiga_ros2_agents
+# Context-window limits
 # ---------------------------------------------------------------------------
 LOG_WINDOW_SEC = 30.0        # rolling /rosout window kept in memory
 FAILURE_CONTEXT_SEC = 3.0    # log slice sent to LLM (±N sec around failure)
@@ -57,9 +57,27 @@ MAX_REJECTION_RETRIES = 3    # max arbiter-rejection retries per single BT failu
 COMPRESS_AFTER = 3           # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 
-CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
-CLOUD_MODEL_TEMPERATURE = float(os.environ.get("CLOUD_MODEL_TEMPERATURE", "0.2"))
-CLOUD_MODEL_MAX_TOKENS = int(os.environ.get("CLOUD_MODEL_MAX_TOKENS", "4096"))
+# ---------------------------------------------------------------------------
+# LLM selection
+# ---------------------------------------------------------------------------
+# ACTIVE: local gpt-oss-20b served by vLLM on the Jetson.
+LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "hosted_vllm/openai/gpt-oss-20b")
+LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
+
+# BACKUP (not used for now): cloud gpt-4o via the OpenAI API.
+# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+# CLOUD_API_BASE = os.environ.get("CLOUD_API_BASE", "")   # "" = official OpenAI
+
+# The model the node actually calls. To switch back to the cloud model:
+#   1. uncomment the two CLOUD_* lines above
+#   2. set ACTIVE_MODEL = CLOUD_MODEL and ACTIVE_API_BASE = CLOUD_API_BASE
+ACTIVE_MODEL = LOCAL_MODEL
+ACTIVE_API_BASE = LOCAL_API_BASE
+
+MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.2"))
+MODEL_MAX_TOKENS = int(os.environ.get("MODEL_MAX_TOKENS", "8192"))
+
+
 ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
 WORLD_STATE_URL = os.environ.get("WORLD_STATE_URL", "http://localhost:10004/")
 AMIGA_XSD_PATH = os.environ.get("AMIGA_XSD_PATH", "")  # optional override
@@ -339,7 +357,7 @@ class MissionPlannerNode(Node):
         )
 
         self.get_logger().info(
-            f"  Calling Cloud Model ({CLOUD_MODEL}) — "
+            f"  Calling Active Model ({ACTIVE_MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries"
         )
 
@@ -445,10 +463,11 @@ class MissionPlannerNode(Node):
         while not answered:
             try:
                 cmp = completion(
-                    model=CLOUD_MODEL,
+                    model= ACTIVE_MODEL,
                     messages=messages,
-                    temperature=CLOUD_MODEL_TEMPERATURE,
-                    max_tokens=CLOUD_MODEL_MAX_TOKENS,
+                    temperature= MODEL_TEMPERATURE,
+                    max_tokens= MODEL_MAX_TOKENS,
+                    api_base=ACTIVE_API_BASE or None,
                 )
                 answered = True
             except litellm.exceptions.RateLimitError as exc:
