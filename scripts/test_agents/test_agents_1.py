@@ -30,19 +30,34 @@ MOCK_FAILURE = {
     "reason": "no tree at the mapped location for tree 5; the spot is bare soil.",
 }
 
+
 class Tester(Node):
     def __init__(self):
         super().__init__("missing_tree_tester")
         self.xml_pub = self.create_publisher(String, "/mission/xml", 10)
         self.bt_pub = self.create_publisher(String, "/bt/status_change", 10)
-        self.received_edit = None
+        self.result = None
         self.create_subscription(String, "/mission/xml", self._on_xml, 10)
+        self.create_subscription(String, "/mission/planner_status", self._on_status, 10)
+        self.create_subscription(String, "/mission/abort", self._on_abort, 10)
 
     def _on_xml(self, msg):
-        if msg.data == SAMPLE_XML:
+        if msg.data == SAMPLE_XML or self.result is not None:
             return
-        self.received_edit = msg.data
+        self.result = ("ACCEPTED EDIT", msg.data)
         self.get_logger().info("Received edited XML!")
+
+    def _on_status(self, msg):
+        if self.result is not None:
+            return
+        self.result = ("PLANNER GAVE UP", msg.data)
+        self.get_logger().warn("Planner gave up (retries exhausted)!")
+
+    def _on_abort(self, msg):
+        if self.result is not None:
+            return
+        self.result = ("MISSION ABORTED", msg.data)
+        self.get_logger().error("Mission aborted!")
 
     def run(self):
         self.get_logger().info("Publishing row 1-10 mission…")
@@ -50,14 +65,16 @@ class Tester(Node):
         time.sleep(2.0)
         self.get_logger().info("Publishing mock failure (tree 5 missing)…")
         f = String(); f.data = json.dumps(MOCK_FAILURE); self.bt_pub.publish(f)
-        self.get_logger().info("Waiting for edited plan (up to 240 s)…")
+        self.get_logger().info("Waiting for a terminal outcome (up to 240 s)…")
         deadline = time.time() + 240
-        while time.time() < deadline and self.received_edit is None:
+        while time.time() < deadline and self.result is None:
             rclpy.spin_once(self, timeout_sec=1.0)
-        if self.received_edit:
-            print("\n=== Edited mission XML ===\n" + self.received_edit + "\n=========================\n")
+        if self.result:
+            label, data = self.result
+            print(f"\n=== {label} ===\n{data}\n{'=' * (len(label) + 8)}\n")
         else:
-            print("TIMEOUT — no edited XML in 240 s", file=sys.stderr); sys.exit(1)
+            print("TIMEOUT — no terminal outcome in 240 s (infra stall?)", file=sys.stderr)
+            sys.exit(1)
 
 
 def main():

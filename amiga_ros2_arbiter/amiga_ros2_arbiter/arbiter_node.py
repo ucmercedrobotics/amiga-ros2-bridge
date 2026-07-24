@@ -26,6 +26,7 @@ pristine mission is first seen. Also serves an A2A status endpoint on port 10003
 import json
 import os
 import time
+import re
 from threading import Lock, Thread
 from typing import Dict, List, Optional, Tuple
 
@@ -115,6 +116,7 @@ class ArbiterNode(Node):
         self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
         self.rejection_pub = self.create_publisher(String, "/mission/rejection", 10)
         self.abort_pub = self.create_publisher(String, "/mission/abort", 10)
+        self.budget_pub = self.create_publisher(String, "/mission/viability_budget", 10)
 
         self.get_logger().info("ArbiterNode started — gating /mission/candidate_xml")
 
@@ -217,11 +219,12 @@ class ArbiterNode(Node):
     # ------------------------------------------------------------------
 
     def _compute_viability_budget(self, mission_text: str, trees: List):
+        n_trees = len(trees)
         prompt = (
             f"Mission: {mission_text}\n"
-            f"Target trees: {trees} ({len(trees)} total)\n"
+            f"Target trees: {trees} ({n_trees} total)\n"
             f"How many of these trees can be skipped before the mission is no "
-            f"longer worth completing? Answer with a single integer 0-{len(trees)}."
+            f"longer worth completing? Answer with a single integer 1-{n_trees}."
         )
         try:
             cmp = completion(
@@ -230,22 +233,25 @@ class ArbiterNode(Node):
                     {"role": "system", "content": VIABILITY_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.0,
-                max_tokens=2048,            # was 10 — reasoning model needs room
+                temperature=0.2,
+                max_tokens=2048,
                 api_base=ACTIVE_API_BASE or None,
             )
             text = (cmp.choices[0].message.content or "").strip()   # guard None
-            digits = "".join(c for c in text if c.isdigit())
-            n = int(digits) if digits else DEFAULT_VIABILITY_BUDGET
-            text = cmp.choices[0].message.content.strip()
-            n = int("".join(c for c in text if c.isdigit()))
-
-            
+            matches = re.findall(r"\d+", text)                      # every integer in the reply
+            n = int(matches[-1]) if matches else DEFAULT_VIABILITY_BUDGET  # last = final answer
         except Exception as exc:
             n = DEFAULT_VIABILITY_BUDGET
             self.get_logger().warn(f"Viability call failed ({exc}); default budget {n}")
+
+        n = max(1, min(n, n_trees))          # clamp to a sane [1, n_trees]
+
         with self._lock:
             self.max_droppable = n
+            self._last_status["viability_budget"] = n      # expose via A2A status
+        b = String()
+        b.data = json.dumps({"viability_budget": n, "n_trees": n_trees})
+        self.budget_pub.publish(b)                          # expose via ROS topic (Fix 2)
         self.get_logger().info(f"Model viability budget: up to {n} tree(s) may be skipped")
 
     # ------------------------------------------------------------------
