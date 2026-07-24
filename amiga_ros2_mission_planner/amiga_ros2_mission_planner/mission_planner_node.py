@@ -150,6 +150,11 @@ class MissionPlannerNode(Node):
 
         # Publisher — candidates only; the Arbiter owns /mission/xml
         self.mission_pub = self.create_publisher(String, "/mission/candidate_xml", 10)
+        # Terminal planner outcomes that aren't a candidate (e.g. gave up after
+        # exhausting arbiter-rejection retries) — makes the end state observable
+        # instead of a silent stall. Does NOT halt the mission (unlike /mission/abort).
+        self.status_pub = self.create_publisher(String, "/mission/planner_status", 10)
+
 
         # Arbiter feedback state
         self._rejection_retries = 0          # counts retries for the *current* BT failure
@@ -247,8 +252,19 @@ class MissionPlannerNode(Node):
                 self._last_status["last_edit_summary"] = (
                     f"gave up after {MAX_REJECTION_RETRIES} rejections: {reason}"
                 )
+                gave_up_node = event.get("node")
+                status = String()
+                status.data = json.dumps({
+                    "outcome": "gave_up",
+                    "cause": "rejection_retries_exhausted",
+                    "node": gave_up_node,
+                    "last_reason": reason,
+                })
+                self.status_pub.publish(status)
+
                 return
 
+            
             self._rejection_retries += 1
             self._last_rejection_reason = reason
             attempt = self._rejection_retries
