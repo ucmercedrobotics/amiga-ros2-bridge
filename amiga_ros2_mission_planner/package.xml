@@ -1,18 +1,18 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>amiga_ros2_world_state</name>
+  <name>amiga_ros2_mission_planner</name>
   <version>0.0.0</version>
-  <description>World State A2A agent — aggregates robot context from ROS2 action feedback</description>
+  <description>LLM-powered mission planner — edits BT.CPP XML by 1-3 lines on failure</description>
   <maintainer email="appuser@todo.todo">appuser</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
-  <depend>nav2_msgs</depend>
-  <depend>action_msgs</depend>
-  <depend>amiga_navigation_interfaces</depend>
-  <depend>kortex_interfaces</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>ament_index_python</depend>
+  
+  <exec_depend>amiga_ros2_behavior_tree</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

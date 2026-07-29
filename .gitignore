@@ -187,4 +187,13 @@ cython_debug/
 
 rosbag2*
 
+
+
 runs/.venv_a2a/
+
+#testfiles
+runs/
+scripts/test_agents/runs/
+
+#Mac files
+.DS_Store
