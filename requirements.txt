@@ -11,9 +11,6 @@ utm
 uvicorn
 litellm
 python-dotenv
-
-
-#for xml schema validation by agent
 lxml
 
 # IMU BNO085
