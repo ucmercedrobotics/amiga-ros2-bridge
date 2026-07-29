@@ -64,8 +64,9 @@ WORLD_STATE_FRAMES = 3       # SSE frames to collect from the world-state agent
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "hosted_vllm/openai/gpt-oss-20b")
 LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
 
-# BACKUP (not used for now): cloud gpt-4o via the OpenAI API.
-# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+
+# BACKUP (not used for now): cloud gpt-5.6-sol via the OpenAI API.
+# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-5.6-sol")   # litellm routes plain "gpt-5.6-sol" to OpenAI
 # CLOUD_API_BASE = os.environ.get("CLOUD_API_BASE", "")   # "" = official OpenAI
 
 # The model the node actually calls. To switch back to the cloud model:
@@ -422,7 +423,7 @@ class MissionPlannerNode(Node):
         self.get_logger().info("─" * 60)
 
     # ------------------------------------------------------------------
-    # World state client — identical SSE pattern from test_llm_world_state.py
+    # World state client 
     # ------------------------------------------------------------------
 
     def _fetch_world_state(self) -> List[Dict]:

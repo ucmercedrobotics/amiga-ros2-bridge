@@ -66,8 +66,8 @@ DEFAULT_VIABILITY_BUDGET = 2   # fallback total-drop budget if the model call fa
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "hosted_vllm/openai/gpt-oss-20b")
 LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
 
-# BACKUP (not used for now): cloud gpt-4o via the OpenAI API.
-# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-4o")
+# BACKUP (not used for now): cloud gpt-5.6-sol via the OpenAI API.
+# CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-5.6-sol")
 # CLOUD_API_BASE = os.environ.get("CLOUD_API_BASE", "")
 
 ACTIVE_MODEL = LOCAL_MODEL
