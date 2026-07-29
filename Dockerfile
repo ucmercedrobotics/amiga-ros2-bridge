@@ -12,6 +12,12 @@ RUN apt-get update && apt-get install -y git wget python3-full python3-pip vim n
     ros-${ROS_DISTRO}-foxglove-bridge ros-${ROS_DISTRO}-depthai-ros \
     ros-${ROS_DISTRO}-behaviortree-cpp ros-${ROS_DISTRO}-generate-parameter-library \
     ros-${ROS_DISTRO}-tf-transformations \
+    ros-${ROS_DISTRO}-ros-gz ros-${ROS_DISTRO}-ign-ros2-control \
+    ros-${ROS_DISTRO}-controller-manager ros-${ROS_DISTRO}-diff-drive-controller \
+    ros-${ROS_DISTRO}-joint-trajectory-controller ros-${ROS_DISTRO}-joint-state-broadcaster \
+    ros-${ROS_DISTRO}-gripper-controllers ros-${ROS_DISTRO}-topic-tools \
+    ros-${ROS_DISTRO}-robot-localization \
+    ros-${ROS_DISTRO}-diagnostic-updater \
     tmux \
     rhash librhash-dev
 
