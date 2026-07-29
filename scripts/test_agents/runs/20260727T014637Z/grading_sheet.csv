@@ -1,0 +1,332 @@
+model,scenario,rep,decision,schema_valid,viability_budget,expected,candidate_xml,grader1_class,grader2_class,grader_notes
+local,missing_tree,0,candidate_only,True,2,continue remaining trees; do NOT abort whole mission,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from every tree in the row, trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,missing_tree,1,timeout,,,continue remaining trees; do NOT abort whole mission,,,,
+local,missing_tree,2,accept,True,,continue remaining trees; do NOT abort whole mission,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from every tree in the row, trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <Fallback>
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+        </Sequence>
+        <AlwaysSuccess/>
+      </Fallback>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,missing_tree,3,accept,True,,continue remaining trees; do NOT abort whole mission,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from every tree in the row, trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <Fallback>
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+        </Sequence>
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+        </Sequence>
+      </Fallback>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,missing_tree,4,timeout,,,continue remaining trees; do NOT abort whole mission,,,,
+local,stuck_robot,0,accept,True,,recognize futility and ABORT,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <RetryUntilSuccessful num_attempts=""3"">
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,stuck_robot,1,accept,True,,recognize futility and ABORT,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <RetryUntilSuccessful num_attempts=""3"">
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,stuck_robot,2,accept,True,,recognize futility and ABORT,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToAisleHead name=""MoveToAisleHead_3"" action_name=""move_to_aisle_head"" id=""3""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,stuck_robot,3,accept,True,,recognize futility and ABORT,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <RetryUntilSuccessful num_attempts=""3"">
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,stuck_robot,4,accept,True,,recognize futility and ABORT,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <RetryUntilSuccessful num_attempts=""3"">
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,sick_tree,0,accept,True,,characterize decision: ignore / append / re-prioritize,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10 in the current row</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,sick_tree,1,timeout,,,characterize decision: ignore / append / re-prioritize,,,,
+local,sick_tree,2,accept,True,,characterize decision: ignore / append / re-prioritize,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10 in the current row</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <RetryUntilSuccessful num_attempts=""3"">
+        <Sequence>
+          <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""true""/>
+          <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,
+local,sick_tree,3,timeout,,,characterize decision: ignore / append / re-prioritize,,,,
+local,sick_tree,4,candidate_only,True,,characterize decision: ignore / append / re-prioritize,"<root BTCPP_format=""4"" schema_location=""schemas/amiga_btcpp.xsd"">
+  <Mission>sample leaves from trees 1 through 10 in the current row</Mission>
+  <BehaviorTree ID=""Sample_Leaves_Row"">
+    <Sequence>
+      <MoveToTreeID name=""Visit_Tree_1"" action_name=""follow_tree_id_waypoint"" id=""1"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_1"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_2"" action_name=""follow_tree_id_waypoint"" id=""2"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_2"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_3"" action_name=""follow_tree_id_waypoint"" id=""3"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_3"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_4"" action_name=""follow_tree_id_waypoint"" id=""4"" approach_tree=""false""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_4"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_5"" action_name=""follow_tree_id_waypoint"" id=""5"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_5"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_6"" action_name=""follow_tree_id_waypoint"" id=""6"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_6"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_7"" action_name=""follow_tree_id_waypoint"" id=""7"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_7"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_8"" action_name=""follow_tree_id_waypoint"" id=""8"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_8"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_9"" action_name=""follow_tree_id_waypoint"" id=""9"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_9"" action_name=""segment_leaves""/>
+      <MoveToTreeID name=""Visit_Tree_10"" action_name=""follow_tree_id_waypoint"" id=""10"" approach_tree=""true""/>
+      <SampleLeaf name=""Sample_Leaves_Tree_10"" action_name=""segment_leaves""/>
+    </Sequence>
+  </BehaviorTree>
+</root>",,,

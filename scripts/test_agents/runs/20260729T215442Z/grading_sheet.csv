@@ -1,0 +1,4 @@
+model,scenario,rep,decision,schema_valid,viability_budget,expected,candidate_xml,grader1_class,grader2_class,grader_notes
+cloud,missing_tree,0,timeout,,2,continue remaining trees; do NOT abort whole mission,,,,
+cloud,stuck_robot,0,timeout,,2,recognize futility and ABORT,,,,
+cloud,sick_tree,0,timeout,,2,characterize decision: ignore / append / re-prioritize,,,,
