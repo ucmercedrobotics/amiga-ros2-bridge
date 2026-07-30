@@ -65,6 +65,7 @@ DEFAULT_VIABILITY_BUDGET = 2   # fallback total-drop budget if the model call fa
 # ACTIVE: local gpt-oss-20b served by vLLM on the Jetson.
 LOCAL_MODEL = os.environ.get("LOCAL_MODEL", "hosted_vllm/openai/gpt-oss-20b")
 LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
+MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.2"))
 
 # BACKUP (not used for now): cloud gpt-5.6-sol via the OpenAI API.
 # CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "gpt-5.6-sol")
@@ -72,10 +73,6 @@ LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
 
 ACTIVE_MODEL = LOCAL_MODEL
 ACTIVE_API_BASE = LOCAL_API_BASE
-<<<<<<< HEAD
-MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.2")) 
-=======
->>>>>>> bea58b9c0da9ff53ea59e705fb8fff83ab6a4a9b
 
 ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
 

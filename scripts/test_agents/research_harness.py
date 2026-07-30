@@ -56,12 +56,12 @@ MODELS = {
         "LOCAL_MODEL": "hosted_vllm/openai/gpt-oss-20b",
         "LOCAL_API_BASE": "http://localhost:8000/v1",
         "MODEL_TEMPERATURE": "0.2",
-        "MODEL_MAX_TOKENS": "8192",
+        "MODEL_MAX_TOKENS": "10000",
     },
     "cloud": {
         "LOCAL_MODEL": "openai/gpt-5.6-sol",   # litellm routes plain "gpt-5.6-sol" to OpenAI
         "LOCAL_API_BASE": "",      # empty => `"" or None` => official OpenAI endpoint
-        "MODEL_TEMPERATURE": "0.2",
+        "MODEL_TEMPERATURE": "1.0",
         "MODEL_MAX_TOKENS": "10000",
     },
 }
