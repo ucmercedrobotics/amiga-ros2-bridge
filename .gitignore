@@ -1,6 +1,7 @@
 yolo*
 final-pistachio-yolov8x-seg.pt
 sandbox.ipynb
+pistachio-*
 
 experiments/
 rosbag2_*
@@ -184,9 +185,19 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# STL files for amiga_ros2_description
-meshes/
-
 rosbag2*
 
+<<<<<<< HEAD
 runs/.venv_a2a/
+=======
+
+
+runs/.venv_a2a/
+
+#testfiles
+runs/
+scripts/test_agents/runs/
+
+#Mac files
+.DS_Store
+>>>>>>> bea58b9c0da9ff53ea59e705fb8fff83ab6a4a9b

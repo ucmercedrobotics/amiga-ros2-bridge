@@ -72,7 +72,10 @@ LOCAL_API_BASE = os.environ.get("LOCAL_API_BASE", "http://localhost:8000/v1")
 
 ACTIVE_MODEL = LOCAL_MODEL
 ACTIVE_API_BASE = LOCAL_API_BASE
+<<<<<<< HEAD
 MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.2")) 
+=======
+>>>>>>> bea58b9c0da9ff53ea59e705fb8fff83ab6a4a9b
 
 ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
 

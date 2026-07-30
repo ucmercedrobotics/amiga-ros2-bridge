@@ -26,6 +26,7 @@ setup(
     entry_points={
         "console_scripts": [
             "world_state = amiga_ros2_world_state.world_state_node:main",
+            
         ],
     },
 )
