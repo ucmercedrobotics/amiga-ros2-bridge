@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""The nouns this layer coordinates over: tasks, places, regions, peers.
+
+Small value objects, shared by the action schema, the local-node ports and the
+state machine, so that "a task" means one thing across all three. They are
+deliberately thinner than whatever the mission node calls a task internally:
+what crosses the radio is a task ID, a required capability, a grid cell and a
+priority, and coordination cannot decide anything on fields the wire does not
+carry.
+
+Coordinates are local orchard grid indices, never lat/lon -- the same
+convention as the codec, imported from it rather than restated so the two
+cannot drift.
+
+Pure data. No ROS, no radio, no I/O.
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+from amiga_ros2_comms.codec import (
+    GRID_MAX,
+    PRIORITY_MAX,
+    TASK_ID_MAX,
+    TASK_NONE,
+    Capability,
+)
+
+
+@dataclass(frozen=True)
+class Location:
+    """A cell in the orchard grid."""
+
+    row: int
+    col: int
+
+    def __post_init__(self):
+        for name, value in (("row", self.row), ("col", self.col)):
+            if not 0 <= int(value) <= GRID_MAX:
+                raise ValueError(f"{name}={value} outside 0..{GRID_MAX}")
+
+
+@dataclass
+class Task:
+    """A unit of work this robot may own, shed, or take on.
+
+    Everything here fits in a TASK_ANNOUNCE, which is the point: a task this
+    layer cannot announce is a task it cannot delegate, and discovering that at
+    encode time would be too late.
+    """
+
+    task_id: int
+    #: A single Capability index the executing robot must advertise.
+    required_capability: int
+    location: Location
+    #: Unitless, higher is more urgent.
+    priority: int = 0
+    #: Opaque handle back to whatever the mission node calls this task. This
+    #: layer never interprets it; it hands it back on absorb/transfer so the
+    #: mission node does not have to keep its own id mapping.
+    payload: Optional[object] = None
+
+    def __post_init__(self):
+        if not TASK_NONE < int(self.task_id) <= TASK_ID_MAX:
+            raise ValueError(
+                f"task_id must be {TASK_NONE + 1}..{TASK_ID_MAX} "
+                f"({TASK_NONE} is TASK_NONE), got {self.task_id}"
+            )
+        if not 0 <= int(self.priority) <= PRIORITY_MAX:
+            raise ValueError(f"priority={self.priority} outside 0..{PRIORITY_MAX}")
+
+
+class TaskState(Enum):
+    """Where a task this robot is responsible for currently stands.
+
+    The states exist to make *unassigned-until-ACKed* a thing you can look at
+    rather than a rule you have to remember. A task is OURS from the moment the
+    mission node hands it to us until reliability confirms some other robot
+    acknowledged the GRANT, and not one moment sooner: ANNOUNCED and GRANTED
+    are both still ours.
+    """
+
+    #: Ours, being executed or waiting to be. No coordination in flight.
+    OURS = "ours"
+    #: Ours, announced to the fleet, collecting bids.
+    ANNOUNCED = "announced"
+    #: Ours, GRANTed to a winner, waiting for reliability to confirm delivery.
+    GRANTED = "granted"
+    #: Confirmed delivered to another robot. The only state that is not ours.
+    TRANSFERRED = "transferred"
+    #: Given up on locally -- dropped, held, or escalated to a human.
+    RELINQUISHED = "relinquished"
+
+
+@dataclass
+class PeerRecord:
+    """One row of the peer registry, assembled from HEARTBEATs.
+
+    ``last_seen`` is what makes the row trustworthy rather than merely present:
+    a peer's capabilities do not expire, but the claim that it is *there* does.
+    """
+
+    robot_id: int
+    cap_mask: int = 0
+    location: Optional[Location] = None
+    #: Whole percent, 0..100.
+    battery: int = 0
+    #: Task the peer reported executing, or TASK_NONE when idle.
+    current_task: int = TASK_NONE
+    last_seen: float = 0.0
+
+    @property
+    def idle(self) -> bool:
+        return self.current_task == TASK_NONE
+
+
+@dataclass
+class Fitness:
+    """A bidder's self-assessment of an announced task.
+
+    ``cost`` is the scalar that is actually compared -- unitless, lower is
+    better, and only comparable between bids on the same task. ``eta_s`` rides
+    along because the arbiter wants it for tie-breaks and the operator wants it
+    for display.
+
+    ``feasible`` false is a real answer rather than the absence of one: it tells
+    the announcer this robot heard and is ruling itself out, which lets an
+    auction close early instead of waiting out its whole window.
+    """
+
+    feasible: bool
+    cost: int = 0
+    eta_s: int = 0
+    #: Free text for logs only. Never crosses the radio.
+    reason: str = ""
+
+
+@dataclass
+class MissionDelta:
+    """What changed about our own mission, handed to replan-and-verify.
+
+    A description of the edit, not the new mission: the replanner owns the
+    mission and only needs to know what moved. Populated one field at a time --
+    a delta describes a single committed change.
+    """
+
+    #: Tasks no longer ours (transferred away, dropped).
+    removed: "list[Task]" = field(default_factory=list)
+    #: Tasks now ours (absorbed from a peer).
+    added: "list[Task]" = field(default_factory=list)
+    #: Why this delta happened. Diagnostics and prompt context, not dispatch.
+    cause: str = ""
+
+
+def capability_name(capability: int) -> str:
+    """Human-readable capability, falling back to the raw index.
+
+    Peers may advertise capability bits from newer firmware than ours. That is
+    a thing to log, not a thing to crash on.
+    """
+    try:
+        return Capability(int(capability)).name
+    except ValueError:
+        return f"CAP_{int(capability)}"

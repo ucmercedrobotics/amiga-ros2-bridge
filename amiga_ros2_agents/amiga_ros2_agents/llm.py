@@ -7,28 +7,48 @@ Model selection lives here and nowhere else — agents call complete() and never
 touch litellm directly. LiteLLM is used so the same call works against a local
 vLLM/ollama endpoint or a cloud provider just by changing env vars.
 
-Env vars (AGENT_* preferred; the LOCAL_* names the run scripts already export
-are honoured as a fallback):
-    AGENT_MODEL / LOCAL_MODEL          e.g. hosted_vllm/openai/gpt-oss-20b, gpt-5.6-sol
-    AGENT_API_BASE / LOCAL_API_BASE    "" = the provider's official endpoint
-    AGENT_TEMPERATURE
-    AGENT_MAX_TOKENS
-    ENV_FILE_PATH                      .env holding provider API keys
+Env vars (AGENT_* preferred; the LOCAL_*/MODEL_* names the run scripts and the
+research harness already export are honoured as fallbacks):
+    AGENT_MODEL / LOCAL_MODEL             e.g. hosted_vllm/openai/gpt-oss-20b, gpt-5.6-sol
+    AGENT_API_BASE / LOCAL_API_BASE       "" = the provider's official endpoint
+    AGENT_TEMPERATURE / MODEL_TEMPERATURE
+    AGENT_MAX_TOKENS / MODEL_MAX_TOKENS
+    ENV_FILE_PATH                         .env holding provider API keys
+
+Note the default MAX_TOKENS below is sized for short replies. Agents that emit a
+whole document (the mission planner returns a full XML plan) must pass max_tokens
+explicitly — a silent cap truncates the reply mid-document.
+
+litellm and python-dotenv are imported lazily, inside complete(). Importing an
+agent module must not require the provider SDK: model *selection* is env vars
+and needs nothing installed, and a test that replaces complete() with a fixed
+string has no provider to talk to. Without this, `import triage_node` fails on
+any image where requirements.txt has not been applied — which is a confusing way
+to find out you are missing a pip package.
 """
 
 import os
 import time
 from typing import Optional
 
-import litellm
-from dotenv import load_dotenv
-
-# Let LiteLLM silently drop params a given provider doesn't support, so the same
-# call works across local and cloud models.
-litellm.drop_params = True
-
 ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env")
-load_dotenv(ENV_FILE_PATH)
+
+_litellm = None
+
+
+def _load():
+    """Import and configure litellm once, on first use."""
+    global _litellm
+    if _litellm is None:
+        import litellm
+        from dotenv import load_dotenv
+
+        # Let LiteLLM silently drop params a given provider doesn't support, so
+        # the same call works across local and cloud models.
+        litellm.drop_params = True
+        load_dotenv(ENV_FILE_PATH)
+        _litellm = litellm
+    return _litellm
 
 
 def _env(*names: str, default: str = "") -> str:
@@ -42,8 +62,8 @@ def _env(*names: str, default: str = "") -> str:
 
 MODEL = _env("AGENT_MODEL", "LOCAL_MODEL", default="hosted_vllm/openai/gpt-oss-20b")
 API_BASE = _env("AGENT_API_BASE", "LOCAL_API_BASE", default="http://localhost:8000/v1")
-TEMPERATURE = float(_env("AGENT_TEMPERATURE", default="0.2"))
-MAX_TOKENS = int(_env("AGENT_MAX_TOKENS", default="2048"))
+TEMPERATURE = float(_env("AGENT_TEMPERATURE", "MODEL_TEMPERATURE", default="0.2"))
+MAX_TOKENS = int(_env("AGENT_MAX_TOKENS", "MODEL_MAX_TOKENS", default="2048"))
 
 MAX_RATE_LIMIT_RETRIES = 3
 RATE_LIMIT_BACKOFF_SEC = 1.0
@@ -63,6 +83,7 @@ def complete(
     Retries a bounded number of times on rate limits; any other provider error
     propagates to the caller.
     """
+    litellm = _load()
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},

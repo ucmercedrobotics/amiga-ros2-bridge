@@ -32,6 +32,7 @@ find_package(std_msgs REQUIRED)
 
 add_executable(bt_runner
   src/bt.cpp
+  src/fault_reporter.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
   src/actions/approach_gps_waypoint.cpp
@@ -116,6 +117,7 @@ ament_target_dependencies(tcp_demux_node
 
 target_link_libraries(bt_runner
   LibXml2::LibXml2
+  nlohmann_json::nlohmann_json
 )
 
 target_link_libraries(orchard_management_node

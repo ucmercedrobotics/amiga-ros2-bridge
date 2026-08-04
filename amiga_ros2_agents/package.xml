@@ -3,12 +3,25 @@
 <package format="3">
   <name>amiga_ros2_agents</name>
   <version>0.0.0</version>
-  <description>A2A agents for the Amiga robot — LTL generation from natural-language missions</description>
+  <description>LLM agents for the Amiga robot — mission planning, arbitration, world state aggregation and LTL generation</description>
   <maintainer email="appuser@todo.todo">appuser</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>action_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>ament_index_python</depend>
+  <depend>amiga_interfaces</depend>
+  <depend>amiga_navigation_interfaces</depend>
+  <depend>kortex_interfaces</depend>
+  <depend>python3-jinja2</depend>
+  <depend>python3-lxml</depend>
+
+  <!-- The arbiter and planner validate against this package's installed
+       schemas/amiga_btcpp.xsd — the same schema the BT executor uses. -->
+  <exec_depend>amiga_ros2_behavior_tree</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

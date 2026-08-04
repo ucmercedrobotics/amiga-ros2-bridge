@@ -1,33 +1,34 @@
 """
 ltl_gen_node.py
 
-LTL generation agent (A2A, port 20001).
+LTL generation agent.
 
 Takes a mission in plain English — "go visit trees 1 through 3 and sample the
 leaves at each" — and returns an LTL formula in Promela/SPIN syntax.
 
 Two ways in:
-    - A2A:  send a text message to http://localhost:20001/ (see tools/ltl_client_demo.py)
-    - ROS:  publish a std_msgs/String to /mission/text
+    - service:  /mission/generate_ltl (amiga_interfaces/srv/GenerateLTL) — returns
+                the formula to the caller
+    - topic:    publish a std_msgs/String to /mission/text — fire and forget
 
 Either way the formula is published to /mission/ltl.
+
+The system prompt lives in prompts/ltl_gen/system.j2. Set the `ap_vocabulary`
+parameter to pin the atomic propositions the model may use; left empty (the
+default) the model invents its own identifiers.
 """
 
-import asyncio
 from threading import Lock, Thread
 from typing import Dict
 
-import rclpy
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import EventQueue
+from amiga_interfaces.srv import GenerateLTL
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import String
 
-from . import llm
-from .a2a_server import agent_message, serve_agent
-from .agent_card import LTL_AGENT_CARD
-
-A2A_PORT = 20001
+from . import llm, prompts, spin
+from .status import StatusPublisher
 
 # A reply has to contain at least one of these to count as a formula rather than
 # prose. Bare "!" is deliberately excluded — it matches ordinary exclamations
@@ -39,58 +40,9 @@ LTL_TOKENS = ("[]", "<>", " U ", "X ", "&&", "||", "->", "<->")
 # typedefs land; only sentence-shaped usage is rejected.
 PROSE_MARKERS = (". ", ".\n", ", ", "?", ";")
 
-# ---------------------------------------------------------------------------
-# System prompt
-#
-# TODO: once the Promela typedefs exist, inject them here as the atomic
-# proposition vocabulary and drop the "invent readable identifiers" rule.
-# ---------------------------------------------------------------------------
-LTL_SYSTEM_PROMPT = """\
-You translate missions for an autonomous agricultural robot into Linear \
-Temporal Logic.
-
-The formula must be valid Promela/SPIN LTL — it has to parse with `spin -f`.
-
-## Operators (use ONLY these)
-- []   always
-- <>   eventually
-- U    strong until
-- X    next
-- &&   and
-- ||   or
-- !    not
-- ->   implies
-- <->  equivalence
-
-## Atomic propositions
-- Must be plain Promela identifiers: lowercase letters, digits and underscores only.
-- No spaces, no arguments, no dots. Write `visit_tree_3`, never `visit(tree 3)` \
-or `visit tree 3`.
-- Invent readable identifiers from the mission text and reuse the same \
-identifier for the same fact throughout the formula.
-
-## Output
-- Return ONLY the formula on a single line.
-- No `ltl name { ... }` wrapper, no code fences, no markdown, no comments, no \
-explanation, no trailing period.
-
-## Examples
-Mission: "visit tree 1 and then tree 2"
-<>(at_tree_1 && <>at_tree_2)
-
-Mission: "sample every tree in the row, trees 1 to 3"
-<>sampled_tree_1 && <>sampled_tree_2 && <>sampled_tree_3
-
-Mission: "never enter the mud patch"
-[]!in_mud_patch
-
-Mission: "keep patrolling the row until the battery is low"
-[](patrolling U battery_low)
-"""
-
 
 class LtlGenNode(Node):
-    """ROS node holding the LTL agent's state and its /mission/ltl publisher."""
+    """ROS node holding the LTL agent's state, its service and its publisher."""
 
     def __init__(self):
         super().__init__("ltl_gen")
@@ -103,22 +55,62 @@ class LtlGenNode(Node):
             "last_error": None,
         }
 
+        # Empty vocabulary => the model invents identifiers (the historical
+        # behaviour). Populate it from the Promela typedefs once they exist and
+        # the prompt switches to a fixed AP vocabulary with no code change.
+        #
+        # Two rclpy quirks force the shape of this:
+        #   - the default is [""] and not [], because rclpy infers a parameter's
+        #     type from its default and infers BYTE_ARRAY from an empty list,
+        #     which then rejects any string-array override;
+        #   - an override of [] leaves the parameter *uninitialized* rather than
+        #     empty, so plain get_parameter() raises.
+        # get_parameter_or covers both; the comprehension drops the placeholder.
+        self.declare_parameter("ap_vocabulary", [""])
+        ap_param = self.get_parameter_or(
+            "ap_vocabulary", Parameter("ap_vocabulary", Parameter.Type.STRING_ARRAY, [])
+        )
+        ap_vocabulary = [
+            ap for ap in ap_param.get_parameter_value().string_array_value if ap
+        ]
+        self.system_prompt = prompts.render(
+            "ltl_gen/system.j2", ap_vocabulary=ap_vocabulary
+        )
+
+        # llm.complete() blocks for seconds. A reentrant group plus the
+        # multithreaded executor in main() keeps a service call from stalling the
+        # /mission/text subscription and vice versa.
+        group = ReentrantCallbackGroup()
+
         self.ltl_pub = self.create_publisher(String, "/mission/ltl", 10)
-        self.create_subscription(String, "/mission/text", self._on_mission_text, 10)
+        self.create_subscription(
+            String, "/mission/text", self._on_mission_text, 10, callback_group=group
+        )
+        self.create_service(
+            GenerateLTL,
+            "/mission/generate_ltl",
+            self._on_generate_request,
+            callback_group=group,
+        )
+
+        self.status = StatusPublisher(self)
+        self.status.publish(self.get_status())
 
         self.get_logger().info(
-            f"LtlGenNode started — model={llm.MODEL} api_base={llm.API_BASE or 'provider default'}"
+            f"LtlGenNode started — model={llm.MODEL} "
+            f"api_base={llm.API_BASE or 'provider default'} "
+            f"ap_vocabulary={ap_vocabulary or 'model-invented'}"
         )
 
     # ------------------------------------------------------------------
-    # Public API (called from the A2A executor and the ROS subscription)
+    # Public API (called from the service callback and the ROS subscription)
     # ------------------------------------------------------------------
 
     def generate(self, mission: str) -> Dict:
         """Translate `mission` to LTL, publish it, and return the result.
 
         Never raises — a failure comes back as {"ok": False, "error": ...} so the
-        A2A caller always gets an answer.
+        caller always gets an answer.
         """
         mission = mission.strip()
         result = {
@@ -136,7 +128,7 @@ class LtlGenNode(Node):
         self.get_logger().info(f"Generating LTL for: {mission}")
 
         try:
-            reply = llm.complete(LTL_SYSTEM_PROMPT, mission)
+            reply = llm.complete(self.system_prompt, mission)
         except Exception as exc:
             result["error"] = f"LLM call failed: {exc}"
             self.get_logger().error(f"  {result['error']}")
@@ -167,8 +159,17 @@ class LtlGenNode(Node):
     # ROS callbacks
     # ------------------------------------------------------------------
 
+    def _on_generate_request(self, request, response):
+        """Service entry point — blocks for the duration of the model call."""
+        result = self.generate(request.mission)
+        response.ok = result["ok"]
+        response.formula = result["formula"] or ""
+        response.error = result["error"] or ""
+        response.model = result["model"]
+        return response
+
     def _on_mission_text(self, msg: String):
-        """Run the LLM off the spin thread so callbacks stay responsive."""
+        """Run the LLM off the callback so the executor stays responsive."""
         Thread(target=self.generate, args=(msg.data,), daemon=True).start()
 
     # ------------------------------------------------------------------
@@ -184,37 +185,8 @@ class LtlGenNode(Node):
                 self._status["last_error"] = None
             else:
                 self._status["last_error"] = result["error"]
+        self.status.publish(self.get_status())
         return result
-
-
-class LtlGenExecutor(AgentExecutor):
-    """A2A entry point — reads the caller's mission text and answers with LTL."""
-
-    def __init__(self, ros_node: LtlGenNode):
-        self.node = ros_node
-
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        mission = (context.get_user_input() or "").strip()
-        if not mission:
-            await event_queue.enqueue_event(
-                agent_message(
-                    text="No mission text in the request — send the mission as a text part.",
-                    data={"ok": False, "error": "empty mission"},
-                )
-            )
-            return
-
-        # llm.complete() blocks; keep it off the event loop or one request stalls
-        # the whole server for the duration of the model call.
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, self.node.generate, mission)
-
-        await event_queue.enqueue_event(
-            agent_message(text=result["formula"] or result["error"] or "", data=result)
-        )
-
-    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +228,7 @@ def _looks_like_ltl(formula: str) -> tuple:
 
 
 def main():
-    rclpy.init()
-    node = LtlGenNode()
-    serve_agent(node, LtlGenExecutor(node), LTL_AGENT_CARD, A2A_PORT)
+    spin.run(LtlGenNode, multithreaded=True)
 
 
 if __name__ == "__main__":

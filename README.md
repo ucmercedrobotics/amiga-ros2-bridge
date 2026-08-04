@@ -44,16 +44,9 @@ git clone https://github.com/ucmercedrobotics/amiga-ros2-bridge.git
 cd amiga-ros2-bridge
 ```
 
-[Optional, but highly recommended] Create a new virtual environment
-```bash
-python3.10 -m venv venv # need python 3.10 for A2A
-source venv/bin/activate
-pip install --upgrade pip
-```
-
 2. Clone submodules and other repos
 ```bash
-git submodule update
+git submodule update --init --recursive
 cd amiga-ros2-nav
 vcs import < nav.repos
 cd ..
@@ -170,11 +163,7 @@ You can connect your own contoller via `bluetoothctl`.
 ## Current Support
 
 ### Kinova Kortex
-If you're using the Kinova as an attachment to your Amiga, use `vcs import < kinova.repos`.
-From there, make sure you build using the MoveIt enabled image we provided (you must have access since the registry is private).
-To do so, use `make build-image USE_KINOVA=1`.
-
-See https://github.com/ucmercedrobotics/ros2-kortex-control.
+If you're using the Kinova as an attachment to your Amiga, see https://github.com/ucmercedrobotics/ros2-kortex-control.
 
 ### Luxonis Oak-D
 Using the onboard Oak-D cameras or your own, you can configure them to stream using ROS2 drivers.
@@ -204,12 +193,23 @@ make foxglove
 While we use our own UBlox RTK module in order to support Nav2 related ROS2 nodes, this can be adapted to model any configuration.
 See [our Nav2 repo](https://github.com/ucmercedrobotics/amiga-ros2-nav/tree/main) for more details.
 
-### LLM Planning
-From any computer (except the Amiga since it's behind Tailscale) on the same network as the Amiga, run the proxy that will connect our webapp to the Amiga.
-`git clone https://github.com/vtomnet/mp-proxy`, make a venv, install `requirements.txt`, `python proxy.py --to-tcp <amiga_ip>:<bt_runner_port>`.
-From https://mp.vtom.net/ plan out your mission.
+However, we also use RTK over IP provided by the Amiga and Nav2 works just fine. Just make sure that you provide the correct topic into the Nav2 stack.
 
-Note, you can configure what port the Amiga talks from through `bt_runner` parameter `mission_port`, which is defaulted to `12346`.
+### LLM Planning
+See [gpt-mission-planner](https://github.com/ucmercedrobotics/gpt-mission-planner) for more details on how to use LLMs to generate mission plans for the Amiga.
+This can be used natively with our BT.CPP implementation.
+
+## Continuous Integration
+Reproduce a CI failure locally, in the same image, without pushing:
+
+```bash
+make ci-test   # what gates main
+make ci-lint   # ament copyright/flake8/pep257, reported but not gating
+```
+
+The ament linters are advisory for now because they fail on code that predates the pipeline. Once the
+packages in `scripts/ci/packages.txt` are clean, set `LINTERS=include` on the build step in `ci.yml` and
+drop the separate advisory step.
 
 ## Stopping Services
 Many services, such as the Oak-D cameras, require the exclusive use of the hardware.
@@ -219,7 +219,7 @@ To disable default Amiga drivers, use the following command:
 bash ./scripts/stop_amiga_services.sh
 ```
 
-## Nav2 Autonomous Pipeline
+## Autonomous Pipeline
 
 We provide two ways of bringing up the autonomy stack:
 
@@ -241,3 +241,28 @@ make bringup
 ```
 
 This will spawn the Amiga-ROS2 bridge, Oakd cameras, URDF descriptions, localization stack, and nav2 stack.
+
+## Gazebo Simulation
+
+Run the whole autonomy stack without a robot. Only the hardware layer is swapped for Gazebo plus shims;
+everything above it (URDF, localization, Nav2, behavior trees, arm control) is the same as on the Amiga.
+
+Start the container,
+```bash
+make bash
+```
+
+Once inside, load the sim:
+```bash
+make sim
+```
+
+This launches the orchard world in `amiga_ros2_gazebo/worlds/orchard_nbv.sdf` with the Amiga spawned in it.
+To see the GUI, use [noVNC](#installation) (`make vnc`). On a machine without a display, run headless instead:
+```bash
+ros2 launch amiga_ros2_gazebo sim_bringup.launch.py headless:=true
+```
+
+Stacks can be toggled off with `launch_nav:=false`, `launch_arm:=false`, `launch_bt:=false`, or
+`launch_helpers:=false`, and a different world with `world:=/path/to/world.sdf`.
+

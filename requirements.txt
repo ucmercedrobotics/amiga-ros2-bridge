@@ -4,16 +4,12 @@ cv_bridge
 depthai
 pyyaml
 rospkg
-a2a-sdk[http-server]==0.3.26
 protobuf==5.29.5
 farm-ng-amiga
 utm
-uvicorn
 litellm
 python-dotenv
-
-
-#for xml schema validation by agent
+jinja2
 lxml
 
 # IMU BNO085

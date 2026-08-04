@@ -1,0 +1,72 @@
+# Request
+# Everything the triage agent gets to reason about when this robot's behaviour
+# tree has failed and local replanning could not recover it.
+
+# The /bt/status_change event, verbatim JSON. The tree is what noticed.
+string fault_json
+# /rosout lines around the fault. The actual explanation almost always lives
+# here rather than in the fault event -- BT.CPP reports that a node failed, the
+# node itself logged why.
+string log_context
+# Latest /world_state frame, JSON. Where the robot is and what it was doing.
+string world_state
+# Whatever the local replanning loop already tried and gave up on. Without it
+# the agent re-proposes the edit the arbiter just rejected.
+string local_attempts
+
+# The task that could not be completed, in the coordinator's terms. task_id 0
+# means the anomaly has no task attached.
+uint16 task_id
+uint16 required_capability
+uint16 grid_row
+uint16 grid_col
+uint8 priority
+
+# This robot, now.
+uint8 battery_percent
+# Live peers as JSON: id, capabilities, load, last pose, last seen. Shedding
+# work is only a sensible answer if somebody is out there to take it.
+string peers_json
+---
+# Response
+# One of exactly three actions, named by string rather than modelled as a union
+# because ROS IDL has no unions. The coordinator refuses anything else --
+# amiga_ros2_coordinator/schema.py is the authority on what these mean.
+#
+#   re_delegate  shed the task to the fleet: announce, collect bids, grant
+#   add_task     take on new work discovered while diagnosing
+#   drop_task    give the task up locally, without asking anyone
+#
+# The constraint is the point: a model that could answer in prose would be a
+# model whose output the state machine has to parse, and a state machine that
+# parses prose has no enumerable set of behaviours to test.
+bool ok
+# Why not, when ok is false. The coordinator treats a failed interpretation as
+# "no interpretation available" and leaves the task exactly as it was.
+string error
+string action
+
+# Diagnostics carried into the announcement. Never dispatched on.
+uint16 reason_code
+
+# re_delegate only: what to do if the announce window closes with no viable
+# bid. Part of the decision rather than a later question, because by the time
+# the window closes the context that justified it is gone.
+#   drop | hold | request_human
+string fallback
+
+# drop_task only, same vocabulary.
+string disposition
+
+# add_task only: the work to take on.
+uint16 task_id
+uint16 required_capability
+uint16 grid_row
+uint16 grid_col
+uint8 priority
+
+# The agent's own account of why. Logged, shown to an operator, and included in
+# the next prompt's history. Deliberately not parsed by anything.
+string rationale
+# The model that produced the decision.
+string model
