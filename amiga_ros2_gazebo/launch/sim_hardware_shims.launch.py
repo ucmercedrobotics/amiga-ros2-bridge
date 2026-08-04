@@ -12,9 +12,10 @@ frame_id and encoding the corresponding hardware driver uses:
 robot1's shims are completely unnamespaced (byte-for-byte the original
 single-robot topic set — amiga_localization/amiga_navigation/
 amiga_ros2_behavior_tree hardcode absolute paths like /bno085/imu and
-/oak0/points and target robot1, see gazebo.launch.py's docstring). robot2's
-shims (only built when `dual_robot:=true`) are fully namespaced so they never
-collide with robot1's.
+/oak0/points and historically targeted a single unnamespaced robot, see
+gazebo.launch.py's docstring). Every additional robot's shims (built for
+i=2..robot_count) are fully namespaced so they never collide with robot1's
+or each other's.
 
 Downstream consumers (wheel odometry, EKFs, Nav2, BTs, kortex_vision) run
 with configs identical to the real robot.
@@ -171,12 +172,12 @@ def build_shims(ns, imu_topic, imu_frame):
 def launch_setup(context, *args, **kwargs):
     imu_topic = LaunchConfiguration("imu_topic").perform(context)
     imu_frame = LaunchConfiguration("imu_frame").perform(context)
-    dual_robot = LaunchConfiguration("dual_robot").perform(context).lower() == "true"
-    robot2_name = LaunchConfiguration("robot2_name").perform(context)
+    robot_count = int(LaunchConfiguration("robot_count").perform(context))
+    name_prefix = LaunchConfiguration("robot_name_prefix").perform(context)
 
     shims = build_shims("", imu_topic, imu_frame)
-    if dual_robot:
-        shims += build_shims(robot2_name, imu_topic, imu_frame)
+    for i in range(2, robot_count + 1):
+        shims += build_shims(f"{name_prefix}{i}", imu_topic, imu_frame)
     return shims
 
 
@@ -184,16 +185,17 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "dual_robot",
-                default_value="false",
-                description="Also build robot2's shims (see module docstring)",
+                "robot_count",
+                default_value="1",
+                description="Build shims for this many robots (see module docstring)",
             ),
-            DeclareLaunchArgument("robot2_name", default_value="amiga2"),
+            DeclareLaunchArgument("robot_name_prefix", default_value="amiga"),
             DeclareLaunchArgument(
                 "imu_topic",
                 default_value="/bno085/imu",
                 description="Bridge-native IMU output topic (matches the EKF config). "
-                "robot1 publishes this unprefixed; robot2 publishes it under /<robot2_name>/",
+                "robot1 publishes this unprefixed; robot i>=2 publishes it "
+                "under /<robot_name_prefix><i>/",
             ),
             DeclareLaunchArgument(
                 "imu_frame",

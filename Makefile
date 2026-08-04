@@ -126,6 +126,11 @@ sim:
 sim-dual:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py dual_robot:=true
 
+ROBOT_COUNT ?= 1
+sim-multi:
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=$(ROBOT_COUNT)
+
+
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \
 	joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], \
