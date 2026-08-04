@@ -1,4 +1,5 @@
 """Scenario 1: a tree in the row is physically missing when the robot arrives."""
+
 import json, sys, time
 import rclpy
 from rclpy.node import Node
@@ -8,8 +9,12 @@ from std_msgs.msg import String
 def _tree_steps(ids):
     rows = []
     for i in ids:
-        rows.append(f'      <MoveToTreeID name="Visit_Tree_{i}" action_name="follow_tree_id_waypoint" id="{i}" approach_tree="true"/>')
-        rows.append(f'      <SampleLeaf name="Sample_Leaves_Tree_{i}" action_name="segment_leaves"/>')
+        rows.append(
+            f'      <MoveToTreeID name="Visit_Tree_{i}" action_name="follow_tree_id_waypoint" id="{i}" approach_tree="true"/>'
+        )
+        rows.append(
+            f'      <SampleLeaf name="Sample_Leaves_Tree_{i}" action_name="segment_leaves"/>'
+        )
     return "\n".join(rows)
 
 
@@ -61,10 +66,14 @@ class Tester(Node):
 
     def run(self):
         self.get_logger().info("Publishing row 1-10 mission…")
-        m = String(); m.data = SAMPLE_XML; self.xml_pub.publish(m)
+        m = String()
+        m.data = SAMPLE_XML
+        self.xml_pub.publish(m)
         time.sleep(2.0)
         self.get_logger().info("Publishing mock failure (tree 5 missing)…")
-        f = String(); f.data = json.dumps(MOCK_FAILURE); self.bt_pub.publish(f)
+        f = String()
+        f.data = json.dumps(MOCK_FAILURE)
+        self.bt_pub.publish(f)
         self.get_logger().info("Waiting for a terminal outcome (up to 240 s)…")
         deadline = time.time() + 240
         while time.time() < deadline and self.result is None:
@@ -73,14 +82,20 @@ class Tester(Node):
             label, data = self.result
             print(f"\n=== {label} ===\n{data}\n{'=' * (len(label) + 8)}\n")
         else:
-            print("TIMEOUT — no terminal outcome in 240 s (infra stall?)", file=sys.stderr)
+            print(
+                "TIMEOUT — no terminal outcome in 240 s (infra stall?)", file=sys.stderr
+            )
             sys.exit(1)
 
 
 def main():
-    rclpy.init(); t = Tester()
-    try: t.run()
-    finally: t.destroy_node(); rclpy.shutdown()
+    rclpy.init()
+    t = Tester()
+    try:
+        t.run()
+    finally:
+        t.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Scenario 3: unplanned sick tree detected in the adjacent row — add it, or not?"""
+
 import json, sys, time
 import rclpy
 from rclpy.node import Node
@@ -8,8 +9,12 @@ from std_msgs.msg import String
 def _tree_steps(ids):
     rows = []
     for i in ids:
-        rows.append(f'      <MoveToTreeID name="Visit_Tree_{i}" action_name="follow_tree_id_waypoint" id="{i}" approach_tree="true"/>')
-        rows.append(f'      <SampleLeaf name="Sample_Leaves_Tree_{i}" action_name="segment_leaves"/>')
+        rows.append(
+            f'      <MoveToTreeID name="Visit_Tree_{i}" action_name="follow_tree_id_waypoint" id="{i}" approach_tree="true"/>'
+        )
+        rows.append(
+            f'      <SampleLeaf name="Sample_Leaves_Tree_{i}" action_name="segment_leaves"/>'
+        )
     return "\n".join(rows)
 
 
@@ -30,6 +35,7 @@ MOCK_FAILURE = {
     "reason": "a tree in the adjacent row (id 54) shows heavy leaf necrosis and possible blight; it is not in the current mission.",
 }
 
+
 class Tester(Node):
     def __init__(self):
         super().__init__("opportunistic_tree_tester")
@@ -46,24 +52,37 @@ class Tester(Node):
 
     def run(self):
         self.get_logger().info("Publishing row 1-10 mission…")
-        m = String(); m.data = SAMPLE_XML; self.xml_pub.publish(m)
+        m = String()
+        m.data = SAMPLE_XML
+        self.xml_pub.publish(m)
         time.sleep(2.0)
         self.get_logger().info("Publishing detection event (sick tree 54, next row)…")
-        f = String(); f.data = json.dumps(MOCK_FAILURE); self.bt_pub.publish(f)
+        f = String()
+        f.data = json.dumps(MOCK_FAILURE)
+        self.bt_pub.publish(f)
         self.get_logger().info("Waiting for edited plan (up to 240 s)…")
         deadline = time.time() + 240
         while time.time() < deadline and self.received_edit is None:
             rclpy.spin_once(self, timeout_sec=1.0)
         if self.received_edit:
-            print("\n=== Edited mission XML ===\n" + self.received_edit + "\n=========================\n")
+            print(
+                "\n=== Edited mission XML ===\n"
+                + self.received_edit
+                + "\n=========================\n"
+            )
         else:
-            print("TIMEOUT — no edited XML in 240 s", file=sys.stderr); sys.exit(1)
+            print("TIMEOUT — no edited XML in 240 s", file=sys.stderr)
+            sys.exit(1)
 
 
 def main():
-    rclpy.init(); t = Tester()
-    try: t.run()
-    finally: t.destroy_node(); rclpy.shutdown()
+    rclpy.init()
+    t = Tester()
+    try:
+        t.run()
+    finally:
+        t.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

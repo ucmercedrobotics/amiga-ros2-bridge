@@ -6,9 +6,19 @@ Both the encoder and the decoder import from this module, which is the only
 reason they cannot drift apart. A firmware or non-Python peer implementing the
 same protocol should treat this file as the normative table.
 
-Pure data. No ROS, no serial, no I/O.
+**Where the vocabulary comes from.** Not from a guess about what an orchard
+robot might do. ``Capability`` is the ActionGroup of
+``amiga_ros2_behavior_tree/schemas/amiga_btcpp.xsd`` -- the schema the mission
+planner writes against, the arbiter validates against, and ``bt_runner`` refuses
+a mission for violating. ``Target`` is the set of places a BT leaf can actually
+name. If the schema gains an action, this file gains a bit; if it does not, the
+fleet cannot announce work nobody can execute.
+
+Pure data. No ROS, no serial, no I/O -- reading the schema off disk belongs to
+whoever configures a robot, not here.
 """
 
+from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable
 
@@ -44,7 +54,11 @@ class MessageType(IntEnum):
     BID = 0x03
     GRANT = 0x04
     ACK = 0x05
-    HAZARD = 0x06
+    # 0x06 was HAZARD. Retired, and deliberately not reused: nothing in this
+    # system ever detected or published a hazard, so the type described a
+    # capability the robot does not have. Decoding 0x06 now reports an
+    # unallocated tag, which is the truth.
+    #
     # Claimed but unbuilt. A free-text message cannot be bounded to one packet,
     # so it needs fragmentation, which belongs to the reliability layer that
     # does not exist yet. The tag is reserved now so nothing else takes 0x07 in
@@ -59,58 +73,87 @@ RESERVED_TYPES = frozenset({MessageType.FREEFORM})
 
 
 class Capability(IntEnum):
-    """What a robot can do.
+    """What a robot can do: one bit index per behaviour-tree action type.
+
+    These are exactly the elements of ``<xs:group name="ActionGroup">`` in
+    amiga_btcpp.xsd, in schema order. That is what makes a capability claim
+    checkable rather than asserted -- a robot advertises the actions its own
+    mission schema permits, and ``capabilities_from_xsd`` in the coordinator
+    derives the mask from the installed file instead of a launch parameter
+    somebody typed.
+
+    ``DetectObject``, ``AssertTrue`` and ``CheckValue`` are registered in
+    bt.cpp but commented out of the schema, so they are not here: a mission
+    containing one would be rejected before it ever ran, which makes
+    advertising it a lie.
 
     Values are *bit indices* into a 16-bit ``cap_mask``, not mask values. That
-    is what lets HEARTBEAT advertise a set in 2 bytes while TASK_ANNOUNCE names
-    a single requirement in 1, with a one-line test between them::
+    is what lets HEARTBEAT advertise a whole action set in 2 bytes and
+    TASK_ANNOUNCE state a whole requirement in 2 more, with a one-line test
+    between them::
 
-        has_capability(heartbeat.cap_mask, announce.req_capability)
+        has_capabilities(heartbeat.cap_mask, announce.req_cap_mask)
 
     Adding a capability means appending an index, never renumbering one.
     """
 
-    DRIVE = 0
-    INSPECT = 1
-    SPRAY = 2
-    HARVEST = 3
-    MANIPULATE = 4
-    TRANSPORT = 5
-    SURVEY = 6
-    CHARGE_HOST = 7
-    RELAY = 8
+    MOVE_TO_TREE_ID = 0
+    MOVE_TO_AISLE_HEAD = 1
+    MOVE_TO_GPS_LOCATION = 2
+    APPROACH_GPS_WAYPOINT = 3
+    MOVE_TO_RELATIVE_LOCATION = 4
+    ORIENT_ROBOT_HEADING = 5
+    FOLLOW_PERSON = 6
+    SAMPLE_LEAF = 7
+    MOVE_ARM_TO_POSITION = 8
 
+
+#: Capability -> the XML element name it stands for. The mapping is explicit
+#: rather than derived from the enum name by rule, because the schema is the
+#: authority on spelling and a rule would quietly invent "MoveToGpsLocation".
+XML_ELEMENT = {
+    Capability.MOVE_TO_TREE_ID: "MoveToTreeID",
+    Capability.MOVE_TO_AISLE_HEAD: "MoveToAisleHead",
+    Capability.MOVE_TO_GPS_LOCATION: "MoveToGPSLocation",
+    Capability.APPROACH_GPS_WAYPOINT: "ApproachGPSWaypoint",
+    Capability.MOVE_TO_RELATIVE_LOCATION: "MoveToRelativeLocation",
+    Capability.ORIENT_ROBOT_HEADING: "OrientRobotHeading",
+    Capability.FOLLOW_PERSON: "FollowPerson",
+    Capability.SAMPLE_LEAF: "SampleLeaf",
+    Capability.MOVE_ARM_TO_POSITION: "MoveArmToPosition",
+}
+
+#: XML element name -> Capability. The direction the mission-XML side needs.
+CAPABILITY_BY_ELEMENT = {name: cap for cap, name in XML_ELEMENT.items()}
 
 #: Width of ``cap_mask`` in bits. Bounds every legal Capability index.
 CAP_MASK_BITS = 16
 
 
 class ReasonCode(IntEnum):
-    """Why a task is being announced. Diagnostics and operator display."""
+    """Why a task is being announced. Diagnostics and operator display.
+
+    Every value is something this system can actually observe: a behaviour-tree
+    node returned FAILURE, the battery is low, navigation found no route, this
+    robot's schema has no such action, an operator asked, or something ran out
+    of time. Nothing here is aspirational -- a code no code path can set is a
+    code that only ever misleads whoever reads the log.
+
+    This is also the *only* definition. The triage agent builds its label table
+    from this enum rather than restating it; two hand-written tables is exactly
+    how ``low_battery`` came to travel as ``OPERATOR_REQUEST``.
+    """
 
     UNSPECIFIED = 0
-    OPERATOR_REQUEST = 1
-    SCHEDULED = 2
-    BATTERY_LOW = 3
-    TASK_FAILED = 4
-    CAPABILITY_MISSING = 5
-    HAZARD_BLOCKED = 6
-    PREEMPTED = 7
-    TIMEOUT = 8
-
-
-class HazardClass(IntEnum):
-    """What kind of thing is in the way."""
-
-    UNKNOWN = 0
-    OBSTACLE = 1
-    HUMAN = 2
-    ANIMAL = 3
-    TERRAIN = 4
-    EQUIPMENT = 5
-    DISABLED_ROBOT = 6
-    CHEMICAL = 7
-    FIRE = 8
+    #: A BT node returned FAILURE and local replanning could not recover it.
+    TASK_FAILED = 1
+    BATTERY_LOW = 2
+    #: No route, or the orchard model has no such tree. Navigation's answer.
+    UNREACHABLE = 3
+    #: This robot's mission schema does not contain the required action.
+    CAPABILITY_MISSING = 4
+    OPERATOR_REQUEST = 5
+    TIMEOUT = 6
 
 
 # --------------------------------------------------------------------------
@@ -126,6 +169,133 @@ ROBOT_ID_NONE = 0
 
 
 # --------------------------------------------------------------------------
+# Where work happens
+# --------------------------------------------------------------------------
+
+
+class TargetKind(IntEnum):
+    """How a place is named, matching how the behaviour tree names places.
+
+    There is no single coordinate system here because the tree does not have
+    one. ``MoveToTreeID`` names a tree index, ``MoveToAisleHead`` an aisle
+    index, the two GPS actions a latitude and longitude -- and ``SampleLeaf``
+    and ``FollowPerson`` name nothing at all, because they happen wherever the
+    robot already is. GetTreeInfo converts between the first three on demand;
+    flattening them into one at announce time would throw away the very thing
+    the receiving robot needs to rebuild the action node.
+    """
+
+    #: Work with no place of its own. Only meaningful next to work that has one.
+    NONE = 0
+    #: ``a`` is a tree index -- GetTreeInfo TREE_INDEX, MoveToTreeID's ``id``.
+    TREE = 1
+    #: ``a`` is an aisle index -- GetTreeInfo AISLE_INDEX.
+    AISLE = 2
+    #: ``a``/``b`` are latitude/longitude, scaled by GPS_SCALE.
+    GPS = 3
+
+
+#: Degrees per LSB is 1/GPS_SCALE: 1e-7 deg, about 1.1 cm at the equator, which
+#: is finer than any orchard waypoint needs and still leaves int32 covering the
+#: full +/-180 range with room to spare.
+GPS_SCALE = 10_000_000
+
+#: Bounds for the two scaled target words. Signed, because longitude is.
+TARGET_WORD_MAX = 2**31 - 1
+TARGET_WORD_MIN = -(2**31)
+
+#: Tree and aisle indices are unsigned and small. Bounded separately from the
+#: word range so a negative tree index is refused at construction rather than
+#: encoded happily and puzzled over later.
+INDEX_MAX = 0xFFFF
+
+
+@dataclass(frozen=True)
+class Target:
+    """Where a task happens, in the terms the behaviour tree uses.
+
+    Two integer words behind a kind byte. Degrees are converted at the boundary
+    -- ``Target.gps()`` in, ``lat_deg``/``lon_deg`` out -- so everything from
+    here down the stack is integers and the codec needs no fractional scaling.
+    """
+
+    kind: TargetKind
+    #: tree index | aisle index | latitude * GPS_SCALE. Unused when NONE.
+    a: int = 0
+    #: longitude * GPS_SCALE for GPS. Unused otherwise.
+    b: int = 0
+
+    def __post_init__(self):
+        kind = TargetKind(int(self.kind))
+        object.__setattr__(self, "kind", kind)
+        for name in ("a", "b"):
+            value = int(getattr(self, name))
+            if not TARGET_WORD_MIN <= value <= TARGET_WORD_MAX:
+                raise ValueError(
+                    f"target.{name}={value} outside "
+                    f"{TARGET_WORD_MIN}..{TARGET_WORD_MAX}"
+                )
+            object.__setattr__(self, name, value)
+        if kind in (TargetKind.TREE, TargetKind.AISLE):
+            if not 0 <= self.a <= INDEX_MAX:
+                raise ValueError(f"{kind.name} index {self.a} outside 0..{INDEX_MAX}")
+            if self.b:
+                raise ValueError(f"{kind.name} target does not use b, got {self.b}")
+        elif kind is TargetKind.NONE and (self.a or self.b):
+            raise ValueError("a NONE target carries no coordinates")
+
+    # -- constructors -------------------------------------------------------
+
+    @classmethod
+    def none(cls) -> "Target":
+        return cls(TargetKind.NONE)
+
+    @classmethod
+    def tree(cls, tree_index: int) -> "Target":
+        return cls(TargetKind.TREE, int(tree_index))
+
+    @classmethod
+    def aisle(cls, aisle_index: int) -> "Target":
+        return cls(TargetKind.AISLE, int(aisle_index))
+
+    @classmethod
+    def gps(cls, lat_deg: float, lon_deg: float) -> "Target":
+        if not -90.0 <= float(lat_deg) <= 90.0:
+            raise ValueError(f"latitude {lat_deg} outside -90..90")
+        if not -180.0 <= float(lon_deg) <= 180.0:
+            raise ValueError(f"longitude {lon_deg} outside -180..180")
+        return cls(
+            TargetKind.GPS,
+            round(float(lat_deg) * GPS_SCALE),
+            round(float(lon_deg) * GPS_SCALE),
+        )
+
+    # -- accessors ----------------------------------------------------------
+
+    @property
+    def lat_deg(self) -> float:
+        return self.a / GPS_SCALE
+
+    @property
+    def lon_deg(self) -> float:
+        return self.b / GPS_SCALE
+
+    @property
+    def placed(self) -> bool:
+        """Whether this target names somewhere another robot could go."""
+        return self.kind is not TargetKind.NONE
+
+    def __str__(self) -> str:
+        if self.kind is TargetKind.TREE:
+            return f"tree {self.a}"
+        if self.kind is TargetKind.AISLE:
+            return f"aisle {self.a}"
+        if self.kind is TargetKind.GPS:
+            return f"({self.lat_deg:.7f}, {self.lon_deg:.7f})"
+        return "here"
+
+
+# --------------------------------------------------------------------------
 # Field ranges and quantization
 # --------------------------------------------------------------------------
 
@@ -135,20 +305,11 @@ ROBOT_ID_NONE = 0
 SRC_MAX = 0xFF
 SEQ_MAX = 0xFFFF
 
-# Local orchard grid indices, never lat/lon. Unsigned to match the
-# ROW_INDEX/COL_INDEX convention already used by amiga_interfaces/GetTreeInfo,
-# which indexes rows and columns from a corner origin. That service uses uint8;
-# 16 bits here is deliberate headroom, not a different coordinate system.
-GRID_MAX = 0xFFFF
-
 TASK_ID_MAX = 0xFFFF
 
 #: Battery charge, whole percent. 0..100, not 0..255 -- a percent that can read
 #: 200 is a percent nobody can sanity-check.
 BATTERY_MAX = 100
-
-#: Detection confidence, whole percent, same reasoning as battery.
-CONFIDENCE_MAX = 100
 
 #: Task priority. Unitless, higher is more urgent. Comparison only; the codec
 #: assigns no meaning to any particular value.
@@ -158,10 +319,6 @@ PRIORITY_MAX = 0xFF
 #: (time, energy, detour); only comparable between bids on the same task.
 COST_MAX = 0xFF
 
-#: Hazard radius, in grid cells -- same unit as grid_row/grid_col, so a hazard
-#: is a disc in the grid the coordinates already live in.
-RADIUS_MAX = 0xFF
-
 # ETA carried in one byte. At 1 s/LSB that would cap at 255 s, which is under
 # five minutes and shorter than a great many orchard traverses -- a robot would
 # have to either lie or overflow. 4 s/LSB buys 17 minutes for the same byte, and
@@ -169,12 +326,6 @@ RADIUS_MAX = 0xFF
 # Encoding rounds half-up; worst-case error is ETA_RESOLUTION_S / 2 = 2 s.
 ETA_RESOLUTION_S = 4
 ETA_MAX_S = 0xFF * ETA_RESOLUTION_S  # 1020 s == 17 min
-
-# TTL gets two bytes, so it needs no coarsening: 1 s/LSB reaches 18 hours and
-# round-trips exactly. The asymmetry with eta_s is a consequence of field width,
-# not of the two meaning different things.
-TTL_RESOLUTION_S = 1
-TTL_MAX_S = 0xFFFF  # 65535 s == 18h 12m
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +336,7 @@ TTL_MAX_S = 0xFFFF  # 65535 s == 18h 12m
 def cap_mask(*capabilities: Iterable[int]) -> int:
     """Build a ``cap_mask`` from Capability members.
 
-    >>> cap_mask(Capability.DRIVE, Capability.SPRAY) == 0b101
+    >>> cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF) == 0b10000001
     True
     """
     mask = 0
@@ -207,6 +358,21 @@ def has_capability(mask: int, capability: int) -> bool:
     if not 0 <= index < CAP_MASK_BITS:
         raise ValueError(f"capability index {index} outside 0..{CAP_MASK_BITS - 1}")
     return bool(mask & (1 << index))
+
+
+def has_capabilities(mask: int, required: int) -> bool:
+    """True if ``mask`` advertises *every* action in ``required``.
+
+    A task is a behaviour-tree subtree and a subtree uses a set of actions, not
+    one: sampling a tree is ``MoveToTreeID`` *and* ``SampleLeaf``, which is
+    exactly the pairing the arbiter's orphaned-SampleLeaf check enforces. A
+    robot with the arm but no tree navigation would pass a single-action test
+    and then be unable to place the work it just won.
+
+    An empty requirement is satisfied by anything, which is the right reading:
+    a task nobody needs a particular action for is a task anybody can take.
+    """
+    return (int(mask) & int(required)) == int(required)
 
 
 def capabilities_in(mask: int) -> "list[Capability]":

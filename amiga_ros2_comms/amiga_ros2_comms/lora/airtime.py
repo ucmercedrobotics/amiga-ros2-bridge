@@ -40,7 +40,9 @@ class RadioConfig:
 
     def __post_init__(self):
         if not 6 <= self.spreading_factor <= 12:
-            raise ValueError(f"spreading_factor must be 6..12, got {self.spreading_factor}")
+            raise ValueError(
+                f"spreading_factor must be 6..12, got {self.spreading_factor}"
+            )
         if self.bandwidth_hz <= 0:
             raise ValueError(f"bandwidth_hz must be positive, got {self.bandwidth_hz}")
         if not 5 <= self.coding_rate <= 8:
@@ -49,7 +51,9 @@ class RadioConfig:
                 f"got {self.coding_rate}"
             )
         if self.preamble_symbols < 0:
-            raise ValueError(f"preamble_symbols must be >= 0, got {self.preamble_symbols}")
+            raise ValueError(
+                f"preamble_symbols must be >= 0, got {self.preamble_symbols}"
+            )
 
     def describe(self) -> str:
         return (
@@ -101,9 +105,9 @@ def payload_symbols(payload_bytes: int, radio: RadioConfig = DEFAULT_RADIO) -> i
 
 def airtime_sec(payload_bytes: int, radio: RadioConfig = DEFAULT_RADIO) -> float:
     """Total time on air for one frame carrying ``payload_bytes``."""
-    return preamble_time_sec(radio) + payload_symbols(payload_bytes, radio) * symbol_time_sec(
-        radio
-    )
+    return preamble_time_sec(radio) + payload_symbols(
+        payload_bytes, radio
+    ) * symbol_time_sec(radio)
 
 
 def max_payload_for_dwell(

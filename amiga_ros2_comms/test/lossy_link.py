@@ -96,9 +96,7 @@ class Medium:
             msg = decode(payload)
         except CodecError:
             msg = None
-        frame = Frame(
-            index=len(self.frames), sender=node_id, payload=payload, msg=msg
-        )
+        frame = Frame(index=len(self.frames), sender=node_id, payload=payload, msg=msg)
         frame.dropped = bool(self.drop_rule(frame))
         self.frames.append(frame)
         if frame.dropped:
@@ -159,6 +157,7 @@ class Medium:
                 return False
             seen["n"] += 1
             return count is None or seen["n"] <= count
+
         return rule
 
     @staticmethod

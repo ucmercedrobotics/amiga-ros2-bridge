@@ -208,9 +208,9 @@ def test_a_busy_modem_stops_draining_its_serial_port(fleet_factory):
     )
     # One 4 kB read is ~20 frames, and each costs 318 ms of airtime, so a
     # second of wall clock cannot legitimately have consumed many more.
-    assert fleet.medium.stats()["frames_sent"] <= 40, (
-        "the modem consumed more airtime than a second of wall clock allows"
-    )
+    assert (
+        fleet.medium.stats()["frames_sent"] <= 40
+    ), "the modem consumed more airtime than a second of wall clock allows"
     assert len(sent) < burst
 
 
@@ -221,7 +221,9 @@ def test_a_busy_modem_stops_draining_its_serial_port(fleet_factory):
 
 def test_ports_are_stable_symlinks_that_are_cleaned_up(tmp_path):
     directory = str(tmp_path / "lora")
-    medium = VirtualLoRaMedium(["alpha", "beta"], symlink_dir=directory, radio=TEST_RADIO)
+    medium = VirtualLoRaMedium(
+        ["alpha", "beta"], symlink_dir=directory, radio=TEST_RADIO
+    )
     try:
         # Launch files name the port before the pty exists, so the path has to
         # be predictable rather than whatever /dev/pts number came up.

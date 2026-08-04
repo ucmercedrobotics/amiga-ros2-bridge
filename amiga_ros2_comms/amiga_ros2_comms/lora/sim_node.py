@@ -57,7 +57,9 @@ class LoRaSim(Node):
 
         stats_period = float(self.get_parameter("stats_period_sec").value)
         self._stats_timer = (
-            self.create_timer(stats_period, self._log_stats) if stats_period > 0 else None
+            self.create_timer(stats_period, self._log_stats)
+            if stats_period > 0
+            else None
         )
         self._announce(radio)
 

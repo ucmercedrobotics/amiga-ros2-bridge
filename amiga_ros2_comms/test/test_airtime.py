@@ -32,13 +32,23 @@ def test_airtime_matches_the_published_reference_case():
 def test_low_data_rate_optimize_engages_only_where_it_must():
     # Mandatory once a symbol exceeds 16 ms, which at 125 kHz is SF11 and SF12.
     assert not low_data_rate_optimize(SF10_125K)
-    assert not low_data_rate_optimize(RadioConfig(spreading_factor=11, bandwidth_hz=250_000))
+    assert not low_data_rate_optimize(
+        RadioConfig(spreading_factor=11, bandwidth_hz=250_000)
+    )
     assert low_data_rate_optimize(SF12_125K)
 
 
 def test_airtime_grows_with_payload_and_with_spreading_factor():
-    assert airtime_sec(0, SF7_125K) < airtime_sec(50, SF7_125K) < airtime_sec(200, SF7_125K)
-    assert airtime_sec(50, SF7_125K) < airtime_sec(50, SF10_125K) < airtime_sec(50, SF12_125K)
+    assert (
+        airtime_sec(0, SF7_125K)
+        < airtime_sec(50, SF7_125K)
+        < airtime_sec(200, SF7_125K)
+    )
+    assert (
+        airtime_sec(50, SF7_125K)
+        < airtime_sec(50, SF10_125K)
+        < airtime_sec(50, SF12_125K)
+    )
 
 
 def test_the_dwell_limit_is_what_actually_caps_payload_size():

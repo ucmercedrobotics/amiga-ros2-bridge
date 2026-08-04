@@ -50,7 +50,6 @@ def generate_launch_description():
                 default_value="0.0",
                 description="Offset in meters to add to latitude (north/south)",
             ),
-
             Node(
                 package="amiga_ros2_behavior_tree",
                 executable="bt_runner",
@@ -70,10 +69,15 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "port": ParameterValue(LaunchConfiguration("port"), value_type=int),
-                        "expect_json": ParameterValue(LaunchConfiguration("expect_json"), value_type=bool),
+                        "port": ParameterValue(
+                            LaunchConfiguration("port"), value_type=int
+                        ),
+                        "expect_json": ParameterValue(
+                            LaunchConfiguration("expect_json"), value_type=bool
+                        ),
                         "payload_length_included": ParameterValue(
-                            LaunchConfiguration("payload_length_included"), value_type=bool
+                            LaunchConfiguration("payload_length_included"),
+                            value_type=bool,
                         ),
                         "mission_topic": LaunchConfiguration("mission_topic"),
                         "orchard_topic": LaunchConfiguration("orchard_topic"),

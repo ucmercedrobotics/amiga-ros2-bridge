@@ -16,6 +16,7 @@ import struct
 import sys
 from dataclasses import dataclass
 from typing import ClassVar
+from xml.etree import ElementTree
 
 import pytest
 
@@ -25,7 +26,9 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     DEFAULT_MAX_PAYLOAD_BYTES,
     ETA_MAX_S,
     ETA_RESOLUTION_S,
+    GPS_SCALE,
     HEADER_BYTES,
+    INDEX_MAX,
     MAX_MESSAGE_BYTES,
     Ack,
     Bid,
@@ -33,30 +36,58 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     CodecError,
     FieldRangeError,
     Grant,
-    Hazard,
-    HazardClass,
     Heartbeat,
     Message,
     MessageType,
     PayloadTooLarge,
     ReasonCode,
     ReservedMessageType,
+    Target,
+    TargetKind,
     TaskAnnounce,
     TrailingBytes,
     TruncatedMessage,
     UnknownMessageType,
+    XML_ELEMENT,
     cap_mask,
     capabilities_in,
     decode,
     encode,
+    has_capabilities,
     has_capability,
+    target_fields,
+    target_of,
 )
 from amiga_ros2_comms.codec.codec import (  # noqa: E402
     _HEADER_FIELDS,
     _LAYOUTS,
+    _TARGETED,
 )
 
 BUILT = tuple(_LAYOUTS)
+
+#: The names of the three fields that together mean one place. They are drawn
+#: as a unit rather than field by field, because two of the three constrain the
+#: third -- an AISLE target has no longitude -- and independent draws would
+#: generate triples no sender could produce and the decoder rightly refuses.
+TARGET_FIELD_NAMES = ("target_kind", "target_a", "target_b")
+
+#: Every legal target worth encoding: both index extremes, the poles and the
+#: antimeridian, a real orchard fix from examples/quad.xml, and the placeless
+#: target that SampleLeaf-only work has.
+LEGAL_TARGETS = (
+    Target.none(),
+    Target.tree(0),
+    Target.tree(1),
+    Target.tree(60),
+    Target.tree(INDEX_MAX),
+    Target.aisle(0),
+    Target.aisle(INDEX_MAX),
+    Target.gps(0.0, 0.0),
+    Target.gps(90.0, 180.0),
+    Target.gps(-90.0, -180.0),
+    Target.gps(37.366449, -120.423065),
+)
 
 
 # --------------------------------------------------------------------------
@@ -82,10 +113,28 @@ def _all_fields(cls):
     return _HEADER_FIELDS + _LAYOUTS[cls]
 
 
+def _scalar_fields(cls):
+    """Everything except the target triple, which is generated as a unit."""
+    return tuple(f for f in _all_fields(cls) if f.name not in TARGET_FIELD_NAMES)
+
+
+def _with_target(cls, values, target):
+    if cls in _TARGETED:
+        values = {**values, **target_fields(target)}
+    return cls(**values)
+
+
 def _extreme_instances(cls):
     """All-minimum and all-maximum instances of ``cls``."""
-    fields = _all_fields(cls)
-    return [cls(**{f.name: _lattice_values(f)[i] for f in fields}) for i in (0, 1)]
+    fields = _scalar_fields(cls)
+    return [
+        _with_target(
+            cls,
+            {f.name: _lattice_values(f)[i] for f in fields},
+            LEGAL_TARGETS[0] if i == 0 else LEGAL_TARGETS[-1],
+        )
+        for i in (0, 1)
+    ]
 
 
 def _boundary_instances(cls):
@@ -93,25 +142,35 @@ def _boundary_instances(cls):
 
     Sweeping one field at a time is what catches a field packed at the wrong
     offset: an all-max instance can look correct even if two same-width fields
-    are transposed.
+    are transposed. The target sweeps by whole target instead, for the same
+    reason at the level of a group of fields.
     """
-    fields = _all_fields(cls)
+    fields = _scalar_fields(cls)
     rng = random.Random(f"boundary-{cls.__name__}")
     base = {f.name: _random_value(f, rng) for f in fields}
     out = []
     for field in fields:
         for value in _lattice_values(field):
-            values = dict(base)
-            values[field.name] = value
-            out.append(cls(**values))
+            out.append(
+                _with_target(
+                    cls, {**base, field.name: value}, rng.choice(LEGAL_TARGETS)
+                )
+            )
+    if cls in _TARGETED:
+        out.extend(_with_target(cls, base, target) for target in LEGAL_TARGETS)
     return out
 
 
 def _random_instances(cls, count=200):
     rng = random.Random(f"random-{cls.__name__}")
-    fields = _all_fields(cls)
+    fields = _scalar_fields(cls)
     return [
-        cls(**{f.name: _random_value(f, rng) for f in fields}) for _ in range(count)
+        _with_target(
+            cls,
+            {f.name: _random_value(f, rng) for f in fields},
+            rng.choice(LEGAL_TARGETS),
+        )
+        for _ in range(count)
     ]
 
 
@@ -139,13 +198,14 @@ def test_round_trip_preserves_the_message_type(cls):
 def test_round_trip_of_hand_written_messages():
     # The generated cases prove self-consistency; these prove the fields mean
     # what the vocabulary says they mean, written out the way a caller would.
+    # The task announced here is the one from examples/sample_leafs.xml: go to
+    # tree 60 and sample its leaves.
     messages = [
         Heartbeat(
             src=3,
             seq=1024,
-            cap_mask=cap_mask(Capability.DRIVE, Capability.SPRAY),
-            grid_row=12,
-            grid_col=47,
+            cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+            **target_fields(Target.gps(37.366449, -120.423065)),
             battery=88,
             cur_task=0,
         ),
@@ -153,25 +213,14 @@ def test_round_trip_of_hand_written_messages():
             src=1,
             seq=7,
             task_id=4242,
-            req_capability=Capability.SPRAY,
-            grid_row=12,
-            grid_col=47,
+            req_cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+            **target_fields(Target.tree(60)),
             priority=200,
             reason_code=ReasonCode.OPERATOR_REQUEST,
         ),
         Bid(src=3, seq=8, task_id=4242, eta_s=120, feasible=True, cost=31),
         Grant(src=1, seq=9, task_id=4242, winner_id=3),
         Ack(src=3, seq=10, ack_src=1, ack_seq=9),
-        Hazard(
-            src=2,
-            seq=11,
-            hazard_class=HazardClass.HUMAN,
-            grid_row=13,
-            grid_col=47,
-            radius=2,
-            confidence=91,
-            ttl_s=600,
-        ),
     ]
     for msg in messages:
         assert decode(encode(msg)) == msg
@@ -189,51 +238,89 @@ def test_header_survives_the_round_trip_independently_of_the_payload():
 
 
 def test_decoded_enums_are_enum_members_when_the_value_is_known():
-    msg = Hazard(
-        src=1,
-        seq=1,
-        hazard_class=HazardClass.ANIMAL,
-        grid_row=0,
-        grid_col=0,
-        radius=1,
-        confidence=50,
-        ttl_s=60,
-    )
-    assert decode(encode(msg)).hazard_class is HazardClass.ANIMAL
+    msg = an_announce(reason_code=ReasonCode.BATTERY_LOW)
+    assert decode(encode(msg)).reason_code is ReasonCode.BATTERY_LOW
 
 
 def test_unknown_enum_values_pass_through_as_ints():
-    # Forward compatibility: a newer peer naming a hazard class we lack is
-    # still telling us where the hazard is, so the message must survive.
+    # Forward compatibility: a newer peer naming a reason we have no word for
+    # is still telling us there is work, so the message must survive.
     unnamed = 200
-    assert unnamed not in set(HazardClass)
-    msg = Hazard(
-        src=1,
-        seq=1,
-        hazard_class=unnamed,
-        grid_row=5,
-        grid_col=5,
-        radius=1,
-        confidence=50,
-        ttl_s=60,
-    )
+    assert unnamed not in set(ReasonCode)
+    msg = an_announce(reason_code=unnamed)
     out = decode(encode(msg))
-    assert out.hazard_class == unnamed
+    assert out.reason_code == unnamed
     assert out == msg
+
+
+def test_an_unknown_target_kind_is_refused_rather_than_passed_through():
+    # The opposite call to reason_code, deliberately. An unnamed reason is
+    # informational and can be logged as a number; an unnamed target kind means
+    # the two words after it are in a coordinate system we cannot read, and a
+    # robot that drove to them anyway would be acting on a misreading.
+    unnamed = max(TargetKind) + 1
+    packet = bytearray(encode(an_announce()))
+    packet[_target_kind_offset(TaskAnnounce)] = int(unnamed)
+    with pytest.raises(FieldRangeError):
+        decode(bytes(packet))
+
+
+@pytest.mark.parametrize(
+    "kind,a,b",
+    [
+        (TargetKind.NONE, 5, 0),  # placeless work with a coordinate
+        (TargetKind.NONE, 0, 5),
+        (TargetKind.TREE, 3, 9),  # a tree with a longitude
+        (TargetKind.AISLE, 3, 9),
+        (TargetKind.TREE, -1, 0),  # a negative index
+    ],
+)
+def test_an_incoherent_target_triple_is_refused(kind, a, b):
+    # Each word is in range on its own; together they describe nothing. A
+    # sender that produces this disagrees with us about the layout, which is
+    # the same class of problem as trailing bytes and is refused just as loudly.
+    packet = bytearray(encode(an_announce()))
+    offset = _target_kind_offset(TaskAnnounce)
+    packet[offset : offset + 9] = struct.pack(">Bii", int(kind), a, b)
+    with pytest.raises(FieldRangeError):
+        decode(bytes(packet))
+
+
+def _target_kind_offset(cls) -> int:
+    """Byte offset of ``target_kind`` within an encoded ``cls``."""
+    offset = HEADER_BYTES
+    for field in _LAYOUTS[cls]:
+        if field.name == "target_kind":
+            return offset
+        offset += struct.calcsize(field.fmt)
+    raise AssertionError(f"{cls.__name__} carries no target")
+
+
+def an_announce(task_id=4242, reason_code=ReasonCode.TASK_FAILED):
+    return TaskAnnounce(
+        src=1,
+        seq=7,
+        task_id=task_id,
+        req_cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+        **target_fields(Target.tree(60)),
+        priority=200,
+        reason_code=reason_code,
+    )
 
 
 # --------------------------------------------------------------------------
 # Group 2: size
 # --------------------------------------------------------------------------
 
-#: The sizes the brief specifies. Pinned so a field width cannot drift silently.
+#: Pinned so a field width cannot drift silently. Heartbeat and TaskAnnounce
+#: both grew by 5 bytes when the grid became a typed target: the kind byte plus
+#: two int32 words, less the two uint16 grid fields they replaced.
 EXPECTED_SIZES = {
-    Heartbeat: 13,
-    TaskAnnounce: 13,
+    Heartbeat: 18,
+    TaskAnnounce: 19,
     Bid: 9,
     Grant: 7,
     Ack: 7,
-    Hazard: 13,
 }
 
 
@@ -266,7 +353,12 @@ def test_encode_never_splits_an_oversized_message():
     # There is no fragmentation at this layer and there must never be one that
     # arrived by accident: encode returns one packet or it raises.
     msg = Heartbeat(
-        src=1, seq=1, cap_mask=0, grid_row=0, grid_col=0, battery=0, cur_task=0
+        src=1,
+        seq=1,
+        cap_mask=0,
+        **target_fields(Target.none()),
+        battery=0,
+        cur_task=0,
     )
     with pytest.raises(PayloadTooLarge):
         encode(msg, max_payload_bytes=1)
@@ -428,7 +520,7 @@ def test_decode_rejects_structurally_valid_but_impossible_values():
     # get here -- it is a protocol bug, and passing it up as an object the rest
     # of the stack trusts is strictly worse than dropping it.
     frame = struct.pack(">BBH", int(MessageType.HEARTBEAT), 1, 1) + struct.pack(
-        ">HHHBH", 0, 0, 0, 200, 0
+        ">HBiiBH", 0, int(TargetKind.NONE), 0, 0, 200, 0
     )
     with pytest.raises(FieldRangeError) as exc:
         decode(frame)
@@ -463,8 +555,19 @@ def test_encode_rejects_out_of_range_values_instead_of_truncating(cls):
 
 
 def test_encode_rejects_a_fractional_value_in_an_unquantized_field():
+    # Note what this implies for GPS: degrees never reach the encoder as
+    # floats. Target.gps() rounds them onto the 1e-7 lattice at construction,
+    # and a caller who assembled the words by hand from raw degrees is caught
+    # here rather than having 37.366449 quietly become tree 37.
     msg = Heartbeat(
-        src=1, seq=1, cap_mask=0, grid_row=3.7, grid_col=0, battery=50, cur_task=0
+        src=1,
+        seq=1,
+        cap_mask=0,
+        target_kind=int(TargetKind.GPS),
+        target_a=3.7,
+        target_b=0,
+        battery=50,
+        cur_task=0,
     )
     with pytest.raises(FieldRangeError):
         encode(msg)
@@ -506,19 +609,65 @@ def test_eta_beyond_the_representable_range_is_refused_not_wrapped():
         encode(msg)
 
 
-def test_ttl_is_unquantized_and_exact_to_the_second():
-    for ttl in [0, 1, 59, 60, 3599, 3600, 65534, 65535]:
-        msg = Hazard(
-            src=1,
-            seq=1,
-            hazard_class=HazardClass.OBSTACLE,
-            grid_row=0,
-            grid_col=0,
-            radius=0,
-            confidence=0,
-            ttl_s=ttl,
-        )
-        assert decode(encode(msg)).ttl_s == ttl
+# --------------------------------------------------------------------------
+# Targets
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("target", LEGAL_TARGETS, ids=str)
+def test_every_target_survives_the_round_trip_unchanged(target):
+    for cls in _TARGETED:
+        template = _extreme_instances(cls)[0]
+        msg = type(template)(**{**template.__dict__, **target_fields(target)})
+        assert target_of(decode(encode(msg))) == target
+
+
+def test_gps_round_trips_within_the_documented_resolution():
+    # 1e-7 deg is about 1.1 cm. The orchard fixes in examples/quad.xml are
+    # given to 1e-7 or coarser, so the wire loses nothing a mission ever had.
+    fixes = [
+        (37.366449, -120.423065),
+        (37.3664050000283, -120.4230154999136),
+        (37.366351898723934, -120.42261198151091),
+        (0.0, 0.0),
+        (90.0, 180.0),
+        (-90.0, -180.0),
+    ]
+    for lat, lon in fixes:
+        out = target_of(decode(encode(a_heartbeat_at(Target.gps(lat, lon)))))
+        assert abs(out.lat_deg - lat) <= 0.5 / GPS_SCALE
+        assert abs(out.lon_deg - lon) <= 0.5 / GPS_SCALE
+
+
+def test_a_gps_target_outside_the_globe_is_refused_at_construction():
+    # Caught in Target rather than at encode time: an out-of-range latitude is
+    # a mistake in whatever computed it, and the traceback is worth more there
+    # than three layers down inside struct.pack.
+    for lat, lon in [(91.0, 0.0), (-91.0, 0.0), (0.0, 181.0), (0.0, -181.0)]:
+        with pytest.raises(ValueError):
+            Target.gps(lat, lon)
+
+
+def test_a_placeless_target_is_distinguishable_from_the_origin():
+    # The whole reason NONE exists. Under the old grid both "no GPS fix" and
+    # "at 0,0" encoded as zeros, so a robot with no fix advertised itself in
+    # the Gulf of Guinea and every ETA computed against it was fiction.
+    assert Target.none() != Target.gps(0.0, 0.0)
+    here = target_of(decode(encode(a_heartbeat_at(Target.none()))))
+    origin = target_of(decode(encode(a_heartbeat_at(Target.gps(0.0, 0.0)))))
+    assert here != origin
+    assert not here.placed and origin.placed
+
+
+def a_heartbeat_at(target):
+    return Heartbeat(
+        src=1,
+        seq=1,
+        cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID),
+        **target_fields(target),
+        battery=100,
+        cur_task=0,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -527,45 +676,52 @@ def test_ttl_is_unquantized_and_exact_to_the_second():
 
 
 def test_cap_mask_and_has_capability_are_inverses():
-    caps = [Capability.DRIVE, Capability.HARVEST, Capability.RELAY]
+    caps = [
+        Capability.MOVE_TO_TREE_ID,
+        Capability.SAMPLE_LEAF,
+        Capability.FOLLOW_PERSON,
+    ]
     mask = cap_mask(*caps)
     for capability in Capability:
         assert has_capability(mask, capability) == (capability in caps)
 
 
 def test_cap_mask_survives_a_heartbeat_round_trip():
-    mask = cap_mask(*Capability)
-    msg = Heartbeat(
-        src=9, seq=9, cap_mask=mask, grid_row=1, grid_col=1, battery=100, cur_task=0
-    )
+    msg = a_heartbeat_at(Target.none())
+    msg.cap_mask = cap_mask(*Capability)
     assert set(capabilities_in(decode(encode(msg)).cap_mask)) == set(Capability)
 
 
 def test_a_task_requirement_can_be_tested_against_an_advertised_mask():
     # The one operation the arbiter needs, and the reason capabilities are bit
     # indices rather than mask values: the two message types interoperate.
-    heartbeat = Heartbeat(
-        src=2,
-        seq=1,
-        cap_mask=cap_mask(Capability.DRIVE, Capability.SPRAY),
-        grid_row=0,
-        grid_col=0,
-        battery=50,
-        cur_task=0,
+    # The task is the real one from examples/sample_leafs.xml -- approach tree
+    # 60 and sample it -- which needs both actions and not either alone.
+    sampler = a_heartbeat_at(Target.gps(37.366449, -120.423065))
+    sampler.cap_mask = cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF)
+    announce = an_announce()
+
+    assert has_capabilities(
+        decode(encode(sampler)).cap_mask, decode(encode(announce)).req_cap_mask
     )
-    announce = TaskAnnounce(
-        src=1,
-        seq=1,
-        task_id=1,
-        req_capability=Capability.SPRAY,
-        grid_row=0,
-        grid_col=0,
-        priority=1,
-        reason_code=ReasonCode.SCHEDULED,
-    )
-    assert has_capability(
-        decode(encode(heartbeat)).cap_mask, decode(encode(announce)).req_capability
-    )
+
+
+def test_a_robot_missing_one_action_of_a_task_does_not_qualify():
+    # The reason the requirement is a mask and not an index. An arm that cannot
+    # drive to the tree passes any single-action test and then cannot place the
+    # work it just won.
+    armless = cap_mask(Capability.MOVE_TO_TREE_ID)
+    rootless = cap_mask(Capability.SAMPLE_LEAF)
+    required = decode(encode(an_announce())).req_cap_mask
+
+    assert not has_capabilities(armless, required)
+    assert not has_capabilities(rootless, required)
+    assert has_capabilities(armless | rootless, required)
+
+
+def test_an_empty_requirement_is_satisfied_by_anything():
+    assert has_capabilities(0, 0)
+    assert has_capabilities(cap_mask(Capability.SAMPLE_LEAF), 0)
 
 
 def test_every_capability_index_fits_the_advertised_mask_width():
@@ -578,6 +734,56 @@ def test_capability_indices_are_unique():
     assert len(values) == len(set(values))
 
 
+def test_the_capability_vocabulary_is_the_behaviour_trees_action_group():
+    """Every capability names an action the mission schema actually permits.
+
+    This is the test that keeps the wire honest. The whole point of these bits
+    is that a robot advertises what its behaviour tree can be asked to do, so a
+    capability with no corresponding XSD element is a robot claiming a skill no
+    mission could ever invoke -- and an XSD element with no bit is work the
+    fleet can never delegate. Both directions have to hold.
+    """
+    schema = _installed_schema()
+    permitted = _action_group_elements(schema)
+
+    assert permitted, f"no ActionGroup elements found in {schema}"
+    assert {XML_ELEMENT[c] for c in Capability} == permitted
+
+    # DetectObject is registered in bt.cpp but commented out of the schema.
+    # Advertising it would be a claim no mission could exercise.
+    assert "DetectObject" not in permitted
+
+
+def _installed_schema() -> str:
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(
+        os.path.dirname(here),
+        "amiga_ros2_behavior_tree",
+        "schemas",
+        "amiga_btcpp.xsd",
+    )
+
+
+def _action_group_elements(path: str) -> set:
+    """The element names inside <xs:group name="ActionGroup">.
+
+    Deliberately parsed here rather than imported from the coordinator's
+    capabilities.py: a test that used the same parser as the code it checks
+    would agree with it about a schema neither had read correctly.
+    """
+    xs = "{http://www.w3.org/2001/XMLSchema}"
+    root = ElementTree.parse(path).getroot()
+    for group in root.iter(f"{xs}group"):
+        if group.get("name") != "ActionGroup":
+            continue
+        return {
+            element.get("name")
+            for element in group.iter(f"{xs}element")
+            if element.get("name")
+        }
+    return set()
+
+
 # --------------------------------------------------------------------------
 # Vocabulary integrity
 # --------------------------------------------------------------------------
@@ -588,18 +794,27 @@ def test_every_built_type_has_a_distinct_tag():
     assert len(tags) == len(set(tags))
 
 
-def test_the_six_built_types_are_exactly_the_ones_specified():
+def test_the_five_built_types_are_exactly_the_ones_specified():
     assert {cls.TAG for cls in BUILT} == {
         MessageType.HEARTBEAT,
         MessageType.TASK_ANNOUNCE,
         MessageType.BID,
         MessageType.GRANT,
         MessageType.ACK,
-        MessageType.HAZARD,
     }
 
 
 def test_message_type_values_match_the_wire_contract():
     # Renumbering a shipped tag silently breaks every peer, so the numbers are
     # pinned here rather than merely being whatever the enum happens to say.
-    assert [int(t) for t in MessageType] == [1, 2, 3, 4, 5, 6, 7]
+    assert [int(t) for t in MessageType] == [1, 2, 3, 4, 5, 7]
+
+
+def test_the_retired_hazard_tag_is_not_quietly_reused():
+    # 0x06 was HAZARD. Nothing ever detected a hazard, so the type was removed
+    # rather than left as a promise -- but the gap stays a gap: giving 0x06 to
+    # a new type would make any peer still holding the old code silently
+    # misread it.
+    assert 0x06 not in {int(t) for t in MessageType}
+    with pytest.raises(UnknownMessageType):
+        decode(struct.pack(">BBH", 0x06, 1, 1))

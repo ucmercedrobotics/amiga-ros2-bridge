@@ -46,12 +46,12 @@ class DummyTreeIDActionServer : public rclcpp::Node {
     std::thread([this, goal_handle]() {
       auto feedback = std::make_shared<TreeIDWaypoint::Feedback>();
       auto result = std::make_shared<TreeIDWaypoint::Result>();
-      
+
       // Generate pseudo-random values based on tree_id
       uint32_t tree_id = goal_handle->get_goal()->tree_id;
       double lat = 37.0 + (tree_id % 1000) / 10000.0;  // ~37.0-37.1
       double lon = -122.0 + (tree_id % 1000) / 10000.0;  // ~-122.0--121.9
-      
+
       result->lat = lat;
       result->lon = lon;
 
@@ -65,16 +65,16 @@ class DummyTreeIDActionServer : public rclcpp::Node {
           RCLCPP_INFO(this->get_logger(), "Goal canceled");
           return;
         }
-        
+
         feedback->dist = i * 1.5;  // Distance decreasing
         goal_handle->publish_feedback(feedback);
         RCLCPP_INFO(this->get_logger(), "Distance remaining: %.2f m", feedback->dist);
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
 
       goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), 
+      RCLCPP_INFO(this->get_logger(),
                   "Goal succeeded! Arrived at tree %u (%.6f, %.6f)",
                   tree_id, lat, lon);
     }).detach();

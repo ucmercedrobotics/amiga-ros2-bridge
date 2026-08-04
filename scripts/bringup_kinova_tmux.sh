@@ -48,12 +48,12 @@ wait_for_container() {
 run() {
     local CMD="$1"
     local WINDOW_NAME="$2"
-    
+
     # Use provided window name or generate one
     if [ -z "$WINDOW_NAME" ]; then
         WINDOW_NAME="exec-${WINDOW_INDEX}"
     fi
-    
+
     echo "Creating new tmux window '$WINDOW_NAME'..."
 
     tmux new-window -t "$SESSION" -n "$WINDOW_NAME" "docker exec -it $CONTAINER_ID bash"

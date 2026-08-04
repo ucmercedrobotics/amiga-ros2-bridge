@@ -488,7 +488,7 @@ class ReliabilitySession:
     def _interval(self, attempts: int) -> float:
         """Wait before the next retransmit, after ``attempts`` of them."""
         interval = self.params.retransmit_timeout_sec * (
-            self.params.retransmit_backoff ** attempts
+            self.params.retransmit_backoff**attempts
         )
         return min(interval, self.params.max_retransmit_timeout_sec)
 

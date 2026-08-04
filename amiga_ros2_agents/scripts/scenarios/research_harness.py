@@ -59,17 +59,18 @@ MODELS = {
         "MODEL_MAX_TOKENS": "8192",
     },
     "cloud": {
-        "LOCAL_MODEL": "openai/gpt-5.6-sol",   # litellm routes plain "gpt-5.6-sol" to OpenAI
-        "LOCAL_API_BASE": "",      # empty => `"" or None` => official OpenAI endpoint
+        "LOCAL_MODEL": "openai/gpt-5.6-sol",  # litellm routes plain "gpt-5.6-sol" to OpenAI
+        "LOCAL_API_BASE": "",  # empty => `"" or None` => official OpenAI endpoint
         "MODEL_TEMPERATURE": "0.2",
         "MODEL_MAX_TOKENS": "10000",
     },
 }
 
-TRIAL_TIMEOUT_SEC = 300     # max wait for a terminal outcome per trial
-POST_READY_WAIT_SEC = 3.0   # grace after readiness so pub/sub matching settles
-LAUNCH_TIMEOUT_SEC = 90     # max wait for both agents to report ready
-BUDGET_WAIT_SEC = 180       # max wait for the arbiter's viability budget (~2min LLM call)
+TRIAL_TIMEOUT_SEC = 300  # max wait for a terminal outcome per trial
+POST_READY_WAIT_SEC = 3.0  # grace after readiness so pub/sub matching settles
+LAUNCH_TIMEOUT_SEC = 90  # max wait for both agents to report ready
+BUDGET_WAIT_SEC = 180  # max wait for the arbiter's viability budget (~2min LLM call)
+
 
 def _tree_steps(ids):
     rows = []
@@ -199,11 +200,15 @@ class Capture(Node):
         self.xml_pub = self.create_publisher(String, "/mission/xml", 10)
         self.bt_pub = self.create_publisher(String, "/bt/status_change", 10)
         self.create_subscription(String, "/mission/xml", self._on_final, 10)
-        self.create_subscription(String, "/mission/candidate_xml", self._on_candidate, 10)
+        self.create_subscription(
+            String, "/mission/candidate_xml", self._on_candidate, 10
+        )
         self.create_subscription(String, "/mission/abort", self._on_abort, 10)
         self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
         self.create_subscription(String, "/mission/planner_status", self._on_status, 10)
-        self.create_subscription(String, "/mission/viability_budget", self._on_budget, 10)
+        self.create_subscription(
+            String, "/mission/viability_budget", self._on_budget, 10
+        )
         self.reset(None)
 
     def reset(self, original_xml):
@@ -244,7 +249,8 @@ class Capture(Node):
 
     def run_trial(self, xml, failure):
         self.reset(xml)
-        m = String(); m.data = xml
+        m = String()
+        m.data = xml
         self.xml_pub.publish(m)
         time.sleep(2.0)  # let planner + arbiter register the mission
 
@@ -254,14 +260,15 @@ class Capture(Node):
         f.data = json.dumps(fail)
         t0 = time.time()
         self.bt_pub.publish(f)
-       
 
         deadline = t0 + TRIAL_TIMEOUT_SEC
         while time.time() < deadline:
             rclpy.spin_once(self, timeout_sec=0.5)
-            if (self.final_xml is not None
-                    or self.abort is not None
-                    or self.gave_up is not None):
+            if (
+                self.final_xml is not None
+                or self.abort is not None
+                or self.gave_up is not None
+            ):
                 # settle so a trailing message (and the budget) also lands
                 settle = time.time() + 2.0
                 while time.time() < settle:
@@ -295,14 +302,20 @@ class Capture(Node):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", default="local", help="comma list of MODELS keys, or 'all'")
-    ap.add_argument("--scenarios", default="all", help="comma list of SCENARIOS keys, or 'all'")
+    ap.add_argument(
+        "--models", default="local", help="comma list of MODELS keys, or 'all'"
+    )
+    ap.add_argument(
+        "--scenarios", default="all", help="comma list of SCENARIOS keys, or 'all'"
+    )
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--outdir", default="runs")
     args = ap.parse_args()
 
     models = list(MODELS) if args.models == "all" else args.models.split(",")
-    scenarios = list(SCENARIOS) if args.scenarios == "all" else args.scenarios.split(",")
+    scenarios = (
+        list(SCENARIOS) if args.scenarios == "all" else args.scenarios.split(",")
+    )
     for k in models:
         assert k in MODELS, f"unknown model {k}"
     for k in scenarios:
@@ -357,9 +370,12 @@ def main():
 
                     with open(results_path, "a") as fh:
                         fh.write(json.dumps(record) + "\n")
-                    print(f"[harness]      -> {record.get('decision')} "
-                          f"(budget={record.get('viability_budget')}, "
-                          f"{record.get('latency_sec','-')}s)", flush=True)
+                    print(
+                        f"[harness]      -> {record.get('decision')} "
+                        f"(budget={record.get('viability_budget')}, "
+                        f"{record.get('latency_sec','-')}s)",
+                        flush=True,
+                    )
     finally:
         cap.destroy_node()
         rclpy.shutdown()

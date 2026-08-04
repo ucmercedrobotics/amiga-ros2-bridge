@@ -49,16 +49,18 @@ MOCK_FAILURE_2 = {
         "3 retry attempts; obstacle appears permanent (fallen tree across row)"
     ),
 }
+
+
 class Tester(Node):
     def __init__(self):
         super().__init__("mission_planner_tester")
         self.xml_pub = self.create_publisher(String, "/mission/xml", 10)
         self.bt_pub = self.create_publisher(String, "/bt/status_change", 10)
-        self.received_edits = []                        # CHANGED: list instead of single value
+        self.received_edits = []  # CHANGED: list instead of single value
 
         self.create_subscription(String, "/mission/xml", self._on_xml, 10)
 
-    def _on_xml(self, msg: String):                     # CHANGED: collect every distinct edit
+    def _on_xml(self, msg: String):  # CHANGED: collect every distinct edit
         if msg.data == SAMPLE_XML:
             return
         if msg.data in self.received_edits:
@@ -66,7 +68,9 @@ class Tester(Node):
         self.received_edits.append(msg.data)
         self.get_logger().info(f"Received edited XML #{len(self.received_edits)}!")
 
-    def _wait_for_edit(self, count: int, timeout_sec: float = 300.0) -> bool:   # NEW helper
+    def _wait_for_edit(
+        self, count: int, timeout_sec: float = 300.0
+    ) -> bool:  # NEW helper
         deadline = time.time() + timeout_sec
         while time.time() < deadline and len(self.received_edits) < count:
             rclpy.spin_once(self, timeout_sec=1.0)
@@ -92,7 +96,7 @@ class Tester(Node):
             print("TIMEOUT — no edited XML for failure 1", file=sys.stderr)
             sys.exit(1)
 
-        time.sleep(2.0)   # let the planner ingest its own edit #1
+        time.sleep(2.0)  # let the planner ingest its own edit #1
 
         # --- Failure 2: retries exhausted at tree 60 ---
         self.get_logger().info("Publishing mock BT failure 2 (retries exhausted)…")
@@ -111,6 +115,7 @@ class Tester(Node):
             print(f"\n=== Edited mission XML #{i} ===")
             print(xml)
             print("=" * 30)
+
 
 def main():
     rclpy.init()

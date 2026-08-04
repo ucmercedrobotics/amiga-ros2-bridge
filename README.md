@@ -265,4 +265,3 @@ ros2 launch amiga_ros2_gazebo sim_bringup.launch.py headless:=true
 
 Stacks can be toggled off with `launch_nav:=false`, `launch_arm:=false`, `launch_bt:=false`, or
 `launch_helpers:=false`, and a different world with `world:=/path/to/world.sdf`.
-

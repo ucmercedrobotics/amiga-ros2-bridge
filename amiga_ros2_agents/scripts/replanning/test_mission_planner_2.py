@@ -51,7 +51,6 @@ def _missing_tree_failure(tree_id: int) -> dict:
     }
 
 
-
 MOCK_FAILURES = [_missing_tree_failure(t) for t in (3, 4, 5, 6, 7, 8)]
 
 
@@ -102,7 +101,7 @@ class Tester(Node):
                 sys.exit(1)
 
             time.sleep(5.5)  # ≥ arbiter MIN_ACCEPT_INTERVAL_SEC so the next
-                             # accepted plan isn't bounced by the rate limit
+            # accepted plan isn't bounced by the rate limit
 
         for i, xml in enumerate(self.received_edits, 1):
             print(f"\n=== Edited mission XML #{i} ===")

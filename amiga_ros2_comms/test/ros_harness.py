@@ -73,11 +73,15 @@ class Collector(Node):
         self.received = []
         self._lock = threading.Lock()
         self.pub = self.create_publisher(LoRaFrame, f"/{tx_namespace}/lora/tx", 100)
-        self.create_subscription(LoRaFrame, f"/{rx_namespace}/lora/rx", self._on_rx, 200)
+        self.create_subscription(
+            LoRaFrame, f"/{rx_namespace}/lora/rx", self._on_rx, 200
+        )
 
     def _on_rx(self, msg):
         with self._lock:
-            self.received.append((bytes(msg.data), msg.has_link_stats, msg.rssi, msg.snr))
+            self.received.append(
+                (bytes(msg.data), msg.has_link_stats, msg.rssi, msg.snr)
+            )
 
     def payloads(self):
         with self._lock:

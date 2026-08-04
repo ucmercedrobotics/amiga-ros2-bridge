@@ -33,9 +33,12 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     Capability,
     Grant,
     ReasonCode,
+    Target,
     TaskAnnounce,
+    cap_mask,
     decode,
     encode,
+    target_fields,
 )
 from amiga_ros2_comms.lora.airtime import RadioConfig  # noqa: E402
 from amiga_ros2_comms.reliability import Outcome, ReliabilityParams  # noqa: E402
@@ -146,9 +149,8 @@ def an_announce(task_id=7):
         src=0,
         seq=0,
         task_id=task_id,
-        req_capability=Capability.SPRAY,
-        grid_row=3,
-        grid_col=4,
+        req_cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+        **target_fields(Target.tree(60)),
         priority=200,
         reason_code=ReasonCode.OPERATOR_REQUEST,
     )
@@ -349,8 +351,8 @@ def test_the_default_timeout_holds_across_the_practical_spreading_factors():
     default = ReliabilityParams().retransmit_timeout_sec
 
     for sf in range(7, 11):
-        assert timeout_shortfall(default, RadioConfig(spreading_factor=sf)) is None, (
-            f"the shipped default is too short at SF{sf}"
-        )
+        assert (
+            timeout_shortfall(default, RadioConfig(spreading_factor=sf)) is None
+        ), f"the shipped default is too short at SF{sf}"
     for sf in (11, 12):
         assert timeout_shortfall(default, RadioConfig(spreading_factor=sf)) is not None

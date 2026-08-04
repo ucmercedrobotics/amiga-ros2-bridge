@@ -28,33 +28,29 @@ from .definitions import (
     BATTERY_MAX,
     BYTE_ORDER,
     CAP_MASK_BITS,
-    CONFIDENCE_MAX,
     COST_MAX,
     DEFAULT_MAX_PAYLOAD_BYTES,
     ETA_MAX_S,
     ETA_RESOLUTION_S,
-    GRID_MAX,
     HEADER_BYTES,
     HEADER_FORMAT,
     PRIORITY_MAX,
-    RADIUS_MAX,
     RESERVED_TYPES,
     SEQ_MAX,
     SRC_MAX,
+    TARGET_WORD_MAX,
+    TARGET_WORD_MIN,
     TASK_ID_MAX,
-    TTL_MAX_S,
-    TTL_RESOLUTION_S,
-    Capability,
-    HazardClass,
     MessageType,
     ReasonCode,
+    Target,
+    TargetKind,
 )
 from .messages import (
     BUILT_MESSAGES,
     Ack,
     Bid,
     Grant,
-    Hazard,
     Heartbeat,
     Message,
     TaskAnnounce,
@@ -165,21 +161,31 @@ _HEADER_FIELDS: Tuple[_Field, ...] = (
     _Field("seq", "H", SEQ_MAX),
 )
 
+# A place, as three flat fields. The kind is bounded to the enum's own range
+# rather than to a full byte, unlike reason_code: an unrecognised reason from a
+# newer peer is informational and can be logged as a number, but an
+# unrecognised target kind means the coordinates are in a system we cannot
+# interpret, and treating them as if we could is worse than refusing the packet.
+_TARGET_FIELDS: Tuple[_Field, ...] = (
+    _Field("target_kind", "B", int(max(TargetKind)), enum=TargetKind),
+    _Field("target_a", "i", TARGET_WORD_MAX, lo=TARGET_WORD_MIN),
+    _Field("target_b", "i", TARGET_WORD_MAX, lo=TARGET_WORD_MIN),
+)
+
 _LAYOUTS = {
     Heartbeat: (
         _Field("cap_mask", "H", (1 << CAP_MASK_BITS) - 1),
-        _Field("grid_row", "H", GRID_MAX),
-        _Field("grid_col", "H", GRID_MAX),
+        *_TARGET_FIELDS,
         _Field("battery", "B", BATTERY_MAX),
         _Field("cur_task", "H", TASK_ID_MAX),
     ),
     TaskAnnounce: (
         _Field("task_id", "H", TASK_ID_MAX),
-        # A capability *index*, so anything a cap_mask could not advertise is
-        # invalid rather than merely unknown.
-        _Field("req_capability", "B", CAP_MASK_BITS - 1, enum=Capability),
-        _Field("grid_row", "H", GRID_MAX),
-        _Field("grid_col", "H", GRID_MAX),
+        # A *mask*, not an index: a task is a behaviour-tree subtree and a
+        # subtree uses a set of actions. Same width as cap_mask, so the
+        # requirement and the advertisement are directly comparable.
+        _Field("req_cap_mask", "H", (1 << CAP_MASK_BITS) - 1),
+        *_TARGET_FIELDS,
         _Field("priority", "B", PRIORITY_MAX),
         # Full byte range: an unrecognised reason from a newer peer is
         # informational, so it passes through as an int instead of failing.
@@ -199,14 +205,6 @@ _LAYOUTS = {
         _Field("ack_src", "B", SRC_MAX),
         _Field("ack_seq", "H", SEQ_MAX),
     ),
-    Hazard: (
-        _Field("hazard_class", "B", 0xFF, enum=HazardClass),
-        _Field("grid_row", "H", GRID_MAX),
-        _Field("grid_col", "H", GRID_MAX),
-        _Field("radius", "B", RADIUS_MAX),
-        _Field("confidence", "B", CONFIDENCE_MAX),
-        _Field("ttl_s", "H", TTL_MAX_S, scale=TTL_RESOLUTION_S),
-    ),
 }
 
 assert set(_LAYOUTS) == set(BUILT_MESSAGES), "layout table and message list disagree"
@@ -219,8 +217,17 @@ def _payload_format(fields: Tuple[_Field, ...]) -> str:
 _PAYLOAD_FORMAT = {cls: _payload_format(fields) for cls, fields in _LAYOUTS.items()}
 _PAYLOAD_SIZE = {cls: struct.calcsize(fmt) for cls, fmt in _PAYLOAD_FORMAT.items()}
 
-#: Tag byte -> message class, for the six built types only.
+#: Tag byte -> message class, for the built types only.
 _BY_TAG = {cls.TAG: cls for cls in _LAYOUTS}
+
+#: The message classes that name a place. Derived from the layout table rather
+#: than listed, so a new message type that carries a target gets the validation
+#: and the accessors without a second edit anyone could forget.
+_TARGETED = frozenset(
+    cls
+    for cls, fields in _LAYOUTS.items()
+    if all(f.name in {ff.name for ff in fields} for f in _TARGET_FIELDS)
+)
 
 assert len(_BY_TAG) == len(_LAYOUTS), "two message classes share a tag"
 
@@ -291,11 +298,49 @@ def _from_raw(field: _Field, raw: int, where: str):
         except ValueError:
             # A value we do not have a name for. Structurally fine, so hand it
             # back as a plain int rather than rejecting the whole message: a
-            # newer peer naming a hazard class we lack is still telling us
-            # where the hazard is. IntEnum compares equal to its int value, so
-            # this costs nothing at the call site.
+            # newer peer naming a reason we lack a word for is still telling us
+            # what it wants. IntEnum compares equal to its int value, so this
+            # costs nothing at the call site.
             return value
     return value
+
+
+# --------------------------------------------------------------------------
+# Targets
+#
+# The wire carries a place as three loose integers because the layout table is
+# flat. These two functions are the only place that is true: above them a place
+# is a Target, below them it is struct fields, and nothing in between handles
+# the words by hand.
+# --------------------------------------------------------------------------
+
+
+def target_of(msg: Message) -> Target:
+    """The place a message names.
+
+    Raises AttributeError for a message type that names no place, which is
+    correct -- asking a Bid where it is has no answer to return.
+    """
+    return Target(
+        kind=TargetKind(int(msg.target_kind)),
+        a=int(msg.target_a),
+        b=int(msg.target_b),
+    )
+
+
+def target_fields(target: Target) -> dict:
+    """``Target`` -> the keyword arguments a targeted message constructor wants.
+
+    >>> TaskAnnounce(src=1, seq=2, task_id=7, req_cap_mask=1,
+    ...              **target_fields(Target.tree(60)),
+    ...              priority=100, reason_code=1)  # doctest: +ELLIPSIS
+    TaskAnnounce(...)
+    """
+    return {
+        "target_kind": int(target.kind),
+        "target_a": int(target.a),
+        "target_b": int(target.b),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -403,4 +448,20 @@ def decode(data: bytes) -> Message:
     fields = _LAYOUTS[cls]
     raw = struct.unpack_from(_PAYLOAD_FORMAT[cls], data, HEADER_BYTES)
     values = {f.name: _from_raw(f, r, cls.__name__) for f, r in zip(fields, raw)}
+
+    if cls in _TARGETED:
+        # Each target word is in range on its own, but the three together still
+        # have to mean something: a TREE target with a longitude word set, or a
+        # NONE target carrying coordinates, is a sender that disagrees with us
+        # about the layout. Target's own constructor is the rule, so the check
+        # is here rather than restated.
+        try:
+            Target(
+                kind=values["target_kind"],
+                a=values["target_a"],
+                b=values["target_b"],
+            )
+        except ValueError as exc:
+            raise FieldRangeError(f"{cls.__name__}: {exc}") from None
+
     return cls(src=src, seq=seq, **values)

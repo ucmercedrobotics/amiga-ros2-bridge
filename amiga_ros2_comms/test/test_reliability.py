@@ -23,14 +23,14 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     Bid,
     Capability,
     Grant,
-    Hazard,
-    HazardClass,
     Heartbeat,
     MessageType,
     ReasonCode,
+    Target,
     TaskAnnounce,
     cap_mask,
     encode,
+    target_fields,
 )
 from amiga_ros2_comms.reliability import (  # noqa: E402
     BROADCAST,
@@ -62,9 +62,8 @@ def a_heartbeat(battery=88):
     return Heartbeat(
         src=0,
         seq=0,
-        cap_mask=cap_mask(Capability.DRIVE, Capability.SPRAY),
-        grid_row=12,
-        grid_col=47,
+        cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+        **target_fields(Target.gps(37.366449, -120.423065)),
         battery=battery,
         cur_task=0,
     )
@@ -75,28 +74,14 @@ def an_announce(task_id=7):
         src=0,
         seq=0,
         task_id=task_id,
-        req_capability=Capability.SPRAY,
-        grid_row=3,
-        grid_col=4,
+        req_cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+        **target_fields(Target.tree(60)),
         priority=200,
         reason_code=ReasonCode.OPERATOR_REQUEST,
     )
 
 
-def a_hazard():
-    return Hazard(
-        src=0,
-        seq=0,
-        hazard_class=HazardClass.HUMAN,
-        grid_row=5,
-        grid_col=6,
-        radius=2,
-        confidence=90,
-        ttl_s=300,
-    )
-
-
-BROADCAST_FACTORIES = (a_heartbeat, an_announce, a_hazard)
+BROADCAST_FACTORIES = (a_heartbeat, an_announce)
 
 
 # ==========================================================================
@@ -350,7 +335,9 @@ def test_a_full_pending_table_rejects_rather_than_grows():
     fleet = Fleet(GRANTOR, WINNER, params=params)
     fleet.medium.drop_rule = Medium.drop_all
 
-    futures = [fleet[GRANTOR].send_reliable(WINNER, a_grant(task_id=n)) for n in range(1, 9)]
+    futures = [
+        fleet[GRANTOR].send_reliable(WINNER, a_grant(task_id=n)) for n in range(1, 9)
+    ]
 
     assert fleet[GRANTOR].pending == 4
     assert [f.done() for f in futures] == [False] * 4 + [True] * 4
@@ -446,9 +433,7 @@ def test_an_ack_from_the_wrong_robot_does_not_confirm_delivery():
     future = fleet[GRANTOR].send_reliable(WINNER, a_grant())
     grant = fleet.medium.sent("Grant")[0].msg
 
-    forged = encode(
-        Ack(src=BYSTANDER, seq=1, ack_src=grant.src, ack_seq=grant.seq)
-    )
+    forged = encode(Ack(src=BYSTANDER, seq=1, ack_src=grant.src, ack_seq=grant.seq))
     fleet[GRANTOR].on_frame(forged)
 
     assert not future.done()

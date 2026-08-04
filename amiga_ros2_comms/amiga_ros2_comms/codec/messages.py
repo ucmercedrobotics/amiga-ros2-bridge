@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Typed coordination messages -- the six built wire types.
+"""Typed coordination messages -- the five built wire types.
 
 One dataclass per tag. These are plain value objects: they hold fields, they
 compare by value (which is what makes the round-trip tests meaningful), and they
@@ -8,6 +8,13 @@ carry no behaviour. Packing them into bytes is codec.py's job.
 Every message begins with the common header -- ``src`` and ``seq`` -- because
 (src, seq) is the globally unique message ID the reliability layer will need for
 dedup and ACKs. Carrying them is all this layer does with them.
+
+Where a message names a place it does so as three flat fields --
+``target_kind``, ``target_a``, ``target_b`` -- rather than a nested ``Target``.
+The codec's layout table is a flat list of struct codes per type, and keeping
+the wire form flat is what lets encode and decode stay driven from that one
+table. ``Target.from_fields`` / ``as_fields`` in codec.py convert at the edge,
+so nothing above this layer handles the loose integers.
 """
 
 from dataclasses import dataclass
@@ -42,10 +49,14 @@ class Heartbeat(Message):
 
     TAG: ClassVar[MessageType] = MessageType.HEARTBEAT
 
-    #: 16-bit mask of Capability bit indices. Build with definitions.cap_mask().
+    #: 16-bit mask of Capability bit indices -- the behaviour-tree action types
+    #: this robot's mission schema permits. Build with definitions.cap_mask().
     cap_mask: int
-    grid_row: int
-    grid_col: int
+    #: Where we are. Normally TargetKind.GPS; NONE when there is no fix, which
+    #: is a different fact from being at the origin and now says so.
+    target_kind: int
+    target_a: int
+    target_b: int
     #: Whole percent, 0..100.
     battery: int
     #: Task currently being executed, or TASK_NONE (0) when idle.
@@ -54,7 +65,7 @@ class Heartbeat(Message):
 
 @dataclass
 class TaskAnnounce(Message):
-    """There is work at this cell; whoever can do it, bid.
+    """There is work here; whoever can do all of it, bid.
 
     Broadcast by whichever robot or operator station is originating the task.
     """
@@ -62,10 +73,16 @@ class TaskAnnounce(Message):
     TAG: ClassVar[MessageType] = MessageType.TASK_ANNOUNCE
 
     task_id: int
-    #: A single Capability *index* (not a mask) the bidder must advertise.
-    req_capability: int
-    grid_row: int
-    grid_col: int
+    #: Mask of every Capability the task's subtree uses -- a *set*, because a
+    #: task is a subtree and sampling a tree needs both the navigation action
+    #: and the arm one. A bidder must advertise all of them.
+    req_cap_mask: int
+    #: Where the work is, as the behaviour tree names it. TargetKind.NONE means
+    #: the work has no place of its own, which makes it undelegable -- the
+    #: originator is expected not to announce those.
+    target_kind: int
+    target_a: int
+    target_b: int
     #: Unitless, higher is more urgent.
     priority: int
     #: ReasonCode -- why this task exists. Diagnostics, not dispatch logic.
@@ -131,24 +148,6 @@ class Ack(Message):
     ack_seq: int
 
 
-@dataclass
-class Hazard(Message):
-    """Something is in the way at this cell, for about this long."""
-
-    TAG: ClassVar[MessageType] = MessageType.HAZARD
-
-    #: HazardClass.
-    hazard_class: int
-    grid_row: int
-    grid_col: int
-    #: Radius in grid cells around (grid_row, grid_col).
-    radius: int
-    #: Whole percent, 0..100.
-    confidence: int
-    #: Seconds this report should be believed for, 0..65535.
-    ttl_s: int
-
-
 #: Every built (non-reserved) message class. codec.py builds its tag table from
 #: this, so adding a type here is the only edit a new type needs.
-BUILT_MESSAGES = (Heartbeat, TaskAnnounce, Bid, Grant, Ack, Hazard)
+BUILT_MESSAGES = (Heartbeat, TaskAnnounce, Bid, Grant, Ack)

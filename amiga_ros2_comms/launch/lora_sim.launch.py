@@ -50,8 +50,10 @@ def _spawn(context, *args, **kwargs):
         if name.strip()
     ]
     symlink_dir = LaunchConfiguration("symlink_dir").perform(context)
-    want_bridges = (
-        LaunchConfiguration("bridges").perform(context).lower() in ("true", "1", "yes")
+    want_bridges = LaunchConfiguration("bridges").perform(context).lower() in (
+        "true",
+        "1",
+        "yes",
     )
 
     nodes = [
