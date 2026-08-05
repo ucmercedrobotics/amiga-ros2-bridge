@@ -4,9 +4,14 @@ cv_bridge
 depthai
 pyyaml
 rospkg
-protobuf==5.27.2
+protobuf==5.29.5
 farm-ng-amiga
 utm
+litellm
+python-dotenv
+jinja2
+lxml
+
 # IMU BNO085
 adafruit_circuitpython_bno08x==1.3.1
 Adafruit-Blinka==8.67.0

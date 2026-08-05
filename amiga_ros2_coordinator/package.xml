@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>amiga_ros2_coordinator</name>
+  <version>0.0.0</version>
+  <description>Contract-net coordination for the Amiga fleet: task announce/bid/grant, peer registry, hazard propagation and safe preemption</description>
+  <maintainer email="appuser@todo.todo">appuser</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>std_msgs</depend>
+  <depend>amiga_interfaces</depend>
+  <depend>amiga_ros2_comms</depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

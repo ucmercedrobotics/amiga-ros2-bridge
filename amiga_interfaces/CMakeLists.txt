@@ -5,7 +5,10 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/LoRaFrame.msg
   srv/GetTreeInfo.srv
+  srv/GenerateLTL.srv
+  srv/InterpretAnomaly.srv
 )
 
 ament_export_dependencies(rosidl_default_runtime)

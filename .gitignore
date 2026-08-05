@@ -147,6 +147,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv_a2a
 env/
 venv/
 ENV/
@@ -186,4 +187,17 @@ cython_debug/
 
 rosbag2*
 
+<<<<<<< HEAD
+runs/.venv_a2a/
+=======
+
+
+runs/.venv_a2a/
+
+#testfiles
 runs/
+scripts/test_agents/runs/
+
+#Mac files
+.DS_Store
+>>>>>>> bea58b9c0da9ff53ea59e705fb8fff83ab6a4a9b
