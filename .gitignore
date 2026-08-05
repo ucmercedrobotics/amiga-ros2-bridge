@@ -195,3 +195,4 @@ scripts/test_agents/runs/
 
 #Mac files
 .DS_Store
+.amiga-venv/
