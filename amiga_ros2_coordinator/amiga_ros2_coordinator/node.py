@@ -56,16 +56,29 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
-from amiga_ros2_comms.codec import Capability, cap_mask
+from amiga_ros2_comms.codec import CAPABILITY_BY_ELEMENT as ELEMENT_CAPABILITY
+from amiga_ros2_comms.codec import XML_ELEMENT as CAPABILITY_ELEMENT
+from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
 from amiga_ros2_comms.reliability.node import ReliabilityNode
 
+from .capabilities import (
+    SchemaError,
+    capabilities_from_xsd,
+    default_schema_path,
+    unknown_actions,
+)
 from .coordinator import CoordinatorParams, CoordinatorSession
-from .model import Location, Task
+from .model import Task, capability_names
 from .triage_client import optional_client
 
 
 def _describe(text: str) -> ParameterDescriptor:
     return ParameterDescriptor(description=text)
+
+
+def _dynamic(text: str) -> ParameterDescriptor:
+    """Descriptor for a list parameter that legitimately defaults to empty."""
+    return ParameterDescriptor(description=text, dynamic_typing=True)
 
 
 #: Latched, so a behaviour tree that starts after the coordinator immediately
@@ -142,15 +155,15 @@ class UnavailableNav:
                 "CoordinatorNode(nav=...)"
             )
 
-    def eta(self, location: Location) -> float:
+    def eta(self, target: Target) -> float:
         self._warn()
         raise RuntimeError("no navigation port wired")
 
-    def can_reach(self, location: Location) -> bool:
+    def can_reach(self, target: Target) -> bool:
         self._warn()
         return False
 
-    def current_location(self) -> Optional[Location]:
+    def current_location(self) -> Optional[Target]:
         return None
 
 
@@ -260,8 +273,12 @@ class CoordinatorNode(Node):
             if bool(self.get_parameter("use_triage_agent").value)
             else None
         )
-        self._default_capability = int(
-            self.get_parameter("default_task_capability").value
+        self._default_capabilities = cap_mask(
+            *(
+                ELEMENT_CAPABILITY[str(name).strip()]
+                for name in self.get_parameter("default_task_capabilities").value or []
+                if str(name).strip() in ELEMENT_CAPABILITY
+            )
         )
         self._in_flight: "set[int]" = set()
         self._in_flight_lock = Lock()
@@ -282,7 +299,7 @@ class CoordinatorNode(Node):
 
         self.get_logger().info(
             f"coordinator as robot {node_id}: "
-            f"capabilities={[Capability(c).name for c in capabilities]}, "
+            f"capabilities={capability_names(cap_mask(*capabilities))}, "
             f"announce window {params.announce_window_sec}s, "
             f"bid backoff <={params.bid_max_backoff_sec}s, "
             f"peer timeout {params.peer_timeout_sec}s, "
@@ -295,13 +312,32 @@ class CoordinatorNode(Node):
 
     def _declare_parameters(self) -> None:
         self.declare_parameter(
-            "capabilities",
-            ["DRIVE"],
+            "mission_schema",
+            default_schema_path() or "",
             _describe(
-                "What this robot can do, as Capability names (DRIVE, INSPECT, "
-                "SPRAY, HARVEST, MANIPULATE, TRANSPORT, SURVEY, CHARGE_HOST, "
-                "RELAY). Advertised in every HEARTBEAT and checked against a "
-                "TASK_ANNOUNCE's requirement before this robot bids."
+                "The behaviour-tree mission schema this robot validates against "
+                "-- the same amiga_btcpp.xsd bt_runner resolves. Its ActionGroup "
+                "is what this robot advertises it can do, because an action the "
+                "schema forbids is an action no mission can ever contain. Empty "
+                "falls back to the 'capabilities' parameter."
+            ),
+        )
+        self.declare_parameter(
+            # Empty by default: the schema is the answer, and a non-empty
+            # default here would silently win over it on every robot. The
+            # descriptor allows dynamic typing because rclpy infers an empty
+            # list as BYTE_ARRAY, and a statically typed empty default would
+            # then reject the very strings this parameter exists to take.
+            "capabilities",
+            [],
+            _dynamic(
+                "Override for what this robot advertises, as behaviour-tree "
+                "action names (MoveToTreeID, MoveToAisleHead, "
+                "MoveToGPSLocation, ApproachGPSWaypoint, "
+                "MoveToRelativeLocation, OrientRobotHeading, FollowPerson, "
+                "SampleLeaf, MoveArmToPosition). For a robot whose hardware is "
+                "a subset of what its schema allows -- an arm removed for "
+                "maintenance. Empty means read mission_schema."
             ),
         )
         self.declare_parameter(
@@ -448,12 +484,13 @@ class CoordinatorNode(Node):
             ),
         )
         self.declare_parameter(
-            "default_task_capability",
-            int(Capability.DRIVE),
+            "default_task_capabilities",
+            [CAPABILITY_ELEMENT[Capability.MOVE_TO_TREE_ID]],
             _describe(
-                "Capability assumed for a task the escalation names but this "
-                "node has never been told about. Only reached when no mission "
-                "adapter has called own() for that task id."
+                "Actions assumed necessary for a task the escalation names "
+                "without describing. Only reached when the triage agent could "
+                "not resolve the failing node to a subtree in /mission/xml -- "
+                "an ordinary escalation carries the real action set."
             ),
         )
 
@@ -485,24 +522,69 @@ class CoordinatorNode(Node):
         )
 
     def _validated_capabilities(self) -> "tuple[int, ...]":
+        """What this robot advertises: the schema's ActionGroup, or an override.
+
+        The schema first, because it is the artifact that decides what missions
+        this robot can be given. The parameter is for the case the schema
+        cannot express -- hardware temporarily absent from a robot whose schema
+        still permits the action.
+        """
+        override = self._capabilities_parameter()
+        if override:
+            self.get_logger().info(
+                "capabilities set explicitly, overriding the mission schema: "
+                f"{[CAPABILITY_ELEMENT[c] for c in override]}"
+            )
+            return override
+
+        schema = str(self.get_parameter("mission_schema").value or "")
+        if not schema:
+            # No schema and no override. Refused rather than defaulted: a robot
+            # that quietly advertises nothing never bids and reports no error,
+            # which is the hardest misconfiguration there is to find.
+            raise ValueError(
+                "neither mission_schema nor capabilities is set, so this robot "
+                "has no way to know what it can do. Point mission_schema at the "
+                "installed amiga_btcpp.xsd, or list capabilities explicitly."
+            )
+
+        try:
+            capabilities = capabilities_from_xsd(schema)
+        except SchemaError as exc:
+            raise ValueError(f"cannot determine capabilities: {exc}") from None
+
+        unknown = unknown_actions(schema)
+        if unknown:
+            # Not fatal -- a newer schema naming actions this build has no bit
+            # for is legitimate -- but not silent either: work using them can
+            # never be delegated in either direction.
+            self.get_logger().warn(
+                f"{schema} permits {list(unknown)}, which this build has no "
+                f"capability bit for; work using them cannot be delegated"
+            )
+        self.get_logger().info(
+            f"capabilities read from {schema}: "
+            f"{[CAPABILITY_ELEMENT[c] for c in capabilities]}"
+        )
+        # Built once here so an out-of-range index fails at startup.
+        cap_mask(*capabilities)
+        return tuple(capabilities)
+
+    def _capabilities_parameter(self) -> "tuple[int, ...]":
+        """The explicit override, by XML element name. Empty when unset."""
         names = list(self.get_parameter("capabilities").value or [])
         capabilities = []
         for name in names:
-            try:
-                capabilities.append(Capability[str(name).strip().upper()])
-            except KeyError:
-                # Refused rather than skipped. A typo that silently drops SPRAY
-                # produces a robot that never bids on spraying and no error
-                # anywhere -- the hardest kind of misconfiguration to find.
+            capability = ELEMENT_CAPABILITY.get(str(name).strip())
+            if capability is None:
+                # Refused rather than skipped. A typo that silently drops
+                # SampleLeaf produces a robot that never bids on sampling and
+                # no error anywhere.
                 raise ValueError(
                     f"unknown capability '{name}'; known: "
-                    f"{', '.join(c.name for c in Capability)}"
-                ) from None
-        if not capabilities:
-            self.get_logger().warn(
-                "no capabilities declared: this robot will never bid on anything"
-            )
-        # Built once here so an out-of-range index fails at startup.
+                    f"{', '.join(sorted(ELEMENT_CAPABILITY))}"
+                )
+            capabilities.append(capability)
         cap_mask(*capabilities)
         return tuple(capabilities)
 
@@ -558,7 +640,7 @@ class CoordinatorNode(Node):
 
     def _interpret_and_apply(self, task_id: int, payload: dict) -> None:
         try:
-            task = self._task_for(task_id)
+            task = self._task_for(task_id, payload)
             detail = str(payload.get("detail", "")) or "local recovery exhausted"
             context = self.session.anomaly_context(task, detail=detail)
 
@@ -588,27 +670,72 @@ class CoordinatorNode(Node):
             with self._in_flight_lock:
                 self._in_flight.discard(task_id)
 
-    def _task_for(self, task_id: int) -> Optional[Task]:
+    def _task_for(self, task_id: int, payload: dict) -> Optional[Task]:
         """The task the escalation is about, as this node understands it.
 
-        Prefers what a mission adapter already told us via ``own()``: that
-        record has the real capability and location. Falling back to a
-        synthesised task is the seam where the mission stack is not wired yet
-        -- it is enough to interpret and announce, and the location will be
-        wrong until a real MissionInterface supplies it.
+        Three sources, in order of how much they know:
+
+        1. A record this session already owns, from a previous ``own()``.
+        2. The escalation payload. The triage agent resolved the failing
+           behaviour-tree node to a subtree of the running ``/mission/xml``, so
+           it knows the action set and the target -- and it is the only thing in
+           the system that does, because it is the only thing that reads the
+           mission. This node deliberately never parses XML.
+        3. A placeholder, when the agent could not resolve the node either.
+           Undelegable by construction: its target is ``NONE``, so the
+           coordinator will fall back to local disposition rather than announce
+           work at a place nobody named.
         """
         if task_id <= 0:
             return None
         known = self.session.task(task_id)
         if known is not None:
             return known.task
-        here = Location(0, 0)
+
+        described = self._task_from_payload(task_id, payload)
+        if described is not None:
+            return described
+
+        self.get_logger().warn(
+            f"escalation for task {task_id} describes no work: no action set "
+            f"and no target. It can be interpreted but not announced."
+        )
         return Task(
             task_id=task_id,
-            required_capability=self._default_capability,
-            location=here,
+            required_capabilities=self._default_capabilities,
+            location=Target.none(),
             priority=0,
         )
+
+    def _task_from_payload(self, task_id: int, payload: dict) -> Optional[Task]:
+        """Rebuild the task the triage agent described, or None if it did not.
+
+        Refuses a partial description rather than filling in the gaps. A task
+        assembled half from the wire and half from a default is a task whose
+        announcement means something nobody decided.
+        """
+        try:
+            kind = payload["target_kind"]
+            capabilities = int(payload["capabilities"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        try:
+            return Task(
+                task_id=task_id,
+                required_capabilities=capabilities,
+                location=Target(
+                    kind=TargetKind(int(kind)),
+                    a=int(payload.get("target_a", 0)),
+                    b=int(payload.get("target_b", 0)),
+                ),
+                priority=int(payload.get("priority", 0)),
+            )
+        except (ValueError, TypeError) as exc:
+            self.get_logger().error(
+                f"escalation for task {task_id} describes work this fleet "
+                f"cannot represent, ignoring the description: {exc}"
+            )
+            return None
 
     def _parse_escalation(self, data: str) -> Optional[dict]:
         try:

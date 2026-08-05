@@ -30,8 +30,11 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     Grant,
     Heartbeat,
     ReasonCode,
+    Target,
     TaskAnnounce,
     cap_mask,
+    target_fields,
+    target_of,
 )
 
 from amiga_ros2_coordinator import (  # noqa: E402
@@ -39,7 +42,6 @@ from amiga_ros2_coordinator import (  # noqa: E402
     CoordinatorParams,
     CoordinatorSession,
     DropTask,
-    Location,
     LocalDisposition,
     ReDelegate,
     RejectEverything,
@@ -63,11 +65,21 @@ PEER_B = 3
 TASK_ID = 7
 
 
-def a_task(task_id=TASK_ID, capability=Capability.SPRAY, row=3, col=4, priority=200):
+#: What sampling one tree needs: drive to it, then operate the arm. This is the
+#: pairing examples/sample_leafs.xml uses and the arbiter's orphaned-SampleLeaf
+#: check enforces, so it is the realistic default for a task under test.
+SAMPLING = (Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF)
+
+#: A robot that can only drive. Used wherever a test needs a peer that is
+#: capable of part of a task and not the whole of it.
+DRIVING = (Capability.MOVE_TO_TREE_ID,)
+
+
+def a_task(task_id=TASK_ID, capabilities=SAMPLING, tree=60, priority=200):
     return Task(
         task_id=task_id,
-        required_capability=capability,
-        location=Location(row=row, col=col),
+        required_capabilities=cap_mask(*capabilities),
+        location=Target.tree(tree),
         priority=priority,
     )
 
@@ -109,9 +121,8 @@ class Rig:
     def heartbeat_from(
         self,
         robot_id,
-        capabilities=(Capability.DRIVE, Capability.SPRAY),
-        row=0,
-        col=0,
+        capabilities=SAMPLING,
+        location=None,
         battery=90,
         current_task=0,
     ):
@@ -120,8 +131,7 @@ class Rig:
                 src=robot_id,
                 seq=1,
                 cap_mask=cap_mask(*capabilities),
-                grid_row=row,
-                grid_col=col,
+                **target_fields(location or Target.none()),
                 battery=battery,
                 cur_task=current_task,
             )
@@ -145,9 +155,8 @@ class Rig:
                 src=robot_id,
                 seq=1,
                 task_id=task.task_id,
-                req_capability=int(task.required_capability),
-                grid_row=task.location.row,
-                grid_col=task.location.col,
+                req_cap_mask=int(task.required_capabilities),
+                **target_fields(task.location),
                 priority=int(task.priority),
                 reason_code=reason_code,
             )
@@ -156,7 +165,7 @@ class Rig:
 
 def make_rig(
     node_id=US,
-    capabilities=(Capability.DRIVE, Capability.SPRAY),
+    capabilities=SAMPLING,
     interpreter=None,
     replanner=None,
     nav=None,
@@ -225,13 +234,13 @@ def test_infeasible_task_is_announced_granted_to_the_best_bid_and_transferred():
     rig.heartbeat_from(PEER_A)
     rig.heartbeat_from(PEER_B)
 
-    rig.session.report_infeasible(task, detail="spray tank empty")
+    rig.session.report_infeasible(task, detail="the arm did not deploy")
 
     announces = rig.rel.announces
     assert len(announces) == 1
     assert announces[0].task_id == TASK_ID
-    assert announces[0].req_capability == Capability.SPRAY
-    assert (announces[0].grid_row, announces[0].grid_col) == (3, 4)
+    assert announces[0].req_cap_mask == cap_mask(*SAMPLING)
+    assert target_of(announces[0]) == Target.tree(60)
     assert rig.session.state_of(TASK_ID) is TaskState.ANNOUNCED
 
     # Two bids; the second is the better one. Having heard from every expected
@@ -539,12 +548,55 @@ def test_a_better_fit_waits_less_than_a_worse_one():
 
 
 def test_we_stay_silent_about_a_capability_we_do_not_have():
-    rig = make_rig(capabilities=(Capability.DRIVE,))
-    rig.announce_from(PEER_A, a_task(capability=Capability.SPRAY))
+    rig = make_rig(capabilities=DRIVING)
+    rig.announce_from(PEER_A, a_task(capabilities=SAMPLING))
 
     rig.advance(5.0)
     assert rig.rel.bids == []
     assert rig.session.stats()["bids_incapable"] == 1
+
+
+def test_having_part_of_a_task_is_not_having_the_task():
+    """The reason the requirement is a mask.
+
+    This robot can drive to the tree. It cannot sample it. Under a
+    single-action requirement it would have passed the test on MoveToTreeID
+    alone, won the auction, driven to tree 60 and then had nothing to do there
+    -- and the announcer would have had no way to know.
+    """
+    rig = make_rig(capabilities=DRIVING)
+    rig.announce_from(PEER_A, a_task(capabilities=SAMPLING))
+
+    rig.advance(5.0)
+    assert rig.rel.bids == []
+    assert rig.session.stats()["bids_incapable"] == 1
+
+
+def test_a_task_with_no_place_is_handled_locally_rather_than_announced():
+    """SampleLeaf on its own is not delegable and must not be announced.
+
+    Its target is NONE -- it happens wherever the robot is standing -- so an
+    announcement would name a place that resolves differently for every
+    listener, and the winner would do the work somewhere else entirely.
+    """
+    rig = make_rig()
+    rig.heartbeat_from(PEER_A)
+    placeless = Task(
+        task_id=TASK_ID,
+        required_capabilities=cap_mask(Capability.SAMPLE_LEAF),
+        location=Target.none(),
+        priority=200,
+    )
+
+    rig.session.report_infeasible(placeless, detail="the arm did not deploy")
+
+    assert rig.rel.announces == []
+    assert rig.session.stats()["delegation_refused"] == 1
+    # It goes to the fallback disposition, which here is HOLD: still ours, not
+    # executed, to be tried again later. Which of the three it lands on is the
+    # interpretation's call -- what this test pins is that the auction is never
+    # opened, because there is nowhere to send anyone.
+    assert rig.session.state_of(TASK_ID) is TaskState.OURS
 
 
 def test_a_task_the_mission_cannot_absorb_gets_an_infeasible_bid():
@@ -723,26 +775,27 @@ def test_heartbeats_populate_the_registry():
     rig = make_rig()
     rig.heartbeat_from(
         PEER_A,
-        capabilities=(Capability.DRIVE, Capability.SPRAY),
-        row=5,
-        col=6,
+        capabilities=SAMPLING,
+        location=Target.gps(37.366449, -120.423065),
         battery=77,
         current_task=42,
     )
-    rig.heartbeat_from(PEER_B, capabilities=(Capability.DRIVE,))
+    rig.heartbeat_from(PEER_B, capabilities=DRIVING)
 
     assert rig.session.registry.ids() == (PEER_A, PEER_B)
     peer = rig.session.registry.get(PEER_A)
     assert peer.battery == 77
-    assert peer.location == Location(5, 6)
+    assert peer.location == Target.gps(37.366449, -120.423065)
     assert peer.current_task == 42
     assert peer.idle is False
 
-    # Capability lookup is what an auction uses to know who it waits for.
-    assert {p.robot_id for p in rig.session.registry.capable(Capability.SPRAY)} == {
+    # Capability lookup is what an auction uses to know who it waits for, and
+    # it is an all-of test: PEER_B can drive but cannot sample, so it is not
+    # somebody a sampling auction should sit waiting to hear from.
+    assert {p.robot_id for p in rig.session.registry.capable(cap_mask(*SAMPLING))} == {
         PEER_A
     }
-    assert {p.robot_id for p in rig.session.registry.capable(Capability.DRIVE)} == {
+    assert {p.robot_id for p in rig.session.registry.capable(cap_mask(*DRIVING))} == {
         PEER_A,
         PEER_B,
     }
@@ -1009,7 +1062,7 @@ def test_heartbeats_are_emitted_on_their_own_period():
     rig = make_rig(
         heartbeat_period_sec=10.0,
         mission=FakeMission(battery=64, current_task=12),
-        nav=FakeNav(location=Location(7, 8)),
+        nav=FakeNav(location=Target.gps(37.366449, -120.423065)),
     )
 
     rig.advance(0.1)
@@ -1017,8 +1070,8 @@ def test_heartbeats_are_emitted_on_their_own_period():
     assert len(beats) == 1
     assert beats[0].battery == 64
     assert beats[0].cur_task == 12
-    assert (beats[0].grid_row, beats[0].grid_col) == (7, 8)
-    assert beats[0].cap_mask == cap_mask(Capability.DRIVE, Capability.SPRAY)
+    assert target_of(beats[0]) == Target.gps(37.366449, -120.423065)
+    assert beats[0].cap_mask == cap_mask(*SAMPLING)
 
     rig.advance(5.0)
     assert len(rig.rel.heartbeats) == 1

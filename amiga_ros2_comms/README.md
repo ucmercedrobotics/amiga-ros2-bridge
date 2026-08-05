@@ -128,21 +128,31 @@ bytes and back. It is a **pure library, not a node** — no ROS, no serial, no
 radio — so it imports and unit-tests anywhere.
 
 ```python
-from amiga_ros2_comms.codec import Heartbeat, Capability, cap_mask, encode, decode
+from amiga_ros2_comms.codec import (
+    Capability, Heartbeat, Target, cap_mask, decode, encode, target_fields,
+)
 
 packet = encode(Heartbeat(
     src=3, seq=1024,
-    cap_mask=cap_mask(Capability.DRIVE, Capability.SPRAY),
-    grid_row=12, grid_col=47, battery=88, cur_task=0,
-))                                  # 13 bytes
+    cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+    **target_fields(Target.gps(37.366449, -120.423065)),
+    battery=88, cur_task=0,
+))                                  # 18 bytes
 msg = decode(packet)                # Heartbeat(...)
 ```
 
-Six built message types — HEARTBEAT, TASK_ANNOUNCE, BID, GRANT, ACK, HAZARD —
-each 7 to 13 bytes, every one of which fits in a single LoRa payload with room
-to spare even at SF10. Coordinates are local orchard grid indices, never
-lat/lon. Tag `0x07` (FREEFORM) is reserved and cleanly refused in both
-directions.
+Five built message types — HEARTBEAT, TASK_ANNOUNCE, BID, GRANT, ACK — each 7 to
+19 bytes, every one of which fits in a single LoRa payload with room to spare
+even at SF10. Tag `0x07` (FREEFORM) is reserved and cleanly refused in both
+directions; `0x06` is a retired gap where HAZARD used to be.
+
+The vocabulary is not invented. A `Capability` is a **behaviour-tree action
+type** — the elements of `ActionGroup` in
+[`amiga_btcpp.xsd`](../amiga_ros2_behavior_tree/schemas/amiga_btcpp.xsd), which
+is the schema the mission planner writes against and `bt_runner` refuses a
+mission for violating. A `Target` is a place the tree can actually name: a tree
+index, an aisle index, a GPS fix, or nothing at all for work like `SampleLeaf`
+that happens wherever the robot is standing.
 
 Full byte layouts, enums, quantization and error taxonomy are in
 [docs/codec_message_vocabulary.md](docs/codec_message_vocabulary.md).
@@ -277,7 +287,7 @@ The **coordinator** is built, in
 machine (announce, bid, grant, confirm) with both roles, and the two LLM
 invocation points stubbed behind interfaces. It uses exactly what this package
 offers — `send_reliable` to hold task ownership consistent, `send_broadcast`
-for announcements, bids and hazards, and once-only delivery inbound — and owes
+for heartbeats, announcements and bids, and once-only delivery inbound — and owes
 the transport nothing but a decision about what to send.
 
 Its `coordinator` executable runs a `ReliabilityNode` in its own process, so do

@@ -40,8 +40,28 @@ Other fields:
   "disposition"  drop_task only. Same three values.
   "rationale"    one or two sentences, in your own words, citing the specific
                  evidence you used. This is read by a human, never parsed.
-  "task_id", "capability", "grid_row", "grid_col", "priority"
-                 add_task only — the new work. Omit them otherwise.
+
+add_task only — describe the new work. Omit all of these otherwise.
+
+  "task_id"      a number, 1 to 65535, not already used by another task.
+  "priority"     0 to 255, higher is more urgent.
+  "actions"      the behaviour-tree actions the work needs, as a list of
+                 element names. These are the only ones this robot has:
+                 {{ actions | join(", ") }}
+                 Name every action the work needs, not just the main one:
+                 sampling a tree needs ["MoveToTreeID", "SampleLeaf"], because
+                 a robot that can sample but cannot drive to the tree cannot do
+                 it. An action not on that list will be refused outright.
+  "target"       where the work happens, as one of:
+                 {"kind": "tree",  "index": 60}
+                 {"kind": "aisle", "index": 3}
+                 {"kind": "gps",   "latitude": 37.366449, "longitude": -120.423065}
+                 {"kind": "none"}
+                 Use "tree" whenever the work is at a tree — the robot that
+                 takes it can then approach the tree properly, which a bare
+                 latitude and longitude does not let it do. "none" means the
+                 work happens wherever the robot already is, which also means
+                 no other robot can be sent to do it.
 
 On the three dispositions: "drop" abandons the work, "hold" keeps it unexecuted
 for a later attempt, and "request_human" stops and asks an operator. Prefer
@@ -51,9 +71,20 @@ could damage equipment or crop.
 If the evidence does not support any action, still pick one and say so plainly
 in the rationale — but do not invent a fault the logs do not show.
 
-Example of a well-formed reply:
+Two examples of well-formed replies.
 
-{"action": "re_delegate", "reason_code": "low_battery", "fallback": "hold",
+Shedding the failed work to the fleet:
+
+{"action": "re_delegate", "reason_code": "battery_low", "fallback": "hold",
  "rationale": "Battery is at 9% and the nav action aborted twice on the approach
  to tree 60; two peers are alive and idle, so the row is better finished by one
  of them than held here."}
+
+Taking on something the diagnosis revealed:
+
+{"action": "add_task", "reason_code": "unspecified", "task_id": 4210,
+ "priority": 180, "actions": ["MoveToTreeID", "SampleLeaf"],
+ "target": {"kind": "tree", "index": 47},
+ "rationale": "The waypoint follower logged that tree 47 was passed with the
+ canopy obstructing the row; it is on the way back and worth sampling while the
+ arm is already deployed."}

@@ -19,7 +19,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from amiga_ros2_coordinator.model import Location, Task  # noqa: E402
+from amiga_ros2_comms.codec import (  # noqa: E402
+    Capability,
+    Target,
+    TargetKind,
+    cap_mask,
+)
+from amiga_ros2_coordinator.model import Task  # noqa: E402
 from amiga_ros2_coordinator.schema import (  # noqa: E402
     AddTask,
     AnomalyContext,
@@ -33,10 +39,11 @@ from amiga_ros2_coordinator.triage_client import (  # noqa: E402
     _peers_json,
 )
 
+#: Sampling tree 60: the failing task from examples/sample_leafs.xml.
 TASK = Task(
-    task_id=60,
-    required_capability=0,
-    location=Location(row=4, col=9),
+    task_id=4210,
+    required_capabilities=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+    location=Target.tree(60),
     priority=100,
 )
 
@@ -57,9 +64,10 @@ class Response:
         self.fallback = ""
         self.disposition = ""
         self.task_id = 0
-        self.required_capability = 0
-        self.grid_row = 0
-        self.grid_col = 0
+        self.required_capabilities = 0
+        self.target_kind = int(TargetKind.NONE)
+        self.target_a = 0
+        self.target_b = 0
         self.priority = 0
         self.rationale = ""
         self.model = "test-model"
@@ -114,17 +122,56 @@ def test_add_task_builds_the_new_task_from_the_response():
         Response(
             action="add_task",
             task_id=77,
-            required_capability=2,
-            grid_row=11,
-            grid_col=3,
+            required_capabilities=cap_mask(
+                Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+            ),
+            target_kind=int(TargetKind.TREE),
+            target_a=47,
             priority=200,
         )
     )
     assert isinstance(action, AddTask)
     assert action.task.task_id == 77
-    assert action.task.required_capability == 2
-    assert (action.task.location.row, action.task.location.col) == (11, 3)
+    assert action.task.required_capabilities == cap_mask(
+        Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+    )
+    assert action.task.location == Target.tree(47)
     assert action.task.priority == 200
+
+
+def test_add_task_can_name_a_gps_target():
+    action = decode(
+        Response(
+            action="add_task",
+            task_id=78,
+            required_capabilities=cap_mask(Capability.MOVE_TO_GPS_LOCATION),
+            target_kind=int(TargetKind.GPS),
+            target_a=373664490,
+            target_b=-1204230650,
+        )
+    )
+    assert action.task.location.kind is TargetKind.GPS
+    assert round(action.task.location.lat_deg, 6) == 37.366449
+    assert round(action.task.location.lon_deg, 6) == -120.423065
+
+
+def test_an_add_task_naming_a_place_that_is_not_one_is_refused():
+    """The second of the two validation points on the closed schema.
+
+    The agent refuses a malformed answer before transmitting; this refuses one
+    that got here anyway. A tree with a longitude is not a place, and driving
+    to it would mean picking one of the two words to believe.
+    """
+    with pytest.raises(TriageRefused, match="not one"):
+        decode(
+            Response(
+                action="add_task",
+                task_id=79,
+                target_kind=int(TargetKind.TREE),
+                target_a=12,
+                target_b=99,
+            )
+        )
 
 
 def test_the_action_name_is_matched_case_insensitively():
@@ -195,8 +242,8 @@ def test_the_peer_list_carries_what_a_delegation_decision_needs():
         peers=(
             PeerRecord(
                 robot_id=2,
-                cap_mask=0b101,  # DRIVE (index 0) and SPRAY (index 2)
-                location=Location(row=1, col=2),
+                cap_mask=cap_mask(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
+                location=Target.tree(12),
                 battery=80,
                 current_task=0,
                 last_seen=94.5,
@@ -207,7 +254,9 @@ def test_the_peer_list_carries_what_a_delegation_decision_needs():
 
     assert len(peers) == 1
     assert peers[0]["id"] == 2
-    assert peers[0]["capabilities"] == ["DRIVE", "SPRAY"]
+    # XML element names, so the model reads the same words as the mission.
+    assert peers[0]["capabilities"] == ["MoveToTreeID", "SampleLeaf"]
+    assert peers[0]["where"] == "tree 12"
     assert peers[0]["battery_percent"] == 80
     assert peers[0]["idle"] is True
     # Relative, not absolute: "seen 5.5s ago" is a fact a model can reason

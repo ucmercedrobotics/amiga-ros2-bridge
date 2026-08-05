@@ -30,7 +30,9 @@ Pure interface. No ROS, no radio, no I/O.
 
 from typing import Optional, Protocol, runtime_checkable
 
-from .model import Location, Task
+from amiga_ros2_comms.codec import Target
+
+from .model import Task
 
 
 @runtime_checkable
@@ -40,27 +42,45 @@ class NavInterface(Protocol):
     Three questions. Notably absent: anything that moves the robot.
     Coordination decides *what* this robot should be responsible for; the
     behaviour tree decides when to act on it.
+
+    A ``Target`` is not a coordinate pair, so an implementation has to resolve
+    it -- ``TargetKind.TREE`` and ``AISLE`` through
+    ``amiga_interfaces/GetTreeInfo``, ``GPS`` directly. That resolution is
+    navigation's own business and deliberately not done here: this layer would
+    have to hold an orchard model to do it, and would then hold a second
+    opinion about where tree 60 is.
     """
 
-    def eta(self, location: Location) -> float:
-        """Estimated seconds to reach ``location`` from where we are now.
+    def eta(self, target: Target) -> float:
+        """Estimated seconds to reach ``target`` from where we are now.
 
         Used to build a bid. May be optimistic -- every bidder's is, and a bid
         is an offer rather than a promise -- but must be comparable between
         calls on the same robot, because that comparison is what orders our own
         candidate tasks.
+
+        A ``TargetKind.NONE`` target means "wherever we are", so the honest
+        answer is 0.
         """
 
-    def can_reach(self, location: Location) -> bool:
+    def can_reach(self, target: Target) -> bool:
         """Whether a route exists at all.
 
         Separate from ``eta`` because "unreachable" and "far away" are
         different answers and collapsing them into a large ETA makes an
-        impossible task merely unattractive.
+        impossible task merely unattractive. A tree index the orchard model has
+        never heard of belongs here, not in a very large number.
+
+        ``TargetKind.NONE`` is trivially reachable -- we are already there.
         """
 
-    def current_location(self) -> Optional[Location]:
-        """Where we are, for HEARTBEAT and for bid context. None if unknown."""
+    def current_location(self) -> Optional[Target]:
+        """Where we are, for HEARTBEAT and for bid context.
+
+        None when navigation has not been asked yet; ``Target.none()`` when it
+        has and there is no fix. The two are different, and a caller that
+        collapses them advertises a position the robot never claimed.
+        """
 
 
 @runtime_checkable

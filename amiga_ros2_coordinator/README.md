@@ -13,11 +13,18 @@ This decides what they should have said: who bids on a task, who wins it, when
 to give up, and when to ask the robot to yield.
 
 ```
-ros2 launch amiga_ros2_coordinator coordinator.launch.py node_id:=3 capabilities:=DRIVE,SPRAY
+ros2 launch amiga_ros2_coordinator coordinator.launch.py node_id:=3
 ```
 
 That one executable runs the coordinator **and** its reliability layer in the
 same process. Do not launch `lora_reliability.launch.py` alongside it.
+
+No capability list: the robot reads its own `amiga_btcpp.xsd` — the schema its
+behaviour tree validates against — and advertises the actions that schema
+permits. An action the schema forbids is an action no mission can contain, so
+advertising it would be a claim that could never be tested. Pass
+`capabilities:=MoveToTreeID,SampleLeaf` only to advertise *less* than the
+schema allows, for hardware that is temporarily absent.
 
 ## Two roles, one node
 

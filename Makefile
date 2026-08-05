@@ -11,7 +11,6 @@ LORA_ROBOTS?=robot1,robot2,robot3
 # silently dedup each other's traffic away, so it has no safe default and is
 # meant to be overridden per robot.
 NODE_ID?=1
-CAPABILITIES?=DRIVE
 PAYLOAD:=true
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
@@ -173,17 +172,40 @@ test-comms:
 
 # The contract-net state machine, both roles. No radio and no model either:
 # the clock is injected and the two reasoning points are stubbed, so whole
-# auctions and hazard TTLs run in microseconds. See
+# auctions and backoff windows run in microseconds. See
 # amiga_ros2_coordinator/docs/coordinator.md.
 test-coordinator:
 	python3 -m pytest amiga_ros2_coordinator/test/ -q
+
+# The agent stack: the triage decision parser, the escalation trigger, and the
+# mission-XML -> task extraction, which runs against the real files in
+# amiga_ros2_behavior_tree/examples/ rather than fixtures.
+test-agents:
+	python3 -m pytest amiga_ros2_agents/test/ -q
+
+# One real mission with one step failing the way the real node fails, followed
+# from the behaviour tree to a task the fleet could be offered. Needs a built
+# workspace; takes about a minute. See
+# amiga_ros2_behavior_tree/test/scenarios/README.md for what this does and does
+# not prove -- in particular, it tests the wiring and says nothing about the
+# quality of any interpretation.
+test-scenario:
+	python3 -m pytest amiga_ros2_agents/test/test_scenario_bt_fault.py -q
+
+# One failure, watched live rather than asserted. FAIL_GOALS is a tree id;
+# FAILURE_MODE picks which real failure path to take.
+FAIL_GOALS?=[60]
+FAILURE_MODE?=nav_failed
+scenario:
+	ros2 launch amiga_ros2_behavior_tree failure_scenario.launch.py \
+		fail_goals:="${FAIL_GOALS}" failure_mode:=${FAILURE_MODE}
 
 # One robot's full coordination stack: the coordinator plus its in-process
 # reliability layer. Do not run this alongside `make lora-reliability` -- two
 # reliability layers on one radio would ACK each other's inbound traffic.
 coordinator:
 	ros2 launch amiga_ros2_coordinator coordinator.launch.py \
-		node_id:=${NODE_ID} capabilities:=${CAPABILITIES}
+		node_id:=${NODE_ID}
 
 # Exactly what .github/workflows/ci.yml runs, in the same image, so a red build
 # can be reproduced without pushing. Not the dev image: that one is 14-25 GB

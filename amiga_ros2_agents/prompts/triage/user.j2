@@ -22,10 +22,14 @@ These attempts have already been made and failed. Do not propose repeating them.
 
 ## The task that could not be completed
 
+This is the whole behaviour-tree subtree the failing node belongs to, not just
+that node. Sampling a tree, for instance, is the move to it *and* the sample —
+the sample alone has nowhere to happen.
+
 - task id: {{ task_id }}{% if task_id == 0 %} (no task attached to this fault){% endif %}
 
-- required capability: {{ required_capability }}
-- location: row {{ grid_row }}, column {{ grid_col }}
+- actions it needs: {{ required_actions }}
+- where: {{ where }}
 - priority: {{ priority }}
 
 ## This robot

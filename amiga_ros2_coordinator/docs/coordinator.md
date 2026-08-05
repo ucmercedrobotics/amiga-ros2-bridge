@@ -56,8 +56,48 @@ layer is only told the answer. **"What should be done about it?"** is not, and
 that is the service call.
 
 The escalation arrives as JSON on `infeasible_topic`
-(`/coordination/infeasible` by default) carrying a `task_id`, a `detail` and
-the originating fault. Everything after that is this layer's.
+(`/coordination/infeasible` by default). It carries the whole task descriptor —
+`task_id`, `capabilities` (a mask of behaviour-tree action types), `target_kind`
+/ `target_a` / `target_b`, `priority` — plus a `detail` and the originating
+fault. The full descriptor rather than an id, because the triage agent is the
+only thing in the system that reads `/mission/xml`, and therefore the only thing
+that can say what the failed work *is*. A coordinator sent an id alone would
+have to invent both the action set and the place, and it would announce them.
+
+This layer never parses XML. That is a boundary, not an omission: coordination
+decides who does what, and the mission's structure is the agents' business.
+
+## What a task is
+
+A **behaviour-tree subtree**, not a leaf, and that is the whole shape of this
+layer's vocabulary. In `examples/sample_leafs.xml`:
+
+```xml
+<MoveToTreeID name="Visit_Tree_60" id="60" approach_tree="true"/>
+<SampleLeaf   name="Sample_Leaves_Tree_60"/>
+```
+
+`SampleLeaf` alone cannot be delegated — it samples wherever the robot is
+standing. The unit is the two together, which is not an invention here: the
+arbiter's `_check_no_orphan_sample` already refuses a plan where they come
+apart.
+
+Three consequences run through everything below:
+
+- **`required_capabilities` is a mask, not one action.** A robot with the arm
+  but no tree navigation would pass a single-action test and then be unable to
+  place the work it just won. `has_capabilities(ours, required)` is an all-of
+  test.
+- **A capability *is* a behaviour-tree action type** — the elements of
+  `ActionGroup` in `amiga_btcpp.xsd`, which is the schema the planner writes
+  against and `bt_runner` refuses a mission for violating. The robot reads its
+  own `mission_schema` at startup rather than being told what it can do.
+- **A place is a `Target`, not a coordinate pair**: `TREE(index)`,
+  `AISLE(index)`, `GPS(lat, lon)`, or `NONE`. There is no single coordinate
+  system because the tree does not have one, and `GetTreeInfo` converts between
+  the first three on demand. `NONE` work is **undelegable by construction** —
+  the coordinator refuses to announce it rather than naming a place every
+  listener resolves differently.
 
 ## Two roles, one node
 
@@ -223,8 +263,8 @@ to by whichever branch was written first.
 Ports, not ROS types — defined here, mocked in the tests, implemented later.
 
 ```python
-nav.eta(location) -> float          nav.can_reach(location) -> bool
-nav.current_location() -> Location | None
+nav.eta(target) -> float            nav.can_reach(target) -> bool
+nav.current_location() -> Target | None
 
 mission.can_absorb(task) -> bool    mission.absorb(task)
 mission.release(task)               mission.mark_transferred(task)
@@ -273,7 +313,8 @@ and duplicate every send.
 
 | parameter | default | notes |
 | --- | --- | --- |
-| `capabilities` | `[DRIVE]` | Capability names this robot advertises. An unknown name is **refused at startup** — a typo that silently drops SPRAY is the hardest kind of misconfiguration to find |
+| `mission_schema` | installed `amiga_btcpp.xsd` | The schema this robot's tree validates against. Its `ActionGroup` is what the robot advertises it can do |
+| `capabilities` | `[]` | Override, by XML element name (`SampleLeaf`, `MoveToTreeID`, …). For hardware temporarily absent from a robot whose schema still permits the action. An unknown name is **refused at startup** — a typo that silently drops `SampleLeaf` is the hardest kind of misconfiguration to find. Empty means read the schema |
 | `announce_window_sec` | `5.0` | how long an announcement collects bids |
 | `announce_repeat_sec` | `2.0` | re-broadcast interval while a window is open; `0` disables |
 | `bid_max_backoff_sec` | `2.0` | longest a bidder waits. **Must be < `announce_window_sec`** |
@@ -291,7 +332,7 @@ and duplicate every send.
 | `use_triage_agent` | `true` | ask the triage agent. `false` falls back to the local stub — a bench setting, not a policy |
 | `triage_service` | `/coordination/interpret_anomaly` | the agent's service |
 | `triage_timeout_sec` | `45.0` | on a timeout the anomaly goes unanswered and the task stays put |
-| `default_task_capability` | `DRIVE` | assumed for a task no mission adapter has called `own()` for |
+| `default_task_capabilities` | `[MoveToTreeID]` | assumed for a task the escalation names without describing. Only reached when the triage agent could not resolve the failing node to a subtree — an ordinary escalation carries the real action set |
 
 `node_id` and the retransmit settings belong to the in-process reliability node
 and are documented in
@@ -369,10 +410,13 @@ stack.
   makes bidders commit before they know they can — or bidders pre-verify during
   the announce window, which makes the window seconds long and drags an LLM call
   into the auction. That is a real decision and it has not been made.
-- **The task ↔ mission mapping is one-way.** The triage agent resolves a failing
-  BT node to a tree id by looking it up in the running `/mission/xml`. Nothing
-  does the reverse: a task *won* at auction has no path into the winner's plan
-  until the mission adapter exists.
+- **The winner's side of the task ↔ mission mapping is unwired.** Both
+  directions now *exist*:
+  `amiga_ros2_agents/mission_tasks.py` resolves a failing BT node to the subtree
+  it belongs to, and `insert_task` grafts a subtree into another plan — with
+  `test_mission_tasks.py` checking the result still validates against the XSD
+  for every example mission. What is missing is the adapter that calls it when a
+  GRANT is confirmed, which is the same missing piece as the bullet above.
 - **COMPLETE and RELEASE.** The other unicast types, once the codec has them —
   a task finishing and a task being handed back are currently invisible to the
   fleet.

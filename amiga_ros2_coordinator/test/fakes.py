@@ -36,7 +36,8 @@ from amiga_ros2_comms.codec import (  # noqa: E402
 )
 from amiga_ros2_comms.reliability import Outcome  # noqa: E402
 
-from amiga_ros2_coordinator.model import Location, Task  # noqa: E402
+from amiga_ros2_comms.codec import Target  # noqa: E402
+from amiga_ros2_coordinator.model import Task  # noqa: E402
 
 
 class Clock:
@@ -177,23 +178,26 @@ class FakeNav(HardInterruptDetector):
         self,
         eta_sec: float = 60.0,
         reachable: bool = True,
-        location: Optional[Location] = None,
+        location: Optional[Target] = None,
     ):
         super().__init__()
         self.eta_sec = eta_sec
         self.reachable = reachable
-        self.location = location or Location(0, 0)
+        # A real orchard fix, from examples/quad.xml. Target.none() would be
+        # the other honest default, but a fake that reports no position makes
+        # every heartbeat test about the no-fix path by accident.
+        self.location = location or Target.gps(37.366449, -120.423065)
         self.calls: "List[str]" = []
 
-    def eta(self, location: Location) -> float:
+    def eta(self, target: Target) -> float:
         self.calls.append("eta")
         return self.eta_sec
 
-    def can_reach(self, location: Location) -> bool:
+    def can_reach(self, target: Target) -> bool:
         self.calls.append("can_reach")
         return self.reachable
 
-    def current_location(self) -> Optional[Location]:
+    def current_location(self) -> Optional[Target]:
         return self.location
 
 

@@ -29,10 +29,17 @@ from std_msgs.msg import Bool
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from amiga_interfaces.msg import LoRaFrame  # noqa: E402
-from amiga_ros2_comms.codec import Capability  # noqa: E402
+from amiga_ros2_comms.codec import (  # noqa: E402
+    XML_ELEMENT,
+    Capability,
+    Target,
+    cap_mask,
+    capabilities_in,
+)
+from amiga_ros2_coordinator.capabilities import capabilities_from_xsd  # noqa: E402
 from amiga_ros2_comms.reliability.node import ReliabilityNode  # noqa: E402
 
-from amiga_ros2_coordinator.model import Location, Task, TaskState  # noqa: E402
+from amiga_ros2_coordinator.model import Task, TaskState  # noqa: E402
 from amiga_ros2_coordinator.node import CoordinatorNode  # noqa: E402
 from amiga_ros2_coordinator.reasoning import (  # noqa: E402
     AcceptEverything,
@@ -57,11 +64,17 @@ FAST_PARAMS = {
 }
 
 
+#: Sampling one tree: drive to it, then operate the arm. The pairing
+#: examples/sample_leafs.xml uses.
+SAMPLING = (Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF)
+DRIVING = (Capability.MOVE_TO_TREE_ID,)
+
+
 def a_task():
     return Task(
         task_id=TASK_ID,
-        required_capability=Capability.SPRAY,
-        location=Location(row=11, col=12),
+        required_capabilities=cap_mask(*SAMPLING),
+        location=Target.tree(60),
         priority=100,
     )
 
@@ -94,7 +107,10 @@ class Robot:
     """One robot's pair of nodes plus the fakes standing in for its stack."""
 
     def __init__(self, namespace, node_id, capabilities, interpreter=None, **overrides):
-        self.nav = FakeNav(eta_sec=45.0, location=Location(node_id, node_id))
+        self.nav = FakeNav(
+            eta_sec=45.0,
+            location=Target.gps(37.3664 + node_id * 1e-4, -120.4230),
+        )
         self.mission = FakeMission(battery=88)
         self.replanner = AcceptEverything()
         self.reliability = ReliabilityNode(
@@ -113,7 +129,10 @@ class Robot:
             replanner=self.replanner,
             namespace=namespace,
             parameter_overrides=_params(
-                capabilities=[c.name for c in capabilities], **settings
+                # By XML element name, which is what the parameter takes:
+                # the words that appear in the mission, not enum spellings.
+                capabilities=[XML_ELEMENT[c] for c in capabilities],
+                **settings,
             ),
         )
 
@@ -182,13 +201,15 @@ class Spinner:
 def fleet():
     """Two robots and a relay, spun on a background executor."""
     task = a_task()
+    # The owner can drive but has no arm; the worker has both. That is the
+    # whole reason the task moves.
     owner = Robot(
         "owner",
         1,
-        (Capability.DRIVE,),
+        DRIVING,
         interpreter=ScriptedInterpreter([ReDelegate(task=task)]),
     )
-    worker = Robot("worker", 2, (Capability.DRIVE, Capability.SPRAY))
+    worker = Robot("worker", 2, SAMPLING)
     relay = FrameRelay("owner", "worker")
     spinner = Spinner([*owner.nodes(), *worker.nodes(), relay])
     yield owner, worker, task, spinner
@@ -211,7 +232,7 @@ def test_parameters_reach_the_session():
         reliability=reliability,
         namespace="params",
         parameter_overrides=_params(
-            capabilities=["DRIVE", "SPRAY"],
+            capabilities=["MoveToTreeID", "SampleLeaf"],
             announce_window_sec=7.5,
             bid_max_backoff_sec=1.25,
             peer_timeout_sec=45.0,
@@ -226,15 +247,16 @@ def test_parameters_reach_the_session():
         assert params.peer_timeout_sec == 45.0
         assert params.max_open_auctions == 3
         assert node.session.registry.timeout_sec == 45.0
-        # Capabilities are bit *indices*: DRIVE is 0 and SPRAY is 2.
-        assert node.session.cap_mask == 0b101
+        # Capabilities are bit *indices* into the schema's ActionGroup:
+        # MoveToTreeID is 0 and SampleLeaf is 7.
+        assert node.session.cap_mask == 0b10000001
     finally:
         node.destroy_node()
         reliability.destroy_node()
 
 
 def test_an_unknown_capability_is_refused_at_startup():
-    """A typo that silently drops SPRAY is the hardest kind of bug to find."""
+    """A typo that silently drops SampleLeaf is the hardest kind of bug to find."""
     reliability = ReliabilityNode(
         namespace="typo", parameter_overrides=_params(node_id=8)
     )
@@ -243,7 +265,60 @@ def test_an_unknown_capability_is_refused_at_startup():
             CoordinatorNode(
                 reliability=reliability,
                 namespace="typo",
-                parameter_overrides=_params(capabilities=["SPRY"]),
+                parameter_overrides=_params(capabilities=["SampleLeaves"]),
+            )
+    finally:
+        reliability.destroy_node()
+
+
+def test_capabilities_are_read_from_the_mission_schema():
+    """The default path: what this robot can do comes off the real XSD.
+
+    Not a list somebody typed. The schema is what decides which missions this
+    robot can be given at all, so it is the only statement of its capabilities
+    that cannot quietly disagree with reality.
+    """
+    schema = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "amiga_ros2_behavior_tree",
+        "schemas",
+        "amiga_btcpp.xsd",
+    )
+    reliability = ReliabilityNode(
+        namespace="schema", parameter_overrides=_params(node_id=6)
+    )
+    node = CoordinatorNode(
+        reliability=reliability,
+        namespace="schema",
+        parameter_overrides=_params(mission_schema=schema),
+    )
+    try:
+        advertised = capabilities_in(node.session.cap_mask)
+        # Everything the Amiga schema's ActionGroup permits, and nothing else.
+        assert Capability.MOVE_TO_TREE_ID in advertised
+        assert Capability.SAMPLE_LEAF in advertised
+        assert Capability.MOVE_ARM_TO_POSITION in advertised
+        assert set(advertised) == set(capabilities_from_xsd(schema))
+    finally:
+        node.destroy_node()
+        reliability.destroy_node()
+
+
+def test_a_robot_with_no_schema_and_no_override_refuses_to_start():
+    """Silence is not an acceptable answer to "what can you do?".
+
+    A robot that advertises nothing never bids on anything and logs no error,
+    which is exactly the failure reading the schema exists to prevent.
+    """
+    reliability = ReliabilityNode(
+        namespace="mute", parameter_overrides=_params(node_id=5)
+    )
+    try:
+        with pytest.raises(ValueError, match="no way to know what it can do"):
+            CoordinatorNode(
+                reliability=reliability,
+                namespace="mute",
+                parameter_overrides=_params(mission_schema="", capabilities=[]),
             )
     finally:
         reliability.destroy_node()
@@ -276,7 +351,13 @@ def test_the_tick_timer_drives_deadlines_without_anyone_calling_tick():
         nav=FakeNav(),
         mission=FakeMission(),
         namespace="ticking",
-        parameter_overrides=_params(**FAST_PARAMS),
+        # Capabilities stated rather than defaulted. The node refuses to
+        # start without either these or a mission schema, and a test about
+        # timers should say what robot it is standing up rather than lean
+        # on a default that deliberately no longer exists.
+        parameter_overrides=_params(
+            capabilities=[XML_ELEMENT[c] for c in SAMPLING], **FAST_PARAMS
+        ),
     )
     spinner = Spinner([reliability, node])
     try:
@@ -300,7 +381,13 @@ def test_the_preemption_flag_is_published_latched():
         nav=FakeNav(),
         mission=FakeMission(),
         namespace="preempt",
-        parameter_overrides=_params(**FAST_PARAMS),
+        # Capabilities stated rather than defaulted. The node refuses to
+        # start without either these or a mission schema, and a test about
+        # timers should say what robot it is standing up rather than lean
+        # on a default that deliberately no longer exists.
+        parameter_overrides=_params(
+            capabilities=[XML_ELEMENT[c] for c in SAMPLING], **FAST_PARAMS
+        ),
     )
     listener = rclpy.create_node("preempt_listener", namespace="preempt")
     received = []
@@ -348,10 +435,10 @@ def test_a_task_crosses_two_robots_over_the_real_transport(fleet):
         and owner.session.node_id in [p.robot_id for p in worker.session.registry],
         what="a heartbeat to cross in both directions",
     )
-    assert owner.session.registry.capable(Capability.SPRAY)
+    assert owner.session.registry.capable(cap_mask(*SAMPLING))
 
     owner.session.own(task)
-    owner.session.report_infeasible(task, detail="no spray capability on this robot")
+    owner.session.report_infeasible(task, detail="this robot has no arm")
 
     spinner.until(
         lambda: owner.session.state_of(TASK_ID) is TaskState.TRANSFERRED,

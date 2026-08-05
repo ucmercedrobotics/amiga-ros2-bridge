@@ -18,6 +18,11 @@
   <depend>kortex_interfaces</depend>
   <depend>python3-jinja2</depend>
   <depend>python3-lxml</depend>
+  <!-- The wire vocabulary: mission_tasks and triage_node speak in Capability
+       and Target, which are the codec's, so that a task described in mission
+       XML and a task announced on the radio cannot come to mean different
+       things. -->
+  <depend>amiga_ros2_comms</depend>
 
   <!-- The arbiter and planner validate against this package's installed
        schemas/amiga_btcpp.xsd — the same schema the BT executor uses. -->

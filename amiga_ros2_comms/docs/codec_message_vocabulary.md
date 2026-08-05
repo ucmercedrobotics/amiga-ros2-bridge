@@ -61,22 +61,29 @@ does not check that it advances, and does not remember one.
 
 | tag | name | total bytes | status |
 | --- | --- | --- | --- |
-| `0x01` | HEARTBEAT | 13 | built |
-| `0x02` | TASK_ANNOUNCE | 13 | built |
+| `0x01` | HEARTBEAT | 18 | built |
+| `0x02` | TASK_ANNOUNCE | 19 | built |
 | `0x03` | BID | 9 | built |
 | `0x04` | GRANT | 7 | built |
 | `0x05` | ACK | 7 | built |
-| `0x06` | HAZARD | 13 | built |
+| `0x06` | — | — | **retired, do not reuse** (was HAZARD) |
 | `0x07` | FREEFORM | — | **reserved, not implemented** |
 
 Tag values are frozen once shipped. Renumbering one silently breaks every peer,
 so `test_message_type_values_match_the_wire_contract` pins them.
 
 Every type is fixed-size, so the encoded length is a constant per tag rather
-than a range — which is why `MAX_MESSAGE_BYTES` (13) is an exact bound and not
+than a range — which is why `MAX_MESSAGE_BYTES` (19) is an exact bound and not
 an estimate.
 
-### `0x01` HEARTBEAT — 13 bytes
+`0x06` carried HAZARD. It was removed because nothing in this system ever
+detected or published a hazard: the type described a capability the robot does
+not have, and a wire vocabulary that names things nobody can produce is a
+vocabulary an implementer has to guess about. The gap stays a gap — decoding
+`0x06` reports an unallocated tag, and giving the number to a new type would
+make any peer still holding the old code silently misread it.
+
+### `0x01` HEARTBEAT — 18 bytes
 
 I exist, here is what I can do, where I am, and what I am doing. Periodic. This
 is what populates the fleet's view of who is available to bid.
@@ -85,24 +92,37 @@ is what populates the fleet's view of who is available to bid.
 | --- | --- | --- | --- |
 | 0–3 | header | 4 | |
 | 4–5 | `cap_mask` | 2 | bitmask over Capability bit indices |
-| 6–7 | `grid_row` | 2 | unsigned grid index |
-| 8–9 | `grid_col` | 2 | unsigned grid index |
-| 10 | `battery` | 1 | whole percent, 0..100 |
-| 11–12 | `cur_task` | 2 | task ID, or 0 when idle |
+| 6 | `target_kind` | 1 | TargetKind, 0..3 |
+| 7–10 | `target_a` | 4 | signed; see [Targets](#targets) |
+| 11–14 | `target_b` | 4 | signed; see [Targets](#targets) |
+| 15 | `battery` | 1 | whole percent, 0..100 |
+| 16–17 | `cur_task` | 2 | task ID, or 0 when idle |
 
-### `0x02` TASK_ANNOUNCE — 13 bytes
+A robot with no position fix sends `TargetKind.NONE`, which is a different fact
+from being at the origin. The grid this replaced could not say it: zeros meant
+both, so a robot with no fix advertised itself in the Gulf of Guinea and every
+ETA computed against it was fiction.
 
-There is work at this cell; whoever can do it, bid.
+### `0x02` TASK_ANNOUNCE — 19 bytes
+
+There is work here; whoever can do **all** of it, bid.
 
 | offset | field | width | encoding |
 | --- | --- | --- | --- |
 | 0–3 | header | 4 | |
 | 4–5 | `task_id` | 2 | 0 means "none" |
-| 6 | `req_capability` | 1 | a single Capability **index**, 0..15 |
-| 7–8 | `grid_row` | 2 | unsigned grid index |
-| 9–10 | `grid_col` | 2 | unsigned grid index |
-| 11 | `priority` | 1 | unitless, 0..255, higher is more urgent |
-| 12 | `reason_code` | 1 | ReasonCode |
+| 6–7 | `req_cap_mask` | 2 | bitmask over Capability bit indices |
+| 8 | `target_kind` | 1 | TargetKind, 0..3 |
+| 9–12 | `target_a` | 4 | signed; see [Targets](#targets) |
+| 13–16 | `target_b` | 4 | signed; see [Targets](#targets) |
+| 17 | `priority` | 1 | unitless, 0..255, higher is more urgent |
+| 18 | `reason_code` | 1 | ReasonCode |
+
+`req_cap_mask` is a **set**, not one action, because a task is a behaviour-tree
+subtree and a subtree uses several. Sampling a tree is `MoveToTreeID` *and*
+`SampleLeaf` — the pairing the arbiter's orphaned-`SampleLeaf` check already
+enforces — and a robot with the arm but no tree navigation would pass a
+single-action test and then be unable to place the work it just won.
 
 ### `0x03` BID — 9 bytes
 
@@ -156,79 +176,107 @@ when one fails to arrive, and how long to hold a message for retransmit are all
 the reliability layer's problems. The type exists now only so the vocabulary is
 complete and the tag is allocated.
 
-### `0x06` HAZARD — 13 bytes
+## Targets
 
-Something is in the way at this cell, for about this long.
+A place is three fields — `target_kind` plus two signed 32-bit words — and what
+the words mean depends on the kind.
 
-| offset | field | width | encoding |
+| kind | value | `target_a` | `target_b` |
 | --- | --- | --- | --- |
-| 0–3 | header | 4 | |
-| 4 | `hazard_class` | 1 | HazardClass |
-| 5–6 | `grid_row` | 2 | unsigned grid index |
-| 7–8 | `grid_col` | 2 | unsigned grid index |
-| 9 | `radius` | 1 | **grid cells**, 0..255 |
-| 10 | `confidence` | 1 | whole percent, 0..100 |
-| 11–12 | `ttl_s` | 2 | seconds, 1 s/LSB, 0..65535 |
+| `NONE` | 0 | must be 0 | must be 0 |
+| `TREE` | 1 | tree index, 0..65535 | must be 0 |
+| `AISLE` | 2 | aisle index, 0..65535 | must be 0 |
+| `GPS` | 3 | latitude × 10⁷ | longitude × 10⁷ |
 
-## Coordinates
+There is no single coordinate system here **because the behaviour tree does not
+have one.** `MoveToTreeID` names a tree index, `MoveToAisleHead` an aisle index,
+`MoveToGPSLocation` and `ApproachGPSWaypoint` a latitude and longitude — and
+`SampleLeaf` and `FollowPerson` name nothing at all, because they happen wherever
+the robot already is. `amiga_interfaces/GetTreeInfo` converts between the first
+three on demand (`TREE_INDEX`, `ROW_INDEX`, `COL_INDEX`, `AISLE_INDEX` → `lat`,
+`lon`), so normalising to one of them at announce time would throw away exactly
+what the receiving robot needs to rebuild the action node. A peer that wins
+"tree 60" can emit `<MoveToTreeID id="60" approach_tree="true"/>`; a peer that
+wins a bare latitude and longitude cannot.
 
-`grid_row` / `grid_col` are **local orchard grid indices, never lat/lon.** They
-are unsigned, to match the `ROW_INDEX` / `COL_INDEX` convention already used by
-`amiga_interfaces/GetTreeInfo`, which indexes from a corner origin. That service
-uses `uint8`; the 16 bits here are deliberate headroom, not a different
-coordinate system.
+`NONE` is undelegable by construction: work with no place of its own is only
+meaningful next to work that has one. `MoveToRelativeLocation` also yields
+`NONE`, because an offset from *this* robot's pose is not a place another robot
+can be sent to.
 
-`radius` is in grid cells for the same reason — a hazard is a disc in the grid
-its own coordinates already live in, with no unit conversion in between.
+GPS resolution is **1e-7 degrees**, about 1.1 cm at the equator — finer than any
+orchard waypoint in `examples/`, and `int32` still covers the full ±180° range
+with an order of magnitude to spare. Degrees are converted at the boundary, by
+`Target.gps()` in and `lat_deg` / `lon_deg` out, so everything below is integers
+and the codec needs no fractional scaling.
+
+The three fields are validated **together** on decode. Each word is in range on
+its own, but a `TREE` target carrying a longitude, or a `NONE` target carrying
+coordinates, is a sender that disagrees with us about the layout — the same
+class of problem as trailing bytes, and refused just as loudly.
 
 ## Capabilities
 
-`Capability` values are **bit indices**, not mask values. That is what lets
-HEARTBEAT advertise a whole set in 2 bytes while TASK_ANNOUNCE names a single
-requirement in 1, with a one-line test between them:
+`Capability` values are **bit indices**, not mask values, and each one is a
+**behaviour-tree action type**: exactly the elements of
+`<xs:group name="ActionGroup">` in
+`amiga_ros2_behavior_tree/schemas/amiga_btcpp.xsd`, in schema order.
+
+That is what makes a capability claim checkable rather than asserted. The schema
+is the one the mission planner writes against, the arbiter validates against,
+and `bt_runner` refuses a mission for violating — so a robot advertising these
+bits is advertising what its own tree can actually be asked to do.
+`test_the_capability_vocabulary_is_the_behaviour_trees_action_group` asserts the
+two agree in both directions: a capability with no XSD element would be a robot
+claiming a skill no mission could invoke, and an XSD element with no bit would be
+work the fleet can never delegate.
+
+Both HEARTBEAT and TASK_ANNOUNCE carry a 16-bit mask, so the test is one line:
 
 ```python
-has_capability(heartbeat.cap_mask, announce.req_capability)
+has_capabilities(heartbeat.cap_mask, announce.req_cap_mask)
 ```
-
-The alternative — making `req_capability` an 8-bit mask over a 16-bit capability
-space — cannot represent half the capabilities and truncates silently, so the
-index encoding is the one that stays honest as the enum grows.
-
-`cap_mask` is 16 bits, so a capability index of 16 or more can never be
-advertised by anyone. `req_capability` is therefore range-checked to 0..15 and a
-larger value is rejected rather than treated as merely unknown.
 
 Adding a capability means **appending** an index. Never renumber one.
 
-| index | name |
-| --- | --- |
-| 0 | `DRIVE` |
-| 1 | `INSPECT` |
-| 2 | `SPRAY` |
-| 3 | `HARVEST` |
-| 4 | `MANIPULATE` |
-| 5 | `TRANSPORT` |
-| 6 | `SURVEY` |
-| 7 | `CHARGE_HOST` |
-| 8 | `RELAY` |
+| index | name | XML element |
+| --- | --- | --- |
+| 0 | `MOVE_TO_TREE_ID` | `<MoveToTreeID>` |
+| 1 | `MOVE_TO_AISLE_HEAD` | `<MoveToAisleHead>` |
+| 2 | `MOVE_TO_GPS_LOCATION` | `<MoveToGPSLocation>` |
+| 3 | `APPROACH_GPS_WAYPOINT` | `<ApproachGPSWaypoint>` |
+| 4 | `MOVE_TO_RELATIVE_LOCATION` | `<MoveToRelativeLocation>` |
+| 5 | `ORIENT_ROBOT_HEADING` | `<OrientRobotHeading>` |
+| 6 | `FOLLOW_PERSON` | `<FollowPerson>` |
+| 7 | `SAMPLE_LEAF` | `<SampleLeaf>` |
+| 8 | `MOVE_ARM_TO_POSITION` | `<MoveArmToPosition>` |
+
+`DetectObject`, `AssertTrue` and `CheckValue` are registered in `bt.cpp` but
+commented out of the schema, so they have no bit: a mission containing one is
+rejected before it ever runs, which makes advertising it a lie.
+
+Other platforms in the `schemas/` submodule (Husky, Kinova, Spot) name different
+actions. Extending the fleet to one of them means appending its actions as new
+indices, or mapping them onto these where they mean the same thing — not
+reinterpreting the existing bits.
 
 ## Quantization and ranges
 
 | field | wire | resolution | range | exact? |
 | --- | --- | --- | --- | --- |
-| `battery`, `confidence` | 1 byte | 1 % | 0..100 | yes |
-| `priority`, `cost`, `radius` | 1 byte | 1 | 0..255 | yes |
+| `battery` | 1 byte | 1 % | 0..100 | yes |
+| `priority`, `cost` | 1 byte | 1 | 0..255 | yes |
 | `eta_s` | 1 byte | **4 s** | 0..1020 (17 min) | no, ±2 s |
-| `ttl_s` | 2 bytes | 1 s | 0..65535 (18 h) | yes |
-| `grid_row`, `grid_col` | 2 bytes | 1 cell | 0..65535 | yes |
+| `target_kind` | 1 byte | — | 0..3 | yes |
+| `target_a`/`_b` as tree/aisle | 4 bytes | 1 index | 0..65535 | yes |
+| `target_a`/`_b` as GPS | 4 bytes | **1e-7°** | ±180° | no, ±0.55 cm |
 | `task_id`, `cur_task` | 2 bytes | 1 | 0..65535 | yes |
-| `cap_mask` | 2 bytes | — | 16 bits | yes |
+| `cap_mask`, `req_cap_mask` | 2 bytes | — | 16 bits | yes |
 
 Percentages are **0..100, not 0..255 scaled**. A percent field that can legally
 read 200 is a percent nobody downstream can sanity-check.
 
-### Why `eta_s` is 4 s/LSB and `ttl_s` is not
+### Why `eta_s` is 4 s/LSB and the target words are not
 
 At 1 s/LSB a one-byte ETA caps at 255 s — under five minutes, and shorter than
 a great many orchard traverses, so a robot would have to either lie or overflow.
@@ -237,9 +285,10 @@ is not a number anyone was going to act on. Encoding rounds half-up, so the
 worst-case error is 2 s; `test_eta_quantization_error_is_bounded_by_half_an_lsb`
 pins that.
 
-`ttl_s` has two bytes, so it needs no coarsening at all: 1 s/LSB already reaches
-18 hours. The asymmetry is a consequence of field width, not of the two fields
-meaning different kinds of thing.
+The target words have four bytes each, so they need no coarsening: a tree index
+round-trips exactly, and GPS at 1e-7° is finer than the fix that produced it.
+The asymmetry is a consequence of field width, not of the fields meaning
+different kinds of thing.
 
 Out-of-range values are **rejected, never wrapped or clamped**. Silently turning
 a 20-minute ETA into a 3-minute one is the failure this codec most wants to
@@ -304,19 +353,22 @@ worse than dropping it.
 
 ### One deliberate leniency
 
-An **unrecognised enum value** in `reason_code` or `hazard_class` passes through
-as a plain `int` rather than failing the message. A newer peer naming a hazard
-class we lack is still telling us where the hazard is. Since `IntEnum` compares
-equal to its integer value, this costs callers nothing.
+An **unrecognised `reason_code`** passes through as a plain `int` rather than
+failing the message. A newer peer naming a reason we have no word for is still
+telling us there is work. Since `IntEnum` compares equal to its integer value,
+this costs callers nothing.
 
 This does not apply to `tag` — an unknown tag means the payload cannot be parsed
-at all — nor to `req_capability`, where an out-of-range index is genuinely
-impossible rather than merely unfamiliar.
+at all — nor to `target_kind`, and that contrast is the point. An unnamed reason
+is informational and can be logged as a number; an unnamed target kind means the
+two words after it are in a coordinate system we cannot read, and a robot that
+drove to them anyway would be acting on a misreading rather than on a gap in its
+vocabulary.
 
 ## Size budget
 
 `max_payload_bytes` is a parameter to `encode`, defaulting to 50. The largest
-built message is 13 bytes, so there is a great deal of headroom; the tight
+built message is 19 bytes, so there is a great deal of headroom; the tight
 default is the design rule that keeps the vocabulary single-packet even at a
 high spreading factor, where the legal payload collapses to 24 bytes (SF10) or
 lower — see the dwell-time table in

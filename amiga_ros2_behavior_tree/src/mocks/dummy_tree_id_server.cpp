@@ -2,12 +2,14 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include "amiga_navigation_interfaces/action/tree_id_waypoint.hpp"
+#include "amiga_ros2_behavior_tree/mocks/failure_modes.hpp"
 
 using TreeIDWaypoint = amiga_navigation_interfaces::action::TreeIDWaypoint;
 
 class DummyTreeIDActionServer : public rclcpp::Node {
  public:
-  DummyTreeIDActionServer() : Node("dummy_tree_id_action_server") {
+  explicit DummyTreeIDActionServer(const std::string &name)
+      : Node(name) {
     server_ = rclcpp_action::create_server<TreeIDWaypoint>(
         this, "follow_tree_id_waypoint",
         std::bind(&DummyTreeIDActionServer::handle_goal, this,
@@ -73,17 +75,44 @@ class DummyTreeIDActionServer : public rclcpp::Node {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
 
+      // The failure path, if this scenario has one for this tree. Placed
+      // after the feedback loop so the robot gets most of the way there first,
+      // which is what the real failures do: the orchard lookup happens on
+      // arrival at the row, and the navigation abort comes from partway down
+      // it. A goal that failed instantly would be distinguishable from a real
+      // one by its timing alone.
+      if (policy_ && policy_->shouldFail(tree_id)) {
+        RCLCPP_ERROR(this->get_logger(), "%s",
+                     amiga_bt::mocks::failureLog(policy_->mode()));
+        goal_handle->abort(result);
+        return;
+      }
+
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(),
                   "Goal succeeded! Arrived at tree %u (%.6f, %.6f)",
                   tree_id, lat, lon);
     }).detach();
   }
+
+  std::unique_ptr<amiga_bt::mocks::FailurePolicy> policy_;
+
+ public:
+  void configureFailures() {
+    policy_ = std::make_unique<amiga_bt::mocks::FailurePolicy>(
+        shared_from_this());
+  }
 };
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<DummyTreeIDActionServer>();
+  // The node name is a parameter because it is part of the evidence: the
+  // triage agent's log window shows who logged each line, and a scenario that
+  // wants a failure indistinguishable from a real one needs it attributed to
+  // the node that would really have logged it.
+  auto node = std::make_shared<DummyTreeIDActionServer>(
+      amiga_bt::mocks::nodeName(argc, argv, "dummy_tree_id_action_server"));
+  node->configureFailures();
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

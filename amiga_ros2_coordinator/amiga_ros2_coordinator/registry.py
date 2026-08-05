@@ -25,9 +25,9 @@ No ROS, no radio, no I/O.
 
 from typing import Callable, Dict, Iterable, List, Optional
 
-from amiga_ros2_comms.codec import Heartbeat, has_capability
+from amiga_ros2_comms.codec import Heartbeat, has_capabilities, target_of
 
-from .model import Location, PeerRecord
+from .model import PeerRecord
 
 #: Default seconds without a HEARTBEAT before a peer is considered gone.
 #:
@@ -76,7 +76,7 @@ class PeerRegistry:
             self.counters["appeared"] += 1
 
         record.cap_mask = int(heartbeat.cap_mask)
-        record.location = Location(row=heartbeat.grid_row, col=heartbeat.grid_col)
+        record.location = target_of(heartbeat)
         record.battery = int(heartbeat.battery)
         record.current_task = int(heartbeat.cur_task)
         record.last_seen = now
@@ -130,18 +130,22 @@ class PeerRegistry:
     def ids(self) -> "tuple[int, ...]":
         return tuple(sorted(self._peers))
 
-    def capable(self, capability: int) -> "tuple[PeerRecord, ...]":
-        """Live peers advertising ``capability``.
+    def capable(self, required: int) -> "tuple[PeerRecord, ...]":
+        """Live peers advertising *every* action in ``required``.
 
         This is what lets an auction close early instead of waiting out its
         whole window: once every peer in here has answered -- bid or declined
         -- there is nobody left to hear from. A peer that is capable but silent
         keeps the window open, which is correct: it may simply be busy.
+
+        All of the actions and not any of them, because a task is a subtree: a
+        robot that can sample but cannot drive to the tree would keep the
+        window open waiting for a bid it can never sensibly make.
         """
         return tuple(
             record
             for record in self._peers.values()
-            if has_capability(record.cap_mask, capability)
+            if has_capabilities(record.cap_mask, required)
         )
 
     def stats(self) -> dict:

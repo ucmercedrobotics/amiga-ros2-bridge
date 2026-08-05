@@ -31,9 +31,15 @@ import json
 import time
 from typing import Optional
 
-from amiga_ros2_comms.codec import PRIORITY_MAX, TASK_ID_MAX, ReasonCode
+from amiga_ros2_comms.codec import (
+    PRIORITY_MAX,
+    TASK_ID_MAX,
+    ReasonCode,
+    Target,
+    TargetKind,
+)
 
-from .model import Location, Task, capability_name
+from .model import Task, capability_names
 from .schema import (
     ActionSchema,
     AddTask,
@@ -122,9 +128,11 @@ class TriageClient:
         request = self._srv_type.Request()
         task = context.task
         request.task_id = int(task.task_id) if task else 0
-        request.required_capability = int(task.required_capability) if task else 0
-        request.grid_row = int(task.location.row) if task else 0
-        request.grid_col = int(task.location.col) if task else 0
+        request.required_capabilities = int(task.required_capabilities) if task else 0
+        target = task.location if task else Target.none()
+        request.target_kind = int(target.kind)
+        request.target_a = int(target.a)
+        request.target_b = int(target.b)
         request.priority = int(task.priority) if task else 0
         request.battery_percent = max(0, min(int(context.battery), 100))
         request.peers_json = _peers_json(context)
@@ -179,10 +187,25 @@ class TriageClient:
             raise TriageRefused(
                 f"add_task with task_id={task_id}, outside the wire range"
             )
+        try:
+            location = Target(
+                kind=TargetKind(int(response.target_kind)),
+                a=int(response.target_a),
+                b=int(response.target_b),
+            )
+        except ValueError as exc:
+            # A target we cannot represent is not a target we can go to. This
+            # is the second of the two validation points -- the agent refuses a
+            # malformed answer before transmitting, and this refuses one that
+            # got here anyway -- and the pair is what keeps the closed schema
+            # closed across a stringly-typed IDL.
+            raise TriageRefused(
+                f"add_task names a place that is not one: {exc}"
+            ) from None
         return Task(
             task_id=task_id,
-            required_capability=int(response.required_capability),
-            location=Location(row=int(response.grid_row), col=int(response.grid_col)),
+            required_capabilities=int(response.required_capabilities),
+            location=location,
             priority=_bounded(response.priority, PRIORITY_MAX, 0),
         )
 
@@ -209,16 +232,13 @@ def _peers_json(context: AnomalyContext) -> str:
         peers.append(
             {
                 "id": int(peer.robot_id),
-                "capabilities": [
-                    capability_name(index)
-                    for index in range(16)
-                    if peer.cap_mask & (1 << index)
-                ],
+                # XML element names, so the model reads the same words the
+                # mission it is reasoning about is written in.
+                "capabilities": capability_names(peer.cap_mask),
                 "battery_percent": int(peer.battery),
                 "current_task": int(peer.current_task),
                 "idle": bool(peer.idle),
-                "row": int(peer.location.row) if peer.location else None,
-                "col": int(peer.location.col) if peer.location else None,
+                "where": str(peer.location) if peer.location else None,
                 "last_seen_sec_ago": round(context.at - float(peer.last_seen), 1),
             }
         )

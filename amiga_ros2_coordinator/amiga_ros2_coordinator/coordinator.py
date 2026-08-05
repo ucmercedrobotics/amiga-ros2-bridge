@@ -63,8 +63,11 @@ from amiga_ros2_comms.codec import (
     Message,
     ReasonCode,
     TaskAnnounce,
+    Target,
     cap_mask,
-    has_capability,
+    has_capabilities,
+    target_fields,
+    target_of,
 )
 from amiga_ros2_comms.reliability import Outcome
 
@@ -78,7 +81,7 @@ from .bidding import (
     quantized_eta,
 )
 from .interfaces import MissionInterface, NavInterface, NullPreemption, PreemptionSignal
-from .model import Fitness, Location, MissionDelta, Task, TaskState
+from .model import Fitness, MissionDelta, Task, TaskState
 from .reasoning import AnomalyInterpreter, MissionReplanner, ReplanResult
 from .registry import DEFAULT_PEER_TIMEOUT_SEC, PeerRegistry
 from .schema import (
@@ -456,6 +459,23 @@ class CoordinatorSession:
             # nearly delegated never quite gets delegated.
             return
 
+        if not record.task.delegable:
+            # The task has no place another robot could be sent to: a bare
+            # SampleLeaf, or a subtree whose only movement is relative to this
+            # robot's own pose. Announcing it would put a task on the air that
+            # every bidder would have to interpret as "wherever you happen to
+            # be", and the winner would do the work in the wrong place.
+            # Falling back is the right answer and not a failure of the
+            # auction -- it is a fact about the work.
+            self._counters["delegation_refused"] += 1
+            self._event(
+                "warn",
+                f"task {record.task.task_id} has no place another robot could "
+                f"be sent to ({record.task.location}); handling it locally",
+            )
+            self._dispose_locally(record, record.fallback, now)
+            return
+
         if now - record.last_announced_at < self.params.redelegation_cooldown_sec:
             self._counters["delegation_refused"] += 1
             self._event(
@@ -483,7 +503,7 @@ class CoordinatorSession:
 
     def _announce(self, record: OwnedTask, now: float) -> None:
         """Open an auction for ``record`` and put the first ANNOUNCE on the air."""
-        capable = self.registry.capable(record.task.required_capability)
+        capable = self.registry.capable(record.task.required_capabilities)
         record.state = TaskState.ANNOUNCED
         record.delegation_attempts += 1
         record.last_announced_at = now
@@ -514,9 +534,8 @@ class CoordinatorSession:
                 src=0,
                 seq=0,
                 task_id=task.task_id,
-                req_capability=int(task.required_capability),
-                grid_row=task.location.row,
-                grid_col=task.location.col,
+                req_cap_mask=int(task.required_capabilities),
+                **target_fields(task.location),
                 priority=int(task.priority),
                 reason_code=int(record.reason_code),
             )
@@ -797,7 +816,7 @@ class CoordinatorSession:
 
         self._counters["bids_considered"] += 1
 
-        if not has_capability(self.cap_mask, int(announce.req_capability)):
+        if not has_capabilities(self.cap_mask, int(announce.req_cap_mask)):
             # Incapable robots stay silent. A "no" from a robot the announcer
             # never expected to hear from is pure airtime: it is not in the
             # expected-bidder set, so its answer cannot close the auction early
@@ -807,8 +826,8 @@ class CoordinatorSession:
 
         task = Task(
             task_id=task_id,
-            required_capability=int(announce.req_capability),
-            location=Location(row=announce.grid_row, col=announce.grid_col),
+            required_capabilities=int(announce.req_cap_mask),
+            location=target_of(announce),
             priority=int(announce.priority),
         )
         fitness = self._assess(task)
@@ -984,14 +1003,17 @@ class CoordinatorSession:
         if self.params.heartbeat_period_sec <= 0 or now < self._next_heartbeat_at:
             return
         self._next_heartbeat_at = now + self.params.heartbeat_period_sec
-        here = self._safe(self._nav.current_location, None) or Location(0, 0)
+        # Target.none() rather than a zero coordinate: "navigation has not
+        # told us where we are" is a fact worth broadcasting as itself, and a
+        # peer computing an ETA against a position we never claimed is worse
+        # than a peer that knows our position is unknown.
+        here = self._safe(self._nav.current_location, None) or Target.none()
         self._reliability.send_broadcast(
             Heartbeat(
                 src=0,
                 seq=0,
                 cap_mask=self.cap_mask,
-                grid_row=here.row,
-                grid_col=here.col,
+                **target_fields(here),
                 battery=max(
                     0, min(int(self._safe(self._mission.battery_percent, 0)), 100)
                 ),

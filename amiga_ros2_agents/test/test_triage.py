@@ -6,8 +6,8 @@ these are, and each one is a way the pipeline could quietly do the wrong thing:
 
     * the escalation trigger, which is deterministic on purpose and must fire
       on a give-up and stay silent otherwise;
-    * the task-id lookup, which is the bridge between a BT node name and a
-      number small enough to put on a LoRa frame;
+    * the task lookup, which is the bridge between a failing BT node and the
+      unit of work the fleet can actually be offered -- a subtree, not a leaf;
     * the decision parser, which is the guard keeping free text out of a state
       machine -- the constraint the whole design rests on.
 
@@ -21,6 +21,7 @@ import json
 import pytest
 
 from amiga_ros2_agents import triage_node as tn
+from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
 
 
 @pytest.fixture
@@ -35,13 +36,29 @@ def reply(**fields) -> str:
     return json.dumps(fields)
 
 
+#: examples/sample_leafs.xml, trimmed to two units of work. Deliberately the
+#: real file's shape: two tree visits with a sample at each, and a transit move
+#: through tree 2 in between -- which is what makes tree ids unusable as task
+#: ids, since tree 2 is passed and never worked on.
 MISSION_XML = """<?xml version="1.0"?>
-<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>sample leaves from trees 10 and 60</Mission>
+  <BehaviorTree ID="Sample_Leaves_Trees_10_60">
     <Sequence>
-      <MoveToTreeID name="Visit_Tree_60" action_name="follow_tree_id_waypoint"
-                    id="60" approach_tree="true"/>
-      <SampleLeaf name="Sample_60" action_name="segment_leaves"/>
+      <Sequence name="Sample_Tree_10">
+        <MoveToTreeID name="Visit_Tree_10" action_name="follow_tree_id_waypoint"
+                      id="10" approach_tree="true"/>
+        <SampleLeaf name="Sample_Leaves_Tree_10" action_name="segment_leaves"/>
+      </Sequence>
+      <Sequence name="Traverse_To_Column_4">
+        <MoveToTreeID name="Exit_To_Top_Headland" action_name="follow_tree_id_waypoint"
+                      id="2" approach_tree="false"/>
+      </Sequence>
+      <Sequence name="Sample_Tree_60">
+        <MoveToTreeID name="Visit_Tree_60" action_name="follow_tree_id_waypoint"
+                      id="60" approach_tree="true"/>
+        <SampleLeaf name="Sample_Leaves_Tree_60" action_name="segment_leaves"/>
+      </Sequence>
     </Sequence>
   </BehaviorTree>
 </root>
@@ -57,13 +74,13 @@ def test_a_well_formed_re_delegate_is_accepted(node):
     decision = node._parse_decision(
         reply(
             action="re_delegate",
-            reason_code="low_battery",
+            reason_code="battery_low",
             fallback="hold",
             rationale="9% battery and two idle peers",
         )
     )
     assert decision["action"] == "re_delegate"
-    assert decision["reason_code"] == tn.REASON_CODES["low_battery"]
+    assert decision["reason_code"] == tn.REASON_CODES["battery_low"]
     assert decision["fallback"] == "hold"
     # Only meaningful for drop_task, and blanked so a reader cannot mistake a
     # default for a decision the agent made.
@@ -132,19 +149,81 @@ def test_add_task_fields_survive_the_parse(node):
     decision = node._parse_decision(
         reply(
             action="add_task",
-            reason_code="operator",
+            reason_code="operator_request",
             task_id=77,
-            capability=2,
-            grid_row=4,
-            grid_col=9,
+            actions=["MoveToTreeID", "SampleLeaf"],
+            target={"kind": "tree", "index": 47},
             priority=200,
-            rationale="found an unsprayed row",
+            rationale="tree 47 was passed unsampled",
         )
     )
     assert decision["task_id"] == 77
-    assert decision["required_capability"] == 2
-    assert (decision["grid_row"], decision["grid_col"]) == (4, 9)
+    assert decision["capabilities"] == cap_mask(
+        Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+    )
+    assert decision["target"] == Target.tree(47)
     assert decision["priority"] == 200
+
+
+def test_an_action_the_mission_schema_does_not_have_is_refused(node):
+    """Refused, not dropped.
+
+    Silently ignoring an unknown action would build a mask describing *less*
+    work than the model asked for, and the task would then be announced as
+    feasible for robots that cannot do it -- with the announcement looking
+    entirely ordinary.
+    """
+    with pytest.raises(ValueError, match="not in the mission schema"):
+        node._parse_decision(
+            reply(
+                action="add_task",
+                reason_code="unspecified",
+                task_id=77,
+                actions=["MoveToTreeID", "SprayTree"],
+            )
+        )
+
+
+def test_a_gps_target_survives_the_parse(node):
+    decision = node._parse_decision(
+        reply(
+            action="add_task",
+            reason_code="unspecified",
+            task_id=78,
+            actions=["MoveToGPSLocation"],
+            target={
+                "kind": "gps",
+                "latitude": 37.366449,
+                "longitude": -120.423065,
+            },
+        )
+    )
+    assert decision["target"] == Target.gps(37.366449, -120.423065)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"kind": "orchard", "index": 3},  # not a kind
+        {"kind": "tree"},  # no index
+        {"kind": "gps", "latitude": 37.4},  # half a fix
+        {"kind": "gps", "latitude": 200.0, "longitude": 0.0},  # off the globe
+        "tree 47",  # not an object
+    ],
+)
+def test_a_target_that_is_not_a_place_is_refused(node, target):
+    # Same reasoning as the actions. A place quietly coerced to "here" is work
+    # announced somewhere every listener resolves differently.
+    with pytest.raises(ValueError):
+        node._parse_decision(
+            reply(
+                action="add_task",
+                reason_code="unspecified",
+                task_id=77,
+                actions=["SampleLeaf"],
+                target=target,
+            )
+        )
 
 
 def test_out_of_range_task_fields_read_as_absent(node):
@@ -175,7 +254,7 @@ def test_add_task_does_not_inherit_the_failed_tasks_id(node, monkeypatch):
         tn.llm,
         "complete",
         lambda system, user, **kw: reply(
-            action="add_task", reason_code="operator", rationale="no id given"
+            action="add_task", reason_code="operator_request", rationale="no id given"
         ),
     )
     response = node._on_interpret(_request(task_id=60), _response())
@@ -186,31 +265,83 @@ def test_add_task_does_not_inherit_the_failed_tasks_id(node, monkeypatch):
 
 
 # ==========================================================================
-# The task-id bridge: BT node name -> wire task id
+# The task bridge: a failing BT node -> the unit of work it belongs to
 # ==========================================================================
 
 
-def test_the_failing_nodes_tree_id_becomes_the_task_id(node):
-    task_id = node._task_id_for({"node": "Visit_Tree_60"}, MISSION_XML)
-    assert task_id == 60
+def test_a_failing_move_resolves_to_the_whole_sampling_subtree(node):
+    """The failing leaf is the move; the task is the move *and* the sample.
+
+    Offering the fleet only the leaf that failed would hand a peer a drive to
+    tree 60 with nothing to do when it arrives, and leave the sample behind on
+    a robot that has already given up on getting there.
+    """
+    task = node._task_for({"node": "Visit_Tree_60"}, MISSION_XML)
+
+    assert task is not None
+    assert task.name == "Sample_Tree_60"
+    assert task.capabilities == cap_mask(
+        Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+    )
+    assert task.target == Target.tree(60)
 
 
-def test_a_node_with_no_id_attribute_has_no_task(node):
-    # SampleLeaf carries no id. Reporting 0 is honest; inventing one would have
-    # the coordinator announce a task nobody can match to any work.
-    assert node._task_id_for({"node": "Sample_60"}, MISSION_XML) == 0
+def test_a_failing_sample_resolves_to_the_same_subtree(node):
+    """Either half of the unit resolves to the whole unit.
+
+    SampleLeaf carries no id at all. Under the old lookup this was task 0 --
+    "no task attached" -- so a sampling failure could never be delegated by
+    anyone, which is exactly the work this fleet exists to move around.
+    """
+    move = node._task_for({"node": "Visit_Tree_60"}, MISSION_XML)
+    sample = node._task_for({"node": "Sample_Leaves_Tree_60"}, MISSION_XML)
+
+    assert sample is not None
+    assert sample.task_id == move.task_id
+    assert sample.target == Target.tree(60)
+
+
+def test_two_units_in_one_mission_get_different_ids(node):
+    """The bug the tree id had: it is a location, and locations repeat."""
+    ten = node._task_for({"node": "Visit_Tree_10"}, MISSION_XML)
+    sixty = node._task_for({"node": "Visit_Tree_60"}, MISSION_XML)
+
+    assert ten.task_id != sixty.task_id
+    assert ten.target == Target.tree(10)
+    assert sixty.target == Target.tree(60)
+
+
+def test_a_transit_move_is_not_an_objective(node):
+    """approach_tree="false" is how the robot gets somewhere, not what it does.
+
+    This is the arbiter's own definition of an objective, reused rather than
+    reinvented -- if the two disagreed, the fleet and the plan validator would
+    disagree about which trees a mission is actually for.
+    """
+    transit = node._task_for({"node": "Exit_To_Top_Headland"}, MISSION_XML)
+
+    assert transit is not None
+    assert not transit.delegable, "a transit move names nowhere to be sent"
+
+
+def test_the_task_id_is_stable_across_reads(node):
+    """Two robots reading the same plan must agree without talking about it."""
+    first = node._task_for({"node": "Visit_Tree_60"}, MISSION_XML)
+    second = node._task_for({"node": "Visit_Tree_60"}, MISSION_XML)
+    assert first.task_id == second.task_id
+    assert 0 < first.task_id <= 0xFFFF
 
 
 def test_a_fault_with_no_mission_loaded_has_no_task(node):
-    assert node._task_id_for({"node": "Visit_Tree_60"}, None) == 0
+    assert node._task_for({"node": "Visit_Tree_60"}, None) is None
 
 
 def test_a_tree_level_fault_has_no_task(node):
-    assert node._task_id_for({"node": "<tree>"}, MISSION_XML) == 0
+    assert node._task_for({"node": "<tree>"}, MISSION_XML) is None
 
 
 def test_unparseable_mission_xml_does_not_raise(node):
-    assert node._task_id_for({"node": "Visit_Tree_60"}, "<not xml") == 0
+    assert node._task_for({"node": "Visit_Tree_60"}, "<not xml") is None
 
 
 # ==========================================================================
@@ -236,8 +367,18 @@ def test_an_arbiter_abort_escalates(node, monkeypatch):
 
     assert len(sent) == 1
     assert sent[0]["cause"] == "arbiter_abort"
-    assert sent[0]["task_id"] == 60
     assert "viability budget" in sent[0]["detail"]
+    # The whole descriptor, not just an id. This node is the only thing that
+    # reads the mission XML, so it is the only thing that can say what the
+    # failed work actually is -- and a coordinator sent only an id would have
+    # to invent both the action set and the place.
+    assert sent[0]["name"] == "Sample_Tree_60"
+    assert sent[0]["capabilities"] == cap_mask(
+        Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+    )
+    assert sent[0]["target_kind"] == int(TargetKind.TREE)
+    assert sent[0]["target_a"] == 60
+    assert sent[0]["task_id"] > 0
 
 
 def test_a_planner_give_up_escalates(node, monkeypatch):
@@ -287,7 +428,7 @@ def test_a_good_interpretation_fills_the_response(node, monkeypatch):
         "complete",
         lambda system, user, **kw: reply(
             action="re_delegate",
-            reason_code="low_battery",
+            reason_code="battery_low",
             fallback="hold",
             rationale="battery at 9%",
         ),
@@ -297,7 +438,7 @@ def test_a_good_interpretation_fills_the_response(node, monkeypatch):
     assert response.ok is True
     assert response.action == "re_delegate"
     assert response.fallback == "hold"
-    assert response.reason_code == tn.REASON_CODES["low_battery"]
+    assert response.reason_code == tn.REASON_CODES["battery_low"]
     # Echoed back from the request, so the response reads as self-contained.
     assert response.task_id == 60
     assert response.model == "test-model"

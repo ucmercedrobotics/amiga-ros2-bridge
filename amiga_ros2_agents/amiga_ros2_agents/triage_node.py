@@ -46,14 +46,22 @@ from threading import Lock
 from typing import Dict, List, Optional
 
 from amiga_interfaces.srv import InterpretAnomaly
-from lxml import etree
+from amiga_ros2_comms.codec import (
+    CAPABILITY_BY_ELEMENT,
+    PRIORITY_MAX,
+    TASK_ID_MAX,
+    ReasonCode,
+    Target,
+    TargetKind,
+)
 from rcl_interfaces.msg import Log
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
-from . import llm, prompts, spin
+from . import llm, mission_tasks, prompts, spin
+from .mission_tasks import MissionTask
 from .status import StatusPublisher
 
 # ---------------------------------------------------------------------------
@@ -75,17 +83,13 @@ ATTEMPT_HISTORY = 6  # local recovery attempts remembered per mission
 VALID_ACTIONS = ("re_delegate", "add_task", "drop_task")
 VALID_DISPOSITIONS = ("drop", "hold", "request_human")
 
-# Matches the coordinator's ReasonCode enum (amiga_ros2_comms/codec). Only the
-# values a triage decision can justify are offered; the model picks a label and
-# never a number.
-REASON_CODES = {
-    "unspecified": 0,
-    "low_battery": 1,
-    "unreachable": 2,
-    "task_failed": 3,
-    "capability_missing": 4,
-    "operator": 5,
-}
+# Built from the codec's ReasonCode rather than restated. The previous version
+# of this was a second hand-written table that claimed to match and did not:
+# every non-zero label travelled as the wrong code, so "low battery" arrived at
+# the fleet as "an operator asked for this". Deriving it means the two cannot
+# disagree again -- the model picks a label, and the label is the enum's own
+# name.
+REASON_CODES = {code.name.lower(): int(code) for code in ReasonCode}
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 LEVEL_MAP = {10: "DEBUG", 20: "INFO", 30: "WARN", 40: "ERROR", 50: "FATAL"}
@@ -128,6 +132,11 @@ class TriageNode(Node):
             valid_actions=VALID_ACTIONS,
             valid_dispositions=VALID_DISPOSITIONS,
             reason_codes=sorted(REASON_CODES),
+            # The behaviour-tree actions the model may name, taken from the
+            # capability vocabulary rather than written into the prompt. A
+            # hand-written list would be a third place the schema is restated,
+            # and the one nobody would think to update.
+            actions=sorted(CAPABILITY_BY_ELEMENT),
         )
 
         # llm.complete() blocks for seconds. A reentrant group plus the
@@ -256,55 +265,57 @@ class TriageNode(Node):
             fault = dict(self.last_fault) if self.last_fault else {}
             mission_xml = self.mission_xml
 
-        task_id = self._task_id_for(fault, mission_xml)
+        task = self._task_for(fault, mission_xml)
         payload = {
             "cause": cause,
             "detail": detail,
-            "task_id": task_id,
             "fault": fault,
             "at": time.time(),
         }
+        if task is not None:
+            # The whole descriptor, not just the id. This node is the only
+            # thing in the system that reads the mission XML, so it is the only
+            # thing that can say what the failed work actually *is* -- which
+            # actions it needs and where it happens. Sending only an id would
+            # leave the coordinator to invent both, and it would announce a
+            # task at the origin needing a capability nobody chose.
+            payload.update(task.as_payload())
+        else:
+            payload["task_id"] = 0
+
         self.infeasible_pub.publish(String(data=json.dumps(payload)))
         with self._lock:
             self._last_status["escalations"] += 1
-        self.get_logger().warn(
-            f"escalating to coordination: {detail} (task_id={task_id})"
-        )
+        if task is None:
+            self.get_logger().warn(
+                f"escalating to coordination: {detail} (no task resolved from "
+                f"the running plan; it can be interpreted but not announced)"
+            )
+        else:
+            self.get_logger().warn(
+                f"escalating to coordination: {detail} "
+                f"(task {task.task_id} {task.name!r}, "
+                f"{mission_tasks.capability_names(task.capabilities)} "
+                f"at {task.target})"
+            )
         self.status.publish(self.get_status())
 
-    def _task_id_for(self, fault: Dict, mission_xml: Optional[str]) -> int:
-        """Resolve the failing BT node to a coordinator task id.
+    def _task_for(self, fault: Dict, mission_xml) -> Optional[MissionTask]:
+        """Resolve the failing BT node to the unit of work it belongs to.
 
-        The bridge between the two worlds. A mission is BT XML whose leaves
-        carry tree ids; a task on the radio is a 16-bit number. The failing
-        node's name comes back on the fault event, so the id is a lookup in the
-        plan that is actually running -- not a guess and not a second registry
-        to keep in sync.
+        The bridge between the two worlds, and it resolves to a *subtree*
+        rather than a leaf. ``/bt/status_change`` names the leaf that failed;
+        what the fleet can be offered is the whole unit that leaf belongs to --
+        approaching tree 60 and sampling it, not the sample on its own, which
+        would arrive somewhere else with nothing to sample.
 
-        0 means "no task attached", which the coordinator handles: it will
-        still interpret the anomaly, it just has nothing to announce.
+        None means the anomaly has no task attached, which the coordinator
+        handles: it will still interpret it, it just has nothing to announce.
         """
         name = str(fault.get("node", ""))
-        if not name or not mission_xml:
-            return 0
-        try:
-            root = etree.fromstring(mission_xml.encode())
-        except etree.XMLSyntaxError:
-            return 0
-        for element in root.iter():
-            if element.get("name") != name:
-                continue
-            raw = element.get("id")
-            if raw is None:
-                continue
-            try:
-                value = int(raw)
-            except ValueError:
-                return 0
-            # The wire carries a uint16. An id outside it is a plan this
-            # fleet could not have announced in the first place.
-            return value if 0 <= value <= 0xFFFF else 0
-        return 0
+        if not name:
+            return None
+        return mission_tasks.task_for_node(mission_xml, name)
 
     # ------------------------------------------------------------------
     # Interpretation — the model
@@ -330,9 +341,15 @@ class TriageNode(Node):
                 world_state=world or "(no world-state frame)",
                 local_attempts=attempts or "(none)",
                 task_id=int(request.task_id),
-                required_capability=int(request.required_capability),
-                grid_row=int(request.grid_row),
-                grid_col=int(request.grid_col),
+                # Element names rather than a mask, so the model reads the same
+                # words as the mission XML it is reasoning about. A number here
+                # would be a number it has to be told how to decode, in a
+                # prompt, every time.
+                required_actions=", ".join(
+                    mission_tasks.capability_names(int(request.required_capabilities))
+                )
+                or "(none stated)",
+                where=self._where(request),
                 priority=int(request.priority),
                 battery_percent=int(request.battery_percent),
                 peers=request.peers_json or "[]",
@@ -366,15 +383,19 @@ class TriageNode(Node):
         # the coordinator's client refuses it.
         echo = decision["action"] != "add_task"
         response.task_id = decision["task_id"] or (int(request.task_id) if echo else 0)
-        response.required_capability = decision["required_capability"] or (
-            int(request.required_capability) if echo else 0
+        response.required_capabilities = decision["capabilities"] or (
+            int(request.required_capabilities) if echo else 0
         )
-        response.grid_row = decision["grid_row"] or (
-            int(request.grid_row) if echo else 0
-        )
-        response.grid_col = decision["grid_col"] or (
-            int(request.grid_col) if echo else 0
-        )
+        target = decision["target"]
+        if target is None and echo:
+            response.target_kind = int(request.target_kind)
+            response.target_a = int(request.target_a)
+            response.target_b = int(request.target_b)
+        else:
+            target = target or Target.none()
+            response.target_kind = int(target.kind)
+            response.target_a = int(target.a)
+            response.target_b = int(target.b)
         response.priority = decision["priority"] or (
             int(request.priority) if echo else 0
         )
@@ -389,6 +410,20 @@ class TriageNode(Node):
         )
         self.status.publish(self.get_status())
         return response
+
+    @staticmethod
+    def _where(request) -> str:
+        """The task's place, in words. ``Target.__str__`` already reads well."""
+        try:
+            return str(
+                Target(
+                    kind=TargetKind(int(request.target_kind)),
+                    a=int(request.target_a),
+                    b=int(request.target_b),
+                )
+            )
+        except (ValueError, TypeError):
+            return "(not stated)"
 
     def _assemble(self, request):
         """Prompt context: what the caller sent, else what we have been watching.
@@ -490,11 +525,10 @@ class TriageNode(Node):
             "reason_code": REASON_CODES[reason],
             "fallback": fallback if action == "re_delegate" else "",
             "disposition": disposition if action == "drop_task" else "",
-            "task_id": self._bounded(decision.get("task_id"), 0xFFFF),
-            "required_capability": self._bounded(decision.get("capability"), 0xFFFF),
-            "grid_row": self._bounded(decision.get("grid_row"), 0xFFFF),
-            "grid_col": self._bounded(decision.get("grid_col"), 0xFFFF),
-            "priority": self._bounded(decision.get("priority"), 0xFF),
+            "task_id": self._bounded(decision.get("task_id"), TASK_ID_MAX),
+            "capabilities": self._capabilities(decision.get("actions")),
+            "target": self._target(decision.get("target")),
+            "priority": self._bounded(decision.get("priority"), PRIORITY_MAX),
             "rationale": str(decision.get("rationale", "")).strip(),
         }
 
@@ -503,12 +537,68 @@ class TriageNode(Node):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _capabilities(actions) -> int:
+        """A list of behaviour-tree action names, as a capability mask.
+
+        An unrecognised name is refused rather than dropped. Silently ignoring
+        it would build a mask describing *less* work than the model asked for,
+        which is how a task gets announced as feasible for robots that cannot
+        do it -- and the announcement would look perfectly ordinary.
+        """
+        if actions is None:
+            return 0
+        if isinstance(actions, str):
+            actions = [actions]
+        if not isinstance(actions, list):
+            raise ValueError(
+                f"'actions' must be a list of action names, got {actions!r}"
+            )
+        mask = 0
+        for name in actions:
+            capability = CAPABILITY_BY_ELEMENT.get(str(name).strip())
+            if capability is None:
+                raise ValueError(
+                    f"action {name!r} is not in the mission schema; known: "
+                    f"{', '.join(sorted(CAPABILITY_BY_ELEMENT))}"
+                )
+            mask |= 1 << int(capability)
+        return mask
+
+    @staticmethod
+    def _target(target) -> Optional[Target]:
+        """The place an add_task names, or None when it named none.
+
+        Refused rather than defaulted, for the same reason as the actions: a
+        target quietly coerced to "here" is work announced at a place every
+        listener resolves differently.
+        """
+        if target is None:
+            return None
+        if not isinstance(target, dict):
+            raise ValueError(f"'target' must be an object, got {type(target).__name__}")
+        kind = str(target.get("kind", "")).strip().lower()
+        try:
+            if kind in ("", "none"):
+                return Target.none()
+            if kind == "tree":
+                return Target.tree(int(target["index"]))
+            if kind == "aisle":
+                return Target.aisle(int(target["index"]))
+            if kind == "gps":
+                return Target.gps(float(target["latitude"]), float(target["longitude"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"target {target!r} is not a place: {exc}") from None
+        raise ValueError(f"target kind {kind!r} is not one of: none, tree, aisle, gps")
+
+    @staticmethod
     def _bounded(value, maximum: int) -> int:
         """An out-of-range or non-numeric field reads as absent, not as an error.
 
-        These are only ever used for add_task, and the caller substitutes the
+        Only used for the two plain numbers, and the caller substitutes the
         request's own values when they come back 0. A model that omits them for
         a re_delegate -- which is most of the time -- must not fail the parse.
+        The structured fields above are stricter, because a half-understood
+        action set or place is a decision rather than a blank.
         """
         try:
             number = int(value)

@@ -12,12 +12,30 @@ def _typed_arg(name, value_type):
     return ParameterValue(LaunchConfiguration(name), value_type=value_type)
 
 
+def _mission_schema(context) -> dict:
+    """The schema override, or nothing at all.
+
+    Passing an empty string would beat the node's own default, which resolves
+    the installed schema through ament -- so an unset argument has to mean
+    "do not set the parameter" rather than "set it to empty".
+    """
+    path = LaunchConfiguration("mission_schema").perform(context).strip()
+    return {"mission_schema": path} if path else {}
+
+
 def _launch_setup(context, *args, **kwargs):
     # `capabilities` is a STRING_ARRAY parameter on the node, and there is no
-    # substitution that turns "DRIVE,SPRAY" into one. Resolving the argument
-    # here and splitting it in Python is what an OpaqueFunction is for.
+    # substitution that turns "MoveToTreeID,SampleLeaf" into one. Resolving the
+    # argument here and splitting it in Python is what an OpaqueFunction is for.
+    #
+    # Empty by default, and that is the normal case: the node reads its own
+    # mission schema instead. This is the override for a robot whose hardware
+    # is a subset of what its schema permits.
+    #
+    # Case is preserved, unlike the previous version of this: these are XML
+    # element names now, and `SAMPLELEAF` is not one.
     capabilities = [
-        name.strip().upper()
+        name.strip()
         for name in LaunchConfiguration("capabilities").perform(context).split(",")
         if name.strip()
     ]
@@ -46,6 +64,7 @@ def _launch_setup(context, *args, **kwargs):
                     "spreading_factor": _typed_arg("spreading_factor", int),
                     # Consumed by the coordinator.
                     "capabilities": capabilities,
+                    **_mission_schema(context),
                     "announce_window_sec": _typed_arg("announce_window_sec", float),
                     "bid_max_backoff_sec": _typed_arg("bid_max_backoff_sec", float),
                     "peer_timeout_sec": _typed_arg("peer_timeout_sec", float),
@@ -76,8 +95,21 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "capabilities",
-            default_value="DRIVE",
-            description="Comma-separated Capability names this robot advertises.",
+            default_value="",
+            description=(
+                "Comma-separated behaviour-tree action names this robot "
+                "advertises, e.g. MoveToTreeID,SampleLeaf. Empty -- the "
+                "default -- means read them from the mission schema, which is "
+                "what decides which missions this robot can be given at all."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "mission_schema",
+            default_value="",
+            description=(
+                "Path to amiga_btcpp.xsd. Empty resolves the installed one, "
+                "the same file bt_runner uses."
+            ),
         ),
         DeclareLaunchArgument("announce_window_sec", default_value="5.0"),
         DeclareLaunchArgument("bid_max_backoff_sec", default_value="2.0"),

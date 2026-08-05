@@ -17,9 +17,19 @@ string local_attempts
 # The task that could not be completed, in the coordinator's terms. task_id 0
 # means the anomaly has no task attached.
 uint16 task_id
-uint16 required_capability
-uint16 grid_row
-uint16 grid_col
+# Mask of the behaviour-tree action types the task's subtree uses -- a set, not
+# one action, because approaching a tree and sampling it are two and a robot
+# with either alone cannot do the work. Bit indices are amiga_ros2_comms
+# codec.Capability, which is the ActionGroup of amiga_btcpp.xsd.
+uint16 required_capabilities
+# Where the work is, in the terms the behaviour tree names places:
+#   0 NONE   nowhere of its own (SampleLeaf, FollowPerson) -- undelegable
+#   1 TREE   target_a is a tree index
+#   2 AISLE  target_a is an aisle index
+#   3 GPS    target_a/target_b are latitude/longitude x 1e7
+uint8 target_kind
+int32 target_a
+int32 target_b
 uint8 priority
 
 # This robot, now.
@@ -58,11 +68,12 @@ string fallback
 # drop_task only, same vocabulary.
 string disposition
 
-# add_task only: the work to take on.
+# add_task only: the work to take on. Same encoding as the request's.
 uint16 task_id
-uint16 required_capability
-uint16 grid_row
-uint16 grid_col
+uint16 required_capabilities
+uint8 target_kind
+int32 target_a
+int32 target_b
 uint8 priority
 
 # The agent's own account of why. Logged, shown to an operator, and included in

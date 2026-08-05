@@ -43,6 +43,8 @@ with nothing sleeping. ``CoordinatorNode`` is the thin wiring.
 Specified in ``docs/coordinator.md``.
 """
 
+from amiga_ros2_comms.codec import Capability, Target, TargetKind
+
 from .auction import Auction, ReceivedBid
 from .bidding import PendingBid, backoff_for, default_fitness, quantized_eta
 from .coordinator import CoordinatorParams, CoordinatorSession, OwnedTask
@@ -52,14 +54,20 @@ from .interfaces import (
     NullPreemption,
     PreemptionSignal,
 )
+from .capabilities import (
+    SchemaError,
+    capabilities_from_xsd,
+    default_schema_path,
+    mask_from_xsd,
+)
 from .model import (
     Fitness,
-    Location,
     MissionDelta,
     PeerRecord,
     Task,
     TaskState,
     capability_name,
+    capability_names,
 )
 from .reasoning import (
     AcceptEverything,
@@ -95,14 +103,24 @@ __all__ = [
     "default_fitness",
     "quantized_eta",
     "PeerRegistry",
-    # Model
+    # Model. Target and Capability are the codec's, re-exported rather than
+    # redefined: both are statements about the behaviour tree's schema, and a
+    # second copy here is how the two would come to disagree.
     "Task",
     "TaskState",
-    "Location",
+    "Target",
+    "TargetKind",
+    "Capability",
     "Fitness",
     "PeerRecord",
     "MissionDelta",
     "capability_name",
+    "capability_names",
+    # What this robot can do, read off the mission schema it validates against
+    "capabilities_from_xsd",
+    "mask_from_xsd",
+    "default_schema_path",
+    "SchemaError",
     # Action schema
     "ActionSchema",
     "ACTION_TYPES",
