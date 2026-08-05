@@ -84,8 +84,10 @@ GROUND_TILE_TEMPLATE = """        <visual name="ground_tile_{n}">
         </visual>
 """
 
-def build_world(rows: int, trees_per_row: int, dx: float, dy: float,
-                x0: float, seed: int) -> str:
+
+def build_world(
+    rows: int, trees_per_row: int, dx: float, dy: float, x0: float, seed: int
+) -> str:
     rng = random.Random(seed)
 
     xs = [x0 + j * dx for j in range(trees_per_row)]
@@ -100,10 +102,18 @@ def build_world(rows: int, trees_per_row: int, dx: float, dy: float,
         for col, x in enumerate(xs):
             variety = rng.choice(VARIETIES)
             yaw_deg = rng.uniform(-180.0, 180.0)
-            trees.append(TREE_TEMPLATE.format(
-                n=n, row=row + 1, col=col + 1, variety=variety, yaw_deg=yaw_deg,
-                x=x, y=y, yaw=math.radians(yaw_deg),
-            ))
+            trees.append(
+                TREE_TEMPLATE.format(
+                    n=n,
+                    row=row + 1,
+                    col=col + 1,
+                    variety=variety,
+                    yaw_deg=yaw_deg,
+                    x=x,
+                    y=y,
+                    yaw=math.radians(yaw_deg),
+                )
+            )
             n += 1
     trees_xml = "\n".join(trees)
 
@@ -126,9 +136,18 @@ def build_world(rows: int, trees_per_row: int, dx: float, dy: float,
     plane_size = max(tile_xs[-1] - tile_xs[0], tile_ys[-1] - tile_ys[0]) + TILE_SIZE
 
     return WORLD_TEMPLATE.format(
-        n_trees=rows * trees_per_row, trees_per_row=trees_per_row, rows=rows,
-        dx=dx, dy=dy, x_min=x_min, x_max=x_max, y_min=y_min, y_max=y_max,
-        plane_size=plane_size, ground_tiles=ground_tiles_xml, trees=trees_xml,
+        n_trees=rows * trees_per_row,
+        trees_per_row=trees_per_row,
+        rows=rows,
+        dx=dx,
+        dy=dy,
+        x_min=x_min,
+        x_max=x_max,
+        y_min=y_min,
+        y_max=y_max,
+        plane_size=plane_size,
+        ground_tiles=ground_tiles_xml,
+        trees=trees_xml,
     )
 
 
@@ -233,30 +252,41 @@ WORLD_TEMPLATE = """<?xml version="1.0"?>
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rows", type=int, default=8,
-                    help="Tree rows, separated by (rows - 1) aisles")
+    ap.add_argument(
+        "--rows", type=int, default=8, help="Tree rows, separated by (rows - 1) aisles"
+    )
     ap.add_argument("--trees-per-row", type=int, default=18)
-    ap.add_argument("--dx", type=float, default=4.0, help="Tree spacing along a row (m)")
-    ap.add_argument("--dy", type=float, default=9.0,
-                    help="Row spacing / aisle width (m). Canopy meshes run up to "
-                    "~1.85m radius and are randomly yawed, so this needs to clear "
-                    "2x that plus robot width regardless of orientation -- 6.0 was "
-                    "not enough (canopies could pinch the aisle shut); 9.0 gives "
-                    "~2.65m of guaranteed clearance from canopy edge to centerline "
-                    "in the worst case.")
+    ap.add_argument(
+        "--dx", type=float, default=4.0, help="Tree spacing along a row (m)"
+    )
+    ap.add_argument(
+        "--dy",
+        type=float,
+        default=9.0,
+        help="Row spacing / aisle width (m). Canopy meshes run up to "
+        "~1.85m radius and are randomly yawed, so this needs to clear "
+        "2x that plus robot width regardless of orientation -- 6.0 was "
+        "not enough (canopies could pinch the aisle shut); 9.0 gives "
+        "~2.65m of guaranteed clearance from canopy edge to centerline "
+        "in the worst case.",
+    )
     ap.add_argument("--x0", type=float, default=5.0, help="X of the first tree column")
-    ap.add_argument("--seed", type=int, default=42,
-                    help="Selects each tree's mesh variety + yaw")
+    ap.add_argument(
+        "--seed", type=int, default=42, help="Selects each tree's mesh variety + yaw"
+    )
     ap.add_argument("--out", default="../worlds/orchard_nbv.sdf")
     args = ap.parse_args()
 
-    world = build_world(args.rows, args.trees_per_row, args.dx, args.dy,
-                        args.x0, args.seed)
+    world = build_world(
+        args.rows, args.trees_per_row, args.dx, args.dy, args.x0, args.seed
+    )
     with open(args.out, "w") as f:
         f.write(world)
-    print(f"wrote {args.out}: {args.rows}x{args.trees_per_row} = "
-          f"{args.rows * args.trees_per_row} trees, "
-          f"{args.rows - 1} aisles")
+    print(
+        f"wrote {args.out}: {args.rows}x{args.trees_per_row} = "
+        f"{args.rows * args.trees_per_row} trees, "
+        f"{args.rows - 1} aisles"
+    )
 
 
 if __name__ == "__main__":
