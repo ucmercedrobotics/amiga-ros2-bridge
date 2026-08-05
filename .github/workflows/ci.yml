@@ -1,0 +1,79 @@
+name: CI
+
+# Runs on everything headed for main, and on main itself so a bad merge is
+# caught even if the PR was stale when it landed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the run in flight for that branch pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: pre-commit/action@v3.0.1
+
+  ros:
+    name: colcon build + test
+    runs-on: ubuntu-latest
+    # The dev image built by `make build-image` is 14-25 GB because it carries
+    # CUDA, depthai and the Gazebo stack; a GitHub-hosted runner has ~14 GB of
+    # free disk, so it can neither be pulled nor built here. This is the stock
+    # upstream ros-base image (~1 GB) and rosdep installs only what the
+    # packages in scripts/ci/packages.txt actually declare.
+    container:
+      image: ros:humble-ros-base
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # amiga_interfaces' consumers and the interface packages under
+          # ros2-kortex-control / amiga-ros2-nav live in submodules.
+          submodules: recursive
+
+      # BehaviorTree.ROS2 has no humble debian and has to be built from source.
+      # The key follows build_underlay.sh, which holds the pinned commit, so
+      # bumping that ref is what invalidates this.
+      - name: Cache BehaviorTree.ROS2 underlay
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/underlay_ws/src
+            /opt/underlay_ws/install
+          key: underlay-humble-${{ hashFiles('scripts/ci/build_underlay.sh') }}
+
+      - name: Build and test
+        run: ./scripts/ci/run_tests.sh
+
+      # Advisory: ament_copyright/flake8/pep257 fail today on code that
+      # predates this pipeline. Reported on every run so the debt is visible,
+      # but not allowed to block a merge. Once the packages listed in
+      # scripts/ci/packages.txt are clean, fold this into the step above by
+      # setting LINTERS=include there and deleting this one.
+      - name: ament linters (advisory)
+        continue-on-error: true
+        env:
+          LINTERS: only
+          SKIP_ROSDEP: "1"
+          SKIP_UNDERLAY: "1"
+        run: ./scripts/ci/run_tests.sh
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colcon-test-results
+          path: |
+            build/**/pytest.xml
+            build/**/test_results/**/*.xml
+          if-no-files-found: warn

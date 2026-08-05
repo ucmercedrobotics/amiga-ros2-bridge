@@ -1,9 +1,9 @@
 [submodule "amiga-ros2-nav"]
 	path = amiga-ros2-nav
-	url = git@github.com:ucmercedrobotics/amiga-ros2-nav.git
+	url = https://github.com/ucmercedrobotics/amiga-ros2-nav.git
 [submodule "amiga_ros2_behavior_tree/schemas"]
 	path = amiga_ros2_behavior_tree/schemas
-	url = git@github.com:ucmercedrobotics/gpt-mission-planner-schemas.git
+	url = https://github.com/ucmercedrobotics/gpt-mission-planner-schemas.git
 [submodule "ros2-kortex-control"]
 	path = ros2-kortex-control
-	url = git@github.com:ucmercedrobotics/ros2-kortex-control.git
+	url = https://github.com/ucmercedrobotics/ros2-kortex-control.git

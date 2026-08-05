@@ -6,7 +6,12 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from ament_index_python.packages import get_package_share_directory
 import os
 
-from amiga_ros2_teleop.controller_utils import load_controller_config, ControllerMap, ButtonTrigger
+from amiga_ros2_teleop.controller_utils import (
+    load_controller_config,
+    ControllerMap,
+    ButtonTrigger,
+)
+
 
 class JoyExample(Node):
     def __init__(self, controller_config: dict):
@@ -26,25 +31,23 @@ class JoyExample(Node):
         self.get_logger().debug(f"Got command from /joy: {msg}")
         cmap = ControllerMap(msg, self.controller_config)
         self.get_logger().debug(f"Got `a` button: {cmap.a}")
-        
+
         if self.button.query(cmap):
             self.get_logger().debug(f"Pressed `b` button: {cmap.b}")
-        
+
         if cmap.get("a", 0.0):
             self.get_logger().debug(f"Got `a` button: {cmap.a}")
 
 
 def main(args=None):
     rclpy.init(args=args)
-    
+
     # -- Load example controller config
     config_path = os.path.join(
-        get_package_share_directory("amiga_ros2_teleop"),
-        "config",
-        "ps4.yaml"
+        get_package_share_directory("amiga_ros2_teleop"), "config", "ps4.yaml"
     )
     controller_config = load_controller_config(config_path)
-    
+
     node = JoyExample(controller_config)
 
     rclpy.spin(node)

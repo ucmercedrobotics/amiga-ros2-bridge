@@ -1,0 +1,48 @@
+## Behaviour-tree fault
+
+{{ fault }}
+
+## Log lines around the fault
+
+The fault event says which node failed; these say why.
+
+```
+{{ log_context }}
+```
+
+## World state
+
+{{ world_state }}
+
+## What local recovery already tried
+
+These attempts have already been made and failed. Do not propose repeating them.
+
+{{ local_attempts }}
+
+## The task that could not be completed
+
+This is the whole behaviour-tree subtree the failing node belongs to, not just
+that node. Sampling a tree, for instance, is the move to it *and* the sample —
+the sample alone has nowhere to happen.
+
+- task id: {{ task_id }}{% if task_id == 0 %} (no task attached to this fault){% endif %}
+
+- actions it needs: {{ required_actions }}
+- where: {{ where }}
+- priority: {{ priority }}
+
+## This robot
+
+- battery: {{ battery_percent }}%
+
+## Peers alive right now
+
+Empty means this robot is alone on the radio, and re_delegate has nobody to
+answer it.
+
+{{ peers }}
+
+---
+
+Decide. Reply with one JSON object.

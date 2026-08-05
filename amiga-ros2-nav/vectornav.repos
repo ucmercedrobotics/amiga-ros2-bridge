@@ -1,5 +1,0 @@
-repositories:
-    vectornav:
-        type: git
-        url: git@github.com:dawonn/vectornav.git
-        version: ros2

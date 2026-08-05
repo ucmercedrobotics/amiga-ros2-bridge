@@ -1,0 +1,35 @@
+# Packages CI builds and tests, one workspace-relative path per line.
+#
+# The rule for being on this list: rosdep can satisfy the package on a stock
+# ros:humble-ros-base image. Everything the robot needs a radio, a camera, a
+# GPU or an arm for is deliberately absent -- see the excluded list at the
+# bottom for why each one is out.
+
+# Message/service definitions. These come first because the Python packages
+# below import them at test time.
+amiga_interfaces
+amiga-ros2-nav/amiga_navigation_interfaces
+ros2-kortex-control/kortex_interfaces
+
+# The behaviour tree. Its one dependency without a humble debian,
+# behaviortree_ros2, is built from source by build_underlay.sh.
+amiga_ros2_behavior_tree
+
+# Pure-Python nodes. Their unit tests fake the hardware (amiga_ros2_comms
+# talks to a virtual serial pair), so nothing here needs a device.
+amiga_ros2_comms
+amiga_ros2_coordinator
+amiga_ros2_bridge
+amiga_ros2_agents
+amiga_ros2_teleop
+amiga_ros2_oakd
+
+# Excluded, and what it would cost to include:
+#
+#   amiga_ros2_description     pulls rviz2 and the whole Qt stack.
+#   amiga_ros2_gazebo          pulls ros_gz + ign_ros2_control.
+#   amiga-ros2-nav/*           pulls navigation2 and nav2_bringup.
+#   ros2-kortex-control/*      pulls moveit_ros_planning_interface.
+#
+# Adding any of them is a one-line change here, but check the runner's disk
+# (~14 GB free) before you do.

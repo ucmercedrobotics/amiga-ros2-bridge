@@ -32,6 +32,7 @@ find_package(std_msgs REQUIRED)
 
 add_executable(bt_runner
   src/bt.cpp
+  src/fault_reporter.cpp
   src/xml_validation.cpp
   src/actions/move_to_gps_location.cpp
   src/actions/approach_gps_waypoint.cpp
@@ -54,6 +55,7 @@ add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 add_executable(dummy_segment_leaves_server src/mocks/dummy_segment_leaves_server.cpp)
 
 add_executable(dummy_tree_id_server src/mocks/dummy_tree_id_server.cpp)
+add_executable(mission_publisher src/mocks/mission_publisher.cpp)
 
 add_executable(orchard_management_node src/orchard_management.cpp)
 
@@ -103,6 +105,20 @@ ament_target_dependencies(dummy_tree_id_server
   amiga_navigation_interfaces
 )
 
+ament_target_dependencies(mission_publisher
+  rclcpp
+  std_msgs
+)
+
+# The mocks share the failure-mode header, which is what lets a scenario make
+# one of them fail exactly the way the real node it stands in for does.
+target_include_directories(dummy_segment_leaves_server PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_include_directories(dummy_tree_id_server PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
 ament_target_dependencies(orchard_management_node
   rclcpp
   amiga_interfaces
@@ -116,6 +132,7 @@ ament_target_dependencies(tcp_demux_node
 
 target_link_libraries(bt_runner
   LibXml2::LibXml2
+  nlohmann_json::nlohmann_json
 )
 
 target_link_libraries(orchard_management_node
@@ -132,6 +149,9 @@ install(TARGETS dummy_nav2_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_segment_leaves_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS mission_publisher
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_tree_id_server
@@ -153,6 +173,13 @@ install(DIRECTORY schemas/
 )
 
 install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}/)
+
+# The example missions are installed because the failure scenarios run against
+# them by name. Testing coordination against a fixture written for the test
+# would prove the fixture matched the rules, not that the rules matched a plan
+# this robot is actually given.
+install(DIRECTORY examples
   DESTINATION share/${PROJECT_NAME}/)
 
 # install(DIRECTORY config

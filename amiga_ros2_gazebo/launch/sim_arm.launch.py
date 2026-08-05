@@ -24,6 +24,7 @@ unnamespaced (robot1) instance. A namespaced robot's arm is still fully
 controllable via its own move_group (MoveGroupInterface / RViz MotionPlanning
 panel), just not through this repo's `moveto` wrapper.
 """
+
 import os
 
 import yaml

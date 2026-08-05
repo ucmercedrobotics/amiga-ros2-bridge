@@ -1,0 +1,27 @@
+{% if rejection_reason %}
+## IMPORTANT: your previous candidate was REJECTED by the arbiter
+Reason: {{ rejection_reason }}
+Produce a DIFFERENT edit that fixes this specific problem.
+
+{% endif %}
+## Failure event
+{{ event }}
+
+## Active mission XML
+{{ mission_xml }}
+
+## Mission XML Schema (XSD) — the edit MUST validate against this
+{{ xsd_text }}
+
+## World state (last {{ world_state_count }} updates)
+{{ world_state }}
+
+## Recent ROS logs (±{{ failure_context_sec }}s around failure)
+{{ log_excerpt }}
+
+## Prior attempts for node '{{ failure_node }}' (do not repeat)
+{{ memory_summary }}
+
+Return ONLY the corrected XML. Do not use code fences or markdown. The edited XML MUST NOT start with ``` and MUST NOT end with ```
+The ONLY valid leaf elements are {% for leaf in valid_leaves %}<{{ leaf.tag }}>{% if not loop.last %} and {% endif %}{% endfor %} — never <Action>, <Task>, or any other tag name.
+Make the smallest edit that addresses the failure — typically 1-{{ max_edit_lines }} lines from the original XML shown above.

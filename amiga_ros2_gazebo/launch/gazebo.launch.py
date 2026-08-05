@@ -105,7 +105,8 @@ def namespace_model_sdf(content: str, ns: str) -> str:
         )
     content = content.replace(
         IGN_ROS2_CONTROL_PLUGIN_OPEN,
-        IGN_ROS2_CONTROL_PLUGIN_OPEN + f"\n      <ros><namespace>{ns}</namespace></ros>",
+        IGN_ROS2_CONTROL_PLUGIN_OPEN
+        + f"\n      <ros><namespace>{ns}</namespace></ros>",
         1,
     )
     return content

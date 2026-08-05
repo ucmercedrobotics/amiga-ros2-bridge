@@ -1,7 +1,0 @@
-# Goal definition
-float32 object_angle
----
-bool success
-string message
----
-float32 distance_remaining

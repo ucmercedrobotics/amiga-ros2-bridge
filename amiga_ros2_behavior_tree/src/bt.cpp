@@ -21,6 +21,7 @@
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/actions/follow_person.hpp"
 #include "amiga_ros2_behavior_tree/actions/arm_move_to.hpp"
+#include "amiga_ros2_behavior_tree/fault_reporter.hpp"
 #include "amiga_ros2_behavior_tree/xml_validation.hpp"
 #include "behaviortree_ros2/ros_node_params.hpp"
 
@@ -35,10 +36,23 @@ int main(int argc, char **argv) {
 
   nh->declare_parameter<std::string>("mission_topic", std::string("/mission/xml"));
   nh->declare_parameter<bool>("xml_validation", true);
+  // The tree is the catalyst for the whole replanning and coordination
+  // pipeline; this is the topic it fires on. See fault_reporter.hpp.
+  nh->declare_parameter<std::string>("fault_topic", std::string("/bt/status_change"));
+  nh->declare_parameter<bool>("fault_reporting", true);
+  // One report per node per interval. A ReactiveSequence re-ticks a failing
+  // condition at the tick rate, and every report downstream costs an LLM call.
+  nh->declare_parameter<double>("fault_min_interval_sec", 5.0);
   std::string mission_topic;
   bool xml_validation_enabled;
+  std::string fault_topic;
+  bool fault_reporting_enabled;
+  double fault_min_interval_sec;
   nh->get_parameter("mission_topic", mission_topic);
   nh->get_parameter("xml_validation", xml_validation_enabled);
+  nh->get_parameter("fault_topic", fault_topic);
+  nh->get_parameter("fault_reporting", fault_reporting_enabled);
+  nh->get_parameter("fault_min_interval_sec", fault_min_interval_sec);
 
   BehaviorTreeFactory factory;
   RosNodeParams ros_params;
@@ -73,6 +87,13 @@ int main(int argc, char **argv) {
   }
   nh->declare_parameter<std::string>("mission_schema", schema_path);
   nh->get_parameter("mission_schema", schema_path);
+
+  // Created once, outside the mission loop: a fault must outlive the tree that
+  // produced it, because what reads it starts up in response to it.
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fault_pub;
+  if (fault_reporting_enabled) {
+    fault_pub = makeFaultPublisher(nh, fault_topic);
+  }
 
   std::mutex mtx;
   std::optional<std::string> pending_mission;
@@ -112,6 +133,15 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    // Constructed per mission, because it subscribes to this tree's nodes and
+    // the previous tree no longer exists. Destroyed at the end of the scope,
+    // which unsubscribes before the tree is replaced.
+    std::unique_ptr<FaultReporter> fault_reporter;
+    if (fault_pub) {
+      fault_reporter = std::make_unique<FaultReporter>(
+          tree, nh, fault_pub, fault_min_interval_sec);
+    }
+
     RCLCPP_INFO(nh->get_logger(), "Starting mission execution...");
 
     rclcpp::Rate rate(50);
@@ -121,6 +151,9 @@ int main(int argc, char **argv) {
           status == BT::NodeStatus::FAILURE) {
         RCLCPP_INFO(nh->get_logger(), "Mission finished with status: %s",
                     toStr(status, true).c_str());
+        if (fault_reporter) {
+          fault_reporter->reportTreeOutcome(status);
+        }
         break;
       }
       rclcpp::spin_some(nh);
