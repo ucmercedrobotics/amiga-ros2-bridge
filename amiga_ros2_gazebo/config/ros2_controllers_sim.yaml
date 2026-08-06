@@ -6,8 +6,25 @@
 # ros2_controllers.yaml) so kortex_move / MoveIt run unchanged in sim.
 # Hardware-only controllers (twist_controller, fault_controller) do not exist
 # here: KinovaCommandVelocity/twist mode is unavailable in simulation.
+#
+# Top-level keys use the /**/<name> wildcard (not bare <name>) because this
+# same file is shared by both the unnamespaced robot1 controller_manager
+# (FQN /controller_manager) and a namespaced robot2 one (FQN
+# /amiga2/controller_manager, see gazebo.launch.py) — a bare key only matches
+# a root-namespace node, so ros2_control's per-controller `type` params
+# silently would not load for a namespaced instance.
+#
+# This file keeps the LEADING slash (/**/<name>), unlike
+# amiga_localization's EKF/wheel_odom yaml configs and amiga_navigation's
+# nav2_params.yaml, which use **/<name> (no leading slash). Those other
+# files are loaded by standalone processes via the standard
+# `--params-file` + `-r __ns:=` CLI path, where rcl resolves a key as
+# <node namespace>/<key> — a leading slash there produces an invalid
+# double-slash path. This file is loaded by ign_ros2_control through an
+# embedded (non-CLI) parameter API inside the Gazebo process, which does
+# not have that issue — keep the leading slash here.
 
-controller_manager:
+/**/controller_manager:
   ros__parameters:
     update_rate: 20  # Hz
     use_sim_time: true
@@ -24,7 +41,7 @@ controller_manager:
     robotiq_gripper_controller:
       type: position_controllers/GripperActionController
 
-diff_drive_controller:
+/**/diff_drive_controller:
   ros__parameters:
     use_stamped_vel: false
     left_wheel_names:
@@ -55,7 +72,7 @@ diff_drive_controller:
     publish_rate: 20.0
 
 # ── Kinova Gen3 arm (same name/params as real robot) ───────────────────────
-joint_trajectory_controller:
+/**/joint_trajectory_controller:
   ros__parameters:
     joints:
       - joint_1
@@ -77,7 +94,7 @@ joint_trajectory_controller:
       goal_time: 0.0
 
 # ── Robotiq 2F-85 gripper (same name/type as real robot) ───────────────────
-robotiq_gripper_controller:
+/**/robotiq_gripper_controller:
   ros__parameters:
     joint: robotiq_85_left_knuckle_joint
     goal_tolerance: 0.05
