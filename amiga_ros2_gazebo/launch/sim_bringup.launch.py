@@ -15,9 +15,13 @@ base, arm, localization (wheel odom + dual EKF + navsat), Nav2 (own
 `/<name>/navigate_to_pose` action server), and mission/behavior-tree layer
 (amiga_ros2_behavior_tree: bt_runner, waypoint_follower/linear_velo/
 lidar_object_navigator helpers, orchard_management) — all under its own
-namespace except robot1, which stays completely unnamespaced (identical to
-the original single-robot topic/node layout, see gazebo.launch.py's module
-docstring for why). See amiga_localization/bringup.launch.py and
+namespace, EXCEPT when robot_count==1, where that single robot stays
+completely unnamespaced (identical to the original single-robot topic/node
+layout, see gazebo.launch.py's module docstring for why). Once robot_count>1,
+robot1 is namespaced exactly like every other robot. Only one robot ever
+gets kortex_move's `moveto` node (see sim_arm.launch.py) — that's robot1
+regardless of whether it happens to be namespaced. See
+amiga_localization/bringup.launch.py and
 amiga_navigation/navigation.launch.py (amiga-ros2-nav submodule) and
 amiga_ros2_behavior_tree/launch/bt.launch.py for how each of those was made
 namespace-safe — `amiga_navigation`'s three helper nodes are constructed
@@ -111,11 +115,11 @@ def launch_setup(context, *args, **kwargs):
     ]
 
     for i in range(1, robot_count + 1):
-        # robot1 is always unnamespaced — see module docstring. Namespace
-        # only, not spawn name (that's gazebo.launch.py's own robot1_name
-        # arg, not threaded through here, same as before this file
-        # generalized to N robots).
-        ns = "" if i == 1 else f"{name_prefix}{i}"
+        # robot1 is unnamespaced only when it's the sole robot — see module
+        # docstring. Namespace only, not spawn name (that's gazebo.launch.py's
+        # own robot1_name arg, not threaded through here, same as before this
+        # file generalized to N robots).
+        ns = "" if (i == 1 and robot_count == 1) else f"{name_prefix}{i}"
 
         # ── Base description/TF (identical-to-hardware stack) ─────────────
         # publish_joints:=false because the joint_state_broadcaster is the
@@ -181,7 +185,11 @@ def launch_setup(context, *args, **kwargs):
             )
 
         # ── Arm (MoveIt) — robot1 also carries kortex_move's `moveto`,
-        # everyone else just their own move_group (see sim_arm.launch.py) ──
+        # everyone else just their own move_group (see sim_arm.launch.py).
+        # `primary` (not `ns`) picks that robot: kortex_move's moveto
+        # hardcodes /move_to, /gripper_control absolute, so only one
+        # instance may ever run regardless of whether robot1 happens to be
+        # namespaced (robot_count>1).
         if launch_arm:
             actions.append(
                 _include(
@@ -189,6 +197,7 @@ def launch_setup(context, *args, **kwargs):
                     "sim_arm.launch.py",
                     launch_rviz=launch_rviz,
                     robot_name=ns,
+                    primary="true" if i == 1 else "false",
                 )
             )
 
@@ -307,7 +316,8 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "robot_name_prefix",
                 default_value="amiga",
-                description="Name/namespace prefix for robots 2..N",
+                description="Name/namespace prefix for robots 2..N, and for "
+                "robot1 too once robot_count>1",
             ),
             DeclareLaunchArgument("use_lidar", default_value="true"),
             DeclareLaunchArgument("use_gps", default_value="true"),

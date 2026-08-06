@@ -3,17 +3,18 @@
 Starts:
   * ign gazebo with the orchard world (all trees always-loaded; see
     generate_orchard_world.py for why there's no levels/performer gating)
-  * `robot_count` (default 1) identical Amiga+Kinova robots. robot1 is
-    always the unnamespaced one ("amiga_kinova" by default) — every
-    topic/node name for it is byte-for-byte what it always was. This is
-    intentional: amiga_localization/amiga_navigation/amiga_ros2_behavior_tree
-    (separate git submodules) hardcode absolute topics like /bno085/imu and
-    /oak0/points, historically targeting a single unnamespaced robot; robot1
-    keeps that exact shape so those configs need no changes. robots 2..N
-    (named "<robot_name_prefix><i>", e.g. "amiga2", "amiga3", ... by
-    default) are each a fully independent robot under its own ROS namespace
-    — own controller_manager, own sensor/bridge topics, own hardware shims,
-    own MoveIt arm stack, own localization/Nav2/BT (see
+  * `robot_count` (default 1) identical Amiga+Kinova robots. With
+    robot_count==1, that single robot is unnamespaced ("amiga_kinova" by
+    default) — every topic/node name for it is byte-for-byte what it always
+    was. This is intentional: amiga_localization/amiga_navigation/
+    amiga_ros2_behavior_tree (separate git submodules) hardcode absolute
+    topics like /bno085/imu and /oak0/points, historically targeting a
+    single unnamespaced robot; single-robot sim keeps that exact shape so
+    those configs need no changes. Once robot_count>1, EVERY robot
+    (including robot1) is named/namespaced "<robot_name_prefix><i>", e.g.
+    "amiga1", "amiga2", ... — each a fully independent robot under its own
+    ROS namespace: own controller_manager, own sensor/bridge topics, own
+    hardware shims, own MoveIt arm stack, own localization/Nav2/BT (see
     sim_bringup.launch.py).
 
 Each namespaced robot's ign_ros2_control plugin instance gets a
@@ -154,8 +155,8 @@ def launch_setup(context, *args, **kwargs):
 
     robots = []
     for i in range(1, robot_count + 1):
-        if i == 1:
-            # robot1 is always unnamespaced — see module docstring.
+        if i == 1 and robot_count == 1:
+            # Single-robot sim stays unnamespaced — see module docstring.
             name = LaunchConfiguration("robot1_name").perform(context)
             ns = ""
         else:
@@ -354,18 +355,26 @@ def generate_launch_description():
                 "robot_count",
                 default_value="1",
                 description="How many identical Amiga+Kinova robots to spawn. "
-                "robot1 is always unnamespaced (see module docstring); robots "
-                "2..N are named '<robot_name_prefix><i>' and namespaced "
-                "accordingly. make sim-dual sets this to 2, make sim-multi "
-                "to $(ROBOT_COUNT).",
+                "With robot_count==1 that robot is unnamespaced (see module "
+                "docstring); with robot_count>1 every robot, including "
+                "robot1, is named/namespaced '<robot_name_prefix><i>'. make "
+                "sim-dual sets this to 2, make sim-multi to $(ROBOT_COUNT).",
             ),
             DeclareLaunchArgument(
                 "robot_name_prefix",
                 default_value="amiga",
-                description="Name/namespace prefix for robots 2..N (e.g. "
-                "'amiga' -> amiga2, amiga3, ...)",
+                description="Name/namespace prefix for robots 2..N, and for "
+                "robot1 too once robot_count>1 (e.g. 'amiga' -> amiga1, "
+                "amiga2, ...)",
             ),
-            DeclareLaunchArgument("robot1_name", default_value="amiga_kinova"),
+            DeclareLaunchArgument(
+                "robot1_name",
+                default_value="amiga_kinova",
+                description="Spawn name for robot1 when robot_count==1 only "
+                "(unnamespaced single-robot sim). Ignored for robot_count>1, "
+                "where robot1 is named '<robot_name_prefix>1' like every "
+                "other robot.",
+            ),
             DeclareLaunchArgument("robot1_x", default_value="-5.0"),
             DeclareLaunchArgument("robot1_y", default_value="-3.0"),
             DeclareLaunchArgument("robot1_z", default_value="0.05"),

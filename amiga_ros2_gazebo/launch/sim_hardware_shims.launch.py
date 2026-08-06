@@ -9,13 +9,13 @@ frame_id and encoding the corresponding hardware driver uses:
   sim_imu_shim        /chassis/imu -> /bno085/imu          (BNO085 driver)
   camera shims        gz rgbd -> depthai / kinova_vision topics
 
-robot1's shims are completely unnamespaced (byte-for-byte the original
-single-robot topic set — amiga_localization/amiga_navigation/
-amiga_ros2_behavior_tree hardcode absolute paths like /bno085/imu and
-/oak0/points and historically targeted a single unnamespaced robot, see
-gazebo.launch.py's docstring). Every additional robot's shims (built for
-i=2..robot_count) are fully namespaced so they never collide with robot1's
-or each other's.
+With robot_count==1, that robot's shims are completely unnamespaced
+(byte-for-byte the original single-robot topic set — amiga_localization/
+amiga_navigation/amiga_ros2_behavior_tree hardcode absolute paths like
+/bno085/imu and /oak0/points and historically targeted a single
+unnamespaced robot, see gazebo.launch.py's docstring). With robot_count>1,
+every robot's shims (including robot1's) are fully namespaced so they never
+collide with each other.
 
 Downstream consumers (wheel odometry, EKFs, Nav2, BTs, kortex_vision) run
 with configs identical to the real robot.
@@ -176,8 +176,11 @@ def launch_setup(context, *args, **kwargs):
     robot_count = int(LaunchConfiguration("robot_count").perform(context))
     name_prefix = LaunchConfiguration("robot_name_prefix").perform(context)
 
-    shims = build_shims("", imu_topic, imu_frame)
-    for i in range(2, robot_count + 1):
+    if robot_count == 1:
+        return build_shims("", imu_topic, imu_frame)
+
+    shims = []
+    for i in range(1, robot_count + 1):
         shims += build_shims(f"{name_prefix}{i}", imu_topic, imu_frame)
     return shims
 
@@ -195,8 +198,9 @@ def generate_launch_description():
                 "imu_topic",
                 default_value="/bno085/imu",
                 description="Bridge-native IMU output topic (matches the EKF config). "
-                "robot1 publishes this unprefixed; robot i>=2 publishes it "
-                "under /<robot_name_prefix><i>/",
+                "With robot_count==1 the robot publishes this unprefixed; "
+                "with robot_count>1 every robot, including robot1, publishes "
+                "it under /<robot_name_prefix><i>/",
             ),
             DeclareLaunchArgument(
                 "imu_frame",
