@@ -43,6 +43,10 @@ HEADER_BYTES = 4
 # The bridge's own max_payload_bytes (200 by default) is the transport ceiling;
 # this much tighter number is the design rule that keeps messages single-packet
 # even at a high spreading factor.
+#
+# FREEFORM does not break the rule, it obeys it per fragment: one *fragment* is
+# one message is one packet, and the splitting happens a layer up in
+# reliability/notes.py. Nothing here ever produces two packets from one call.
 DEFAULT_MAX_PAYLOAD_BYTES = 50
 
 
@@ -59,17 +63,20 @@ class MessageType(IntEnum):
     # capability the robot does not have. Decoding 0x06 now reports an
     # unallocated tag, which is the truth.
     #
-    # Claimed but unbuilt. A free-text message cannot be bounded to one packet,
-    # so it needs fragmentation, which belongs to the reliability layer that
-    # does not exist yet. The tag is reserved now so nothing else takes 0x07 in
-    # the meantime, and so a peer that gains it early is rejected as
-    # "unsupported" rather than "unknown".
+    # One fragment of a *note*: free text bound to a task_id. The only type
+    # with a variable-length field, and the only one a sender may emit more
+    # than one of per logical message. See messages.Freeform.
     FREEFORM = 0x07
 
 
 #: Tags that are allocated but not implemented. Encoding one is refused;
 #: decoding one is a distinct error from an unallocated tag.
-RESERVED_TYPES = frozenset({MessageType.FREEFORM})
+#:
+#: Empty now that FREEFORM is built. Kept, along with ReservedMessageType, as
+#: the mechanism rather than as a list with one entry: the next tag we allocate
+#: ahead of implementing it wants exactly this treatment, and a peer running
+#: ahead of us should hear "not yet" instead of "never heard of it".
+RESERVED_TYPES: frozenset = frozenset()
 
 
 class Capability(IntEnum):
@@ -326,6 +333,31 @@ COST_MAX = 0xFF
 # Encoding rounds half-up; worst-case error is ETA_RESOLUTION_S / 2 = 2 s.
 ETA_RESOLUTION_S = 4
 ETA_MAX_S = 0xFF * ETA_RESOLUTION_S  # 1020 s == 17 min
+
+
+# --------------------------------------------------------------------------
+# Notes: free text bound to a task
+# --------------------------------------------------------------------------
+
+#: Distinguishes two notes about the same task from the same sender, so their
+#: fragments cannot interleave into one plausible-looking sentence. Wraps; the
+#: reassembler only needs consecutive notes to differ, not all-time uniqueness.
+NOTE_ID_MAX = 0xFF
+
+#: Fragment index and count both live in one byte, but the real cap is
+#: MAX_NOTE_FRAGMENTS below.
+FRAG_MAX = 0xFF
+
+#: How many fragments one note may be split into.
+#:
+#: A bound, not an airtime budget -- nothing here paces or meters the link. It
+#: exists so a single note cannot become a hundred-packet monologue that starves
+#: an auction it was supposed to inform, and so a receiver's reassembly buffer
+#: has a size that can be stated. At the 50-byte design budget a fragment
+#: carries 41 text bytes, so 8 fragments is about 328 characters: a couple of
+#: sentences, which is the length the examples driving this feature actually
+#: are.
+MAX_NOTE_FRAGMENTS = 8
 
 
 # --------------------------------------------------------------------------

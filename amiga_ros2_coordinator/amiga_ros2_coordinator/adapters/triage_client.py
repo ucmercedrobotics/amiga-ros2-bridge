@@ -39,8 +39,8 @@ from amiga_ros2_comms.codec import (
     TargetKind,
 )
 
-from .model import Task, capability_names
-from .schema import (
+from ..vocabulary.model import Task, capability_names
+from ..vocabulary.schema import (
     ActionSchema,
     AddTask,
     AnomalyContext,
@@ -158,6 +158,12 @@ class TriageClient:
                 task=context.task,
                 reason_code=reason_code,
                 fallback=_disposition(response.fallback, LocalDisposition.HOLD),
+                # Whatever the agent wrote, unedited. This layer is in no
+                # position to improve a sentence it did not author, and a note
+                # it trimmed would be a note nobody decided to send. Too long
+                # for the radio is caught at the point of sending, which
+                # announces without it rather than not announcing.
+                note=str(response.note or "").strip(),
             )
 
         if action == "drop_task":

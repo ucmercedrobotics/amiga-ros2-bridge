@@ -18,7 +18,8 @@ Implemented in
 
 ## Scope
 
-**Message IDs, ACKs, retransmit timers, and a dedup cache.** That is the whole
+**Message IDs, ACKs, retransmit timers, a dedup cache, a transmit-ordering label
+on the way out, and the splitting and reassembly of notes.** That is the whole
 list.
 
 It knows nothing about what a message *means* or what to do about it: no
@@ -29,14 +30,29 @@ addressed to*, and that is confined to
 [`addressing.py`](../amiga_ros2_comms/reliability/addressing.py) — "who is this
 for" is addressing, not meaning.
 
-It also **does not fragment**. Every built message fits in a single packet by
-construction (13 bytes at the largest, against a 50-byte budget), so a message
-too big to send is a design error to be raised, not a stream to be split.
-Fragmentation arrives with FREEFORM, together, or not at all.
+The one other thing it says about a message is *which of these goes next*, in
+[`priority.py`](../amiga_ros2_comms/reliability/priority.py): ACK and GRANT are
+`urgent`, everything else is `bulk`. That is a label and nothing more — this
+layer never queues, reorders, delays or paces a frame. The bridge's outbound
+ring is where the backlog forms and where the ordering is applied, which is why
+the class travels on `LoRaFrame.priority` rather than being inferred down there.
+
+It fragments **exactly one thing**: a *note*, free text bound to a task id
+(`notes.py`). Every other built message fits in a single packet by construction
+(19 bytes at the largest, against a 50-byte budget), so one of those being too
+big to send is still a design error to be raised rather than a stream to split.
+
+Notes are broadcast, therefore unACKed, therefore a note missing a fragment is
+**dropped rather than repaired** — no NACK, no retransmit, no erasure coding.
+That is only acceptable because the TASK_ANNOUNCE a note accompanies carries the
+whole machine-readable requirement by itself: lose every fragment and the
+auction is bit-for-bit what it would have been. Text that could invalidate an
+auction by going missing would be a worse design than not carrying text at all.
+The rate at which notes fail to reassemble is a number to report, not a bug to
+engineer around.
 
 The test for whether a change belongs here: it is about *getting bytes there
-once*. If it involves **deciding** something, it belongs in the coordinator. If
-it involves **splitting** a message, it is the deferred fragmentation work.
+once*. If it involves **deciding** something, it belongs in the coordinator.
 
 ## The core rule: reliability follows addressing
 
@@ -110,7 +126,7 @@ coordinator adds a `ReliabilityNode` to its own executor and calls it directly.
 
 For each payload on `/lora/rx`:
 
-1. **Decode.** Unknown tags, the reserved FREEFORM tag, truncated buffers,
+1. **Decode.** Unknown tags, tags allocated but unbuilt, truncated buffers,
    trailing bytes and impossible field values are each counted and dropped.
    `on_frame` never raises — this layer is the only thing between the radio and
    the coordinator.
@@ -235,9 +251,11 @@ nothing mocked but the radio.
 
 ## Not done yet
 
-- **Fragmentation and reassembly**, and therefore **FREEFORM**. Built together
-  or not at all: a fragmentation scheme without sequence recovery corrupts
-  messages instead of dropping them.
+- **Forward error correction for notes.** A note that loses a fragment is
+  dropped. Fountain or erasure coding would let `k` of `k+r` fragments
+  reconstruct it with no feedback, which is the shape that fits a broadcast —
+  and is deliberately not built, because the loss curve is what the experiment
+  is measuring.
 - **COMPLETE and RELEASE** — the other unicast types. One line each in
   `_ADDRESSEE_FIELD` once the codec has them.
 

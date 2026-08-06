@@ -54,15 +54,20 @@ from amiga_ros2_comms.codec import (
     Target,
     TargetKind,
 )
+from amiga_ros2_comms.reliability.notes import (
+    MAX_NOTE_FRAGMENTS,
+    text_bytes_per_fragment,
+)
 from rcl_interfaces.msg import Log
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
-from . import llm, mission_tasks, prompts, spin
-from .mission_tasks import MissionTask
-from .status import StatusPublisher
+from ..mission import mission_tasks
+from ..mission.mission_tasks import MissionTask
+from ..runtime import llm, prompts, spin
+from ..runtime.status import StatusPublisher
 
 # ---------------------------------------------------------------------------
 # Context-window limits
@@ -82,6 +87,11 @@ ATTEMPT_HISTORY = 6  # local recovery attempts remembered per mission
 # and by then the fault has cost a model call and gone unanswered.
 VALID_ACTIONS = ("re_delegate", "add_task", "drop_task")
 VALID_DISPOSITIONS = ("drop", "hold", "request_human")
+
+# What a note may weigh, computed from the radio rather than written down again.
+# 328 bytes at the 50-byte payload budget: eight fragments, and every one of
+# them is a packet the fleet pays for whether or not the note changes any bid.
+NOTE_MAX_BYTES = MAX_NOTE_FRAGMENTS * text_bytes_per_fragment()
 
 # Built from the codec's ReasonCode rather than restated. The previous version
 # of this was a second hand-written table that claimed to match and did not:
@@ -137,6 +147,10 @@ class TriageNode(Node):
             # hand-written list would be a third place the schema is restated,
             # and the one nobody would think to update.
             actions=sorted(CAPABILITY_BY_ELEMENT),
+            # From the codec, so the prompt cannot disagree with the parser
+            # about what fits -- and so lowering the payload budget tightens
+            # what the model is asked for, not just what it is refused.
+            note_max_bytes=NOTE_MAX_BYTES,
         )
 
         # llm.complete() blocks for seconds. A reentrant group plus the
@@ -400,6 +414,7 @@ class TriageNode(Node):
             int(request.priority) if echo else 0
         )
         response.rationale = decision["rationale"]
+        response.note = decision["note"]
         response.model = llm.MODEL
 
         with self._lock:
@@ -530,7 +545,34 @@ class TriageNode(Node):
             "target": self._target(decision.get("target")),
             "priority": self._bounded(decision.get("priority"), PRIORITY_MAX),
             "rationale": str(decision.get("rationale", "")).strip(),
+            "note": self._note(decision.get("note"), action),
         }
+
+    @staticmethod
+    def _note(note, action: str) -> str:
+        """The free text that rides with an announcement. Empty unless shed.
+
+        Refused rather than truncated when it is too long for the radio, for
+        the same reason ``split_note`` refuses: where to cut a sentence is a
+        decision with meaning, and neither the codec nor this parser knows what
+        the sentence was for. Refusing sends the whole interpretation back as
+        failed, and the coordinator then leaves the task alone -- which is
+        louder than an announcement that quietly lost half its context.
+
+        A note on anything but re_delegate is dropped without comment: there is
+        no announcement for it to ride on, so it would be text addressed to
+        nobody.
+        """
+        text = str(note or "").strip()
+        if not text or action != "re_delegate":
+            return ""
+        size = len(text.encode("utf-8"))
+        if size > NOTE_MAX_BYTES:
+            raise ValueError(
+                f"note is {size} UTF-8 bytes; the radio carries at most "
+                f"{NOTE_MAX_BYTES}. Say less, or say nothing."
+            )
+        return text
 
     # ------------------------------------------------------------------
     # Helpers

@@ -51,6 +51,7 @@ from amiga_ros2_comms.codec import (
     TASK_ID_MAX,
     Capability,
     Target,
+    TargetKind,
     cap_mask,
 )
 
@@ -392,8 +393,36 @@ def insert_task(mission_xml, task: MissionTask) -> Optional[str]:
     root_control = next(
         (child for child in container if child.tag in CONTROL_TAGS), None
     )
-    (root_control if root_control is not None else container).append(subtree)
+    target = root_control if root_control is not None else container
+    _isolate_leaves(target)
+    target.append(subtree)
     return etree.tostring(root, encoding="unicode")
+
+
+def _isolate_leaves(container) -> None:
+    """Wrap a flat run of action leaves so an appended subtree stays visible.
+
+    Without this, appending to a mission written as one ``Sequence`` of leaves
+    -- the common form, and the one the mission planner emits -- produces a
+    control node with leaves and a subtree side by side. ``_located_under``
+    takes a genuinely mixed node *whole*, deliberately, because splitting it
+    would mean deciding where a loose leaf belongs relative to a subtree. The
+    consequence is that the whole mission reads back as one task and the task
+    just inserted cannot be found or removed again.
+
+    Wrapping sidesteps the judgement rather than making it: the leaves that were
+    already a unit stay one, in the order they were in, and the container
+    becomes all-controls, which is the case that splits cleanly. The wrapper
+    carries no ``name`` and no ``task_id``, so the units inside it keep the
+    identities they had -- ids are derived from the leaves' own names.
+    """
+    children = [child for child in container if isinstance(child.tag, str)]
+    if not any(child.tag in CAPABILITY_BY_ELEMENT for child in children):
+        return
+    wrapper = etree.SubElement(container, "Sequence")
+    for child in children:
+        container.remove(child)
+        wrapper.append(child)
 
 
 # --------------------------------------------------------------------------
@@ -534,3 +563,93 @@ def capability_names(mask: int) -> "List[str]":
     return [
         XML_ELEMENT.get(Capability(c), f"CAP_{int(c)}") for c in capabilities_in(mask)
     ]
+
+
+# --------------------------------------------------------------------------
+# Rebuilding a task the radio described
+# --------------------------------------------------------------------------
+
+
+def action_names(xsd_path: str) -> "dict":
+    """Element name -> its ``action_name``, read out of the schema.
+
+    Every action type fixes this attribute, because it is the ROS action server
+    the leaf dispatches to. Read rather than restated: a wrong ``action_name``
+    produces a plan that validates and then fails at run time against a server
+    that does not exist, which is the worst place to find out.
+    """
+    doc = etree.parse(xsd_path)
+    ns = {"xs": "http://www.w3.org/2001/XMLSchema"}
+    out = {}
+    for ctype in doc.findall(".//xs:complexType[@name]", namespaces=ns):
+        attr = ctype.find("xs:attribute[@name='action_name']", namespaces=ns)
+        if attr is None or attr.get("fixed") is None:
+            continue
+        # "moveToTreeIDType" -> "MoveToTreeID"
+        element = ctype.get("name")[:-4]
+        out[element[0].upper() + element[1:]] = attr.get("fixed")
+    return out
+
+
+def synthesize(task: MissionTask, xsd_path: str) -> Optional[str]:
+    """Rebuild an executable subtree from the wire fields alone.
+
+    The winner of an auction has the announcement, not the XML: TASK_ANNOUNCE
+    carries a capability mask and a target in 7 bytes and the subtree does not
+    fit. For the shapes this fleet actually trades that is enough to reconstruct
+    the work, because the target says where and the mask says what.
+
+    Returns None when it is not enough, which is the honest answer rather than a
+    guess. A GPS-targeted task needs two coordinates the announcement rounds,
+    and ``MoveToRelativeLocation`` names an offset from *someone else's* pose --
+    ``Target.none()`` already refuses to announce those, so arriving here with
+    one means something upstream is wrong.
+
+    Prefer ``task.xml`` when it is populated; this is the fallback, and the
+    subtree it builds is a candidate like any other -- it goes to the arbiter,
+    which validates it against the XSD and verifies it against the mission's
+    formula before anything runs it.
+    """
+    from amiga_ros2_comms.codec import capabilities_in
+
+    if task.target.kind != TargetKind.TREE:
+        return None
+
+    caps = {Capability(c) for c in capabilities_in(task.capabilities)}
+    if Capability.MOVE_TO_TREE_ID not in caps:
+        return None
+    unsupported = caps - {Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF}
+    if unsupported:
+        return None
+
+    names = action_names(xsd_path)
+    tree_id = int(task.target.a)
+    safe = _ident(task.name) or f"task_{int(task.task_id)}"
+
+    root = etree.Element("Sequence")
+    root.set("name", safe)
+    root.set("task_id", str(int(task.task_id)))
+
+    move = etree.SubElement(root, "MoveToTreeID")
+    move.set("name", f"{safe}_visit_{tree_id}")
+    move.set("action_name", names.get("MoveToTreeID", "follow_tree_id_waypoint"))
+    move.set("id", str(tree_id))
+    # An objective, not a transit move: this task was announced because work has
+    # to happen *at* that tree. approach_tree="false" would satisfy the schema
+    # and quietly stop the plan establishing at_tree_<id>, so the mission it was
+    # absorbed into would then fail verification for a reason nobody could see.
+    move.set("approach_tree", "true")
+
+    if Capability.SAMPLE_LEAF in caps:
+        sample = etree.SubElement(root, "SampleLeaf")
+        sample.set("name", f"{safe}_sample_{tree_id}")
+        sample.set("action_name", names.get("SampleLeaf", "segment_leaves"))
+
+    return etree.tostring(root, encoding="unicode")
+
+
+def _ident(text: str) -> str:
+    """Reduce a name to the XSD's taskNameType ([A-Za-z0-9_]+)."""
+    import re
+
+    return re.sub(r"[^A-Za-z0-9_]", "_", text or "").strip("_")

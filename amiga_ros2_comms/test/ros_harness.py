@@ -87,9 +87,10 @@ class Collector(Node):
         with self._lock:
             return [item[0] for item in self.received]
 
-    def send(self, payload):
+    def send(self, payload, priority=LoRaFrame.PRIORITY_URGENT):
         msg = LoRaFrame()
         msg.data = list(payload)
+        msg.priority = priority
         self.pub.publish(msg)
 
 

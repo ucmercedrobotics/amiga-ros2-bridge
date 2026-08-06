@@ -27,7 +27,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 from amiga_ros2_comms.codec import Heartbeat, has_capabilities, target_of
 
-from .model import PeerRecord
+from ..vocabulary.model import PeerRecord
 
 #: Default seconds without a HEARTBEAT before a peer is considered gone.
 #:

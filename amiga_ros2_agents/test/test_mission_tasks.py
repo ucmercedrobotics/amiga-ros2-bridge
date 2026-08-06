@@ -19,7 +19,7 @@ from lxml import etree
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from amiga_ros2_agents import mission_tasks  # noqa: E402
+from amiga_ros2_agents.mission import mission_tasks  # noqa: E402
 from amiga_ros2_comms.codec import (  # noqa: E402
     TASK_ID_MAX,
     Capability,

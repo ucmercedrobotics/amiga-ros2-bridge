@@ -58,18 +58,24 @@ from std_msgs.msg import Bool, String
 
 from amiga_ros2_comms.codec import CAPABILITY_BY_ELEMENT as ELEMENT_CAPABILITY
 from amiga_ros2_comms.codec import XML_ELEMENT as CAPABILITY_ELEMENT
-from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
+from amiga_ros2_comms.codec import (
+    Capability,
+    ReasonCode,
+    Target,
+    TargetKind,
+    cap_mask,
+)
 from amiga_ros2_comms.reliability.node import ReliabilityNode
 
-from .capabilities import (
+from ..vocabulary.capabilities import (
     SchemaError,
     capabilities_from_xsd,
     default_schema_path,
     unknown_actions,
 )
-from .coordinator import CoordinatorParams, CoordinatorSession
-from .model import Task, capability_names
-from .triage_client import optional_client
+from ..engine.coordinator import CoordinatorParams, CoordinatorSession
+from ..vocabulary.model import Task, capability_names
+from ..adapters.triage_client import optional_client
 
 
 def _describe(text: str) -> ParameterDescriptor:
@@ -213,6 +219,7 @@ class CoordinatorNode(Node):
         mission=None,
         interpreter=None,
         replanner=None,
+        note_interpreter=None,
         **node_kwargs,
     ):
         # node_kwargs forwards the usual rclpy options. Production passes none;
@@ -224,7 +231,7 @@ class CoordinatorNode(Node):
         # implementations of the two reasoning points, and importing them at
         # the top would read like this node depends on them permanently. It
         # depends on the protocols; these are what is behind them today.
-        from .reasoning import AcceptEverything, AlwaysReDelegate
+        from ..ports.reasoning import AlwaysReDelegate, IgnoreNotes
 
         self._declare_parameters()
         node_id = int(reliability.node_id)
@@ -247,17 +254,32 @@ class CoordinatorNode(Node):
                 else UnavailableMission(self.get_logger())
             ),
             interpreter=interpreter if interpreter is not None else AlwaysReDelegate(),
-            replanner=replanner if replanner is not None else AcceptEverything(),
+            replanner=(
+                replanner if replanner is not None else self._default_replanner()
+            ),
             capabilities=capabilities,
             preemption=self._preemption,
             params=params,
             clock=self._now,
             on_event=self._log_event,
+            note_interpreter=(
+                note_interpreter if note_interpreter is not None else IgnoreNotes()
+            ),
         )
         reliability.set_on_deliver(self.session.on_message)
+        reliability.set_on_note(self.session.on_note)
 
         tick_period = float(self.get_parameter("tick_period_sec").value)
         self._tick_timer = self.create_timer(tick_period, self.session.tick)
+        # Separate from the tick, on the blocking group: draining this runs a
+        # model call per note, and it must not sit in the same callback as the
+        # state machine's own timer. The session hands out contexts and takes
+        # answers back; nothing between those two points holds its lock.
+        self._note_timer = self.create_timer(
+            tick_period,
+            self._drain_note_requests,
+            callback_group=self._blocking_group,
+        )
 
         self._clear_sub = self.create_subscription(
             Bool, "~/preempt_ack", self._on_preempt_ack, 10
@@ -310,7 +332,72 @@ class CoordinatorNode(Node):
     # Parameters
     # ------------------------------------------------------------------
 
+    def _default_replanner(self):
+        """The verification client, or the pass-through stub if it is off.
+
+        Explicitly injected replanners win: the acceptance tests pin the state
+        machine against scripted stubs, and they must not start needing an
+        arbiter to run.
+        """
+        from ..ports.reasoning import AcceptEverything
+
+        if not bool(self.get_parameter("verify_replans").value):
+            self.get_logger().warn(
+                "verify_replans is false — mission changes will be accepted "
+                "without being checked against the mission's LTL specification"
+            )
+            return AcceptEverything()
+
+        from ..adapters.replanner_client import VerifyingReplanner
+
+        return VerifyingReplanner(
+            self,
+            on_rejected=self._on_replan_rejected,
+            require_verifier=bool(self.get_parameter("require_verifier").value),
+        )
+
+    def _on_replan_rejected(self, task, reason: str) -> None:
+        """A mission change we already committed does not verify.
+
+        Runs on the verification thread, off the coordinator's lock, which is
+        why it can go through the ordinary public entry point:
+        ``report_infeasible`` takes that lock itself.
+
+        Work this robot holds and cannot legitimately do is exactly what the
+        anomaly path exists for, and it is the only route that can offer the
+        task back to the fleet. Identical in effect to the inline rejection
+        branch in ``_take_on``; it just arrives once the verifier has answered.
+        """
+        self.session.report_infeasible(
+            task=task,
+            detail=f"replan rejected by verification: {reason}",
+            reason_code=ReasonCode.TASK_FAILED,
+        )
+
     def _declare_parameters(self) -> None:
+        self.declare_parameter(
+            "verify_replans",
+            True,
+            _describe(
+                "Send every mission change to the arbiter's "
+                "/mission/verify_replan to be re-verified against the mission's "
+                "LTL specification before it is committed. Turning this off "
+                "makes replan-and-verify a no-op that accepts everything, which "
+                "is a coordinator whose transfers nothing checks."
+            ),
+        )
+        self.declare_parameter(
+            "require_verifier",
+            False,
+            _describe(
+                "What to do when the arbiter is not reachable. False accepts "
+                "the change and records it as unverified, so a coordinator can "
+                "run without the agent stack. True refuses it, which is what a "
+                "run whose results depend on verification wants -- a mission "
+                "that completed unchecked must not be counted as one that "
+                "passed."
+            ),
+        )
         self.declare_parameter(
             "mission_schema",
             default_schema_path() or "",
@@ -602,6 +689,35 @@ class CoordinatorNode(Node):
         """
         if msg.data:
             self.session.clear_preemption()
+
+    def _drain_note_requests(self) -> None:
+        """Interpret the notes waiting on it, off the session's lock.
+
+        The bidder-side counterpart of ``_on_infeasible``: the session queues a
+        context, this runs the model, and the answer goes back through
+        ``revise_bid`` where the closed union is enforced. Nothing between the
+        drain and the answer holds the state machine's lock, which is the whole
+        reason the queue exists -- ``on_message`` and ``tick`` need that lock,
+        and a bidder that stopped answering heartbeats for the length of a model
+        call would be written off as dead by the fleet it is bidding into.
+        """
+        requests = self.session.take_note_requests()
+        if not requests:
+            return
+        interpreter = self.session.note_interpreter()
+        for context in requests:
+            try:
+                revision = interpreter.interpret_note(context)
+            except Exception as exc:  # noqa: BLE001 - a model, a parser, anything
+                # The bid still goes out, costed on mechanics alone. An
+                # uninterpretable note leaves the auction working the way it
+                # worked before notes existed, which is the safe direction.
+                self.get_logger().warn(
+                    f"interpret_note failed for task {context.task_id}, "
+                    f"bidding unrevised: {exc}"
+                )
+                continue
+            self.session.revise_bid(context.task_id, revision)
 
     # ------------------------------------------------------------------
     # The owner role's entry point

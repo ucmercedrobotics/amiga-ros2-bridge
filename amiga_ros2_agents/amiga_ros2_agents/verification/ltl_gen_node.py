@@ -13,9 +13,17 @@ Two ways in:
 
 Either way the formula is published to /mission/ltl.
 
-The system prompt lives in prompts/ltl_gen/system.j2. Set the `ap_vocabulary`
-parameter to pin the atomic propositions the model may use; left empty (the
-default) the model invents its own identifiers.
+The system prompt lives in prompts/ltl_gen/system.j2, and the translation itself
+in ltl.py -- shared with the arbiter, which needs a formula inside the gate that
+decides whether a replanned mission may be published and cannot make a service
+call from there.
+
+Left empty (the default), `ap_vocabulary` lets the model derive propositions
+from the mission text using the naming scheme the template mandates
+(`at_tree_<id>`, `sampled_tree_<id>`). That scheme is the contract with
+promela.py, which emits the same names from the behaviour tree. Setting the
+parameter pins the vocabulary instead; do not populate it from a plan, which
+would tell the model what the plan already does and make verification vacuous.
 """
 
 from threading import Lock, Thread
@@ -27,18 +35,16 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import String
 
-from . import llm, prompts, spin
-from .status import StatusPublisher
+from ..runtime import llm, spin
+from ..runtime.status import StatusPublisher
+from . import ltl
 
-# A reply has to contain at least one of these to count as a formula rather than
-# prose. Bare "!" is deliberately excluded — it matches ordinary exclamations
-# ("Sure! Here is...") and a pure negation isn't a temporal property anyway.
-LTL_TOKENS = ("[]", "<>", " U ", "X ", "&&", "||", "->", "<->")
-
-# Punctuation that means the model answered in sentences. "." alone is allowed
-# mid-token so Promela struct access (robot.at_tree_1) keeps working once the
-# typedefs land; only sentence-shaped usage is rejected.
-PROSE_MARKERS = (". ", ".\n", ", ", "?", ";")
+# The formula handling lives in ltl.py so the arbiter can reach it without a
+# service call. Re-exported here because this module is where callers look.
+LTL_TOKENS = ltl.LTL_TOKENS
+PROSE_MARKERS = ltl.PROSE_MARKERS
+_clean_formula = ltl.clean_formula
+_looks_like_ltl = ltl.looks_like_ltl
 
 
 class LtlGenNode(Node):
@@ -73,9 +79,7 @@ class LtlGenNode(Node):
         ap_vocabulary = [
             ap for ap in ap_param.get_parameter_value().string_array_value if ap
         ]
-        self.system_prompt = prompts.render(
-            "ltl_gen/system.j2", ap_vocabulary=ap_vocabulary
-        )
+        self.system_prompt = ltl.system_prompt(ap_vocabulary)
 
         # llm.complete() blocks for seconds. A reentrant group plus the
         # multithreaded executor in main() keeps a service call from stalling the
@@ -127,27 +131,19 @@ class LtlGenNode(Node):
 
         self.get_logger().info(f"Generating LTL for: {mission}")
 
-        try:
-            reply = llm.complete(self.system_prompt, mission)
-        except Exception as exc:
-            result["error"] = f"LLM call failed: {exc}"
-            self.get_logger().error(f"  {result['error']}")
-            return self._record(result)
-
-        formula = _clean_formula(reply)
-        ok, reason = _looks_like_ltl(formula)
-        if not ok:
-            result["error"] = f"{reason}; model returned: {reply[:200]}"
+        formula = ltl.generate(mission, self.system_prompt)
+        if not formula.ok:
+            result["error"] = formula.error
             self.get_logger().error(f"  Rejected reply — {result['error']}")
             return self._record(result)
 
-        result["formula"] = formula
+        result["formula"] = formula.text
         result["ok"] = True
 
         msg = String()
-        msg.data = formula
+        msg.data = formula.text
         self.ltl_pub.publish(msg)
-        self.get_logger().info(f"  Published to /mission/ltl: {formula}")
+        self.get_logger().info(f"  Published to /mission/ltl: {formula.text}")
 
         return self._record(result)
 
@@ -187,39 +183,6 @@ class LtlGenNode(Node):
                 self._status["last_error"] = result["error"]
         self.status.publish(self.get_status())
         return result
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
-
-
-def _clean_formula(reply: str) -> str:
-    """Reduce a model reply to a single-line candidate formula."""
-    text = llm.strip_code_fence(reply)
-    # Some models still wrap the answer as `ltl name { ... }` despite the prompt
-    if text.startswith("ltl") and "{" in text and text.rstrip().endswith("}"):
-        text = text[text.index("{") + 1 : text.rstrip().rindex("}")]
-    # Collapse to one line — SPIN accepts multi-line, but a single line keeps the
-    # /mission/ltl payload and the logs readable.
-    return " ".join(text.split()).strip()
-
-
-def _looks_like_ltl(formula: str) -> tuple:
-    """Cheap smoke test — is this a formula or did the model answer in prose?
-
-    Returns (ok, reason). Not a substitute for `spin -f`; it only exists to keep
-    obvious garbage off /mission/ltl.
-    """
-    if not formula:
-        return False, "empty formula"
-    if formula.count("(") != formula.count(")"):
-        return False, "unbalanced parentheses"
-    if not any(token in f" {formula} " for token in LTL_TOKENS):
-        return False, "no LTL or boolean operator found"
-    if formula.endswith(".") or any(m in formula for m in PROSE_MARKERS):
-        return False, "reply reads as prose, not a bare formula"
-    return True, ""
 
 
 # ---------------------------------------------------------------------------

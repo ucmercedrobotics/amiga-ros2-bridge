@@ -28,8 +28,9 @@ from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from . import llm, prompts, spin, xsd
-from .status import StatusPublisher
+from ..mission import xsd
+from ..runtime import llm, prompts, spin
+from ..runtime.status import StatusPublisher
 
 # ---------------------------------------------------------------------------
 # Context-window limits

@@ -32,7 +32,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from amiga_ros2_comms.codec import Target
 
-from .model import Task
+from ..vocabulary.model import Task
 
 
 @runtime_checkable

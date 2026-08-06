@@ -199,6 +199,21 @@ def test_random_wire_noise_is_never_published_as_a_frame(serial_pair):
 # ----------------------------------------------------------------------
 
 
+def _flood_bulk(bridge, count, size=196):
+    """Push ``count`` bulk frames straight at the tx callback.
+
+    Enough of them wedges the writer thread inside a blocking write and leaves
+    the queue full, which is the precondition every overflow assertion below
+    needs. Called directly rather than published, so the flood is synchronous
+    and there is no executor to race.
+    """
+    for index in range(count):
+        msg = LoRaFrame()
+        msg.data = list(index.to_bytes(4, "big") + bytes(size))
+        msg.priority = LoRaFrame.PRIORITY_BULK
+        bridge._on_tx(msg)
+
+
 def test_tx_callback_never_blocks_while_the_writer_is_wedged(serial_sink):
     bridge = make_bridge(
         serial_sink.port,
@@ -262,7 +277,7 @@ def test_drop_oldest_keeps_the_freshest_frames_under_flood(serial_sink):
             bridge._on_tx(msg)
 
         queued = [
-            int.from_bytes(item[:4], "big") for item in list(bridge._tx_queue._items)
+            int.from_bytes(item[:4], "big") for item in bridge._tx_queue.snapshot()
         ]
         # Whatever survives is from the tail of the flood, not the head: a
         # stale coordination message is the one worth throwing away.
@@ -289,11 +304,96 @@ def test_drop_newest_keeps_the_earliest_frames_under_flood(serial_sink):
             bridge._on_tx(msg)
 
         queued = [
-            int.from_bytes(item[:4], "big") for item in list(bridge._tx_queue._items)
+            int.from_bytes(item[:4], "big") for item in bridge._tx_queue.snapshot()
         ]
         assert queued, "expected a full queue at the end of the flood"
         # The mirror image of the previous test: the policy is a real choice.
         assert max(queued) < 1000, f"drop_newest discarded early frames: {queued}"
+    finally:
+        harness.close()
+
+
+def test_urgent_frames_overtake_a_backlog_of_bulk(serial_sink):
+    """The reason this queue is priority-ordered at all.
+
+    A robot part-way through a long transmission cannot get anything onto the
+    air until the queue drains. If an ACK has to wait out a backlog of chatter
+    it arrives after the sender's retransmit timer has already given up, and a
+    delivered task is recorded as a failed one. So: enqueued last, drained
+    first.
+    """
+    bridge = make_bridge(
+        serial_sink.port,
+        "radio",
+        tx_queue_depth=8,
+        tx_overflow_policy=DROP_OLDEST,
+        write_timeout_sec=30.0,  # keep the writer wedged for the whole test
+    )
+    harness = Harness(bridge)
+    try:
+        assert wait_until(lambda: bridge.stats()["port_open"])
+
+        # The same flood the drop_oldest test uses, and for the same reason: it
+        # is what puts the writer thread inside a blocking write and leaves the
+        # queue reliably full, so what follows is not a race against the drain.
+        _flood_bulk(bridge, 2000)
+        assert (
+            len(bridge._tx_queue) == 8
+        ), "expected a full queue behind a wedged writer"
+
+        urgent = LoRaFrame()
+        urgent.data = list(b"ACK!" + bytes(196))
+        urgent.priority = LoRaFrame.PRIORITY_URGENT
+        bridge._on_tx(urgent)
+
+        queued = bridge._tx_queue.snapshot()
+        assert bytes(queued[0][:4]) == b"ACK!", (
+            "the urgent frame should be at the head of a full queue of bulk, "
+            f"found {bytes(queued[0][:4])!r}"
+        )
+        assert bridge.stats()["tx_dropped_urgent"] == 0
+    finally:
+        harness.close()
+
+
+def test_bulk_cannot_displace_urgent_when_the_queue_is_full(serial_sink):
+    """Bulk never evicts urgent, whatever the overflow policy says.
+
+    Without this, a long enough burst of low-priority traffic would push out
+    exactly the frames the ordering exists to protect, and drop_oldest would
+    quietly undo the whole change.
+    """
+    bridge = make_bridge(
+        serial_sink.port,
+        "radio",
+        tx_queue_depth=8,
+        tx_overflow_policy=DROP_OLDEST,
+        write_timeout_sec=30.0,
+    )
+    harness = Harness(bridge)
+    try:
+        assert wait_until(lambda: bridge.stats()["port_open"])
+
+        # Wedge the writer and fill the queue, then take every slot for urgent
+        # traffic -- each one evicts a bulk frame, which is allowed.
+        _flood_bulk(bridge, 2000)
+        for index in range(8):
+            msg = LoRaFrame()
+            msg.data = list(b"ACK" + index.to_bytes(1, "big") + bytes(196))
+            msg.priority = LoRaFrame.PRIORITY_URGENT
+            bridge._on_tx(msg)
+        assert all(bytes(item[:3]) == b"ACK" for item in bridge._tx_queue.snapshot())
+
+        urgent_dropped_before = bridge.stats()["tx_dropped_urgent"]
+        _flood_bulk(bridge, 500)
+
+        queued = bridge._tx_queue.snapshot()
+        assert all(bytes(item[:3]) == b"ACK" for item in queued), (
+            "bulk displaced urgent traffic: " f"{[bytes(item[:4]) for item in queued]}"
+        )
+        stats = bridge.stats()
+        assert stats["tx_dropped_urgent"] == urgent_dropped_before
+        assert stats["tx_dropped_bulk"] > 0, "the bulk flood should have been shed"
     finally:
         harness.close()
 

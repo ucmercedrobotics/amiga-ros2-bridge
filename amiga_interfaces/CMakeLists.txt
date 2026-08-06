@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   srv/GetTreeInfo.srv
   srv/GenerateLTL.srv
   srv/InterpretAnomaly.srv
+  srv/VerifyReplan.srv
 )
 
 ament_export_dependencies(rosidl_default_runtime)

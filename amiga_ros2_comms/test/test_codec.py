@@ -14,8 +14,6 @@ import os
 import random
 import struct
 import sys
-from dataclasses import dataclass
-from typing import ClassVar
 from xml.etree import ElementTree
 
 import pytest
@@ -30,14 +28,17 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     HEADER_BYTES,
     INDEX_MAX,
     MAX_MESSAGE_BYTES,
+    MESSAGE_SIZES,
+    NOTE_HEADER_BYTES,
+    RESERVED_TYPES,
     Ack,
     Bid,
     Capability,
     CodecError,
     FieldRangeError,
+    Freeform,
     Grant,
     Heartbeat,
-    Message,
     MessageType,
     PayloadTooLarge,
     ReasonCode,
@@ -61,10 +62,17 @@ from amiga_ros2_comms.codec import (  # noqa: E402
 from amiga_ros2_comms.codec.codec import (  # noqa: E402
     _HEADER_FIELDS,
     _LAYOUTS,
+    _TAILS,
     _TARGETED,
 )
 
 BUILT = tuple(_LAYOUTS)
+
+#: The types whose encoded size is a property of the class. Everything about
+#: "one message is one packet of a known length" is stated over these; Freeform
+#: is deliberately excluded because it carries a variable tail, and folding it
+#: in would weaken the claim for the five types that really do hold it.
+FIXED = tuple(cls for cls in BUILT if cls not in _TAILS)
 
 #: The names of the three fields that together mean one place. They are drawn
 #: as a unit rather than field by field, because two of the three constrain the
@@ -324,7 +332,7 @@ EXPECTED_SIZES = {
 }
 
 
-@pytest.mark.parametrize("cls", BUILT, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("cls", FIXED, ids=lambda c: c.__name__)
 def test_encoded_size_is_the_documented_constant_for_all_valid_inputs(cls):
     expected = EXPECTED_SIZES[cls]
     for msg in _every_instance(cls):
@@ -337,9 +345,12 @@ def test_every_type_fits_the_single_packet_budget(cls):
         assert len(encode(msg)) <= DEFAULT_MAX_PAYLOAD_BYTES
 
 
-def test_max_message_bytes_bounds_every_type():
+def test_max_message_bytes_bounds_every_fixed_size_type():
+    # Freeform is excluded on purpose: there is no such number for it, and
+    # reliability/node.py budgets a request-plus-ACK round trip against this.
     assert MAX_MESSAGE_BYTES == max(EXPECTED_SIZES.values())
     assert MAX_MESSAGE_BYTES <= DEFAULT_MAX_PAYLOAD_BYTES
+    assert all(MESSAGE_SIZES[cls] <= MAX_MESSAGE_BYTES for cls in FIXED)
 
 
 def test_encode_rejects_a_message_that_would_exceed_max_payload_bytes():
@@ -374,44 +385,79 @@ def test_header_is_four_bytes_and_leads_every_message():
 
 
 # --------------------------------------------------------------------------
-# Group 3: the reserved FREEFORM tag
+# Group 3: FREEFORM, the one type with a variable tail
 # --------------------------------------------------------------------------
 
 
-@dataclass
-class _Freeform(Message):
-    """Stands in for the unbuilt FREEFORM type, to prove encode refuses it."""
-
-    TAG: ClassVar[MessageType] = MessageType.FREEFORM
-
-
-def test_encode_refuses_to_produce_freeform():
-    with pytest.raises(ReservedMessageType) as exc:
-        encode(_Freeform(src=1, seq=1))
-    assert exc.value.kind == "reserved_type"
+def _freeform(text=b"", **kwargs):
+    fields = dict(
+        src=5, seq=99, task_id=77, note_id=2, frag_index=0, frag_count=1, text=text
+    )
+    fields.update(kwargs)
+    return Freeform(**fields)
 
 
-@pytest.mark.parametrize("extra", [b"", b"\x00", b"hello world", bytes(64)])
-def test_decode_of_a_freeform_frame_reports_reserved_not_unknown(extra):
-    frame = struct.pack(">BBH", int(MessageType.FREEFORM), 5, 99) + extra
-    with pytest.raises(ReservedMessageType) as exc:
-        decode(frame)
-    # The distinction is the point: "we cannot handle this yet" and "we have
-    # never heard of this" call for different operator responses.
-    assert not isinstance(exc.value, UnknownMessageType)
-    assert exc.value.kind == "reserved_type"
+@pytest.mark.parametrize(
+    "text",
+    [
+        b"",
+        b"x",
+        b"soft ground past the gate",
+        bytes(range(256)) * 2,
+        "muddy \U0001f327 after rain".encode("utf-8"),
+    ],
+)
+def test_a_freeform_round_trips_whatever_its_tail_holds(text):
+    msg = _freeform(text=text)
+    assert decode(encode(msg, max_payload_bytes=4096)) == msg
 
 
-def test_reserved_is_reported_even_for_a_truncated_freeform_frame():
-    # Tag identification must not depend on the rest of the frame being sane.
+def test_the_tail_is_exactly_the_bytes_past_the_fixed_fields():
+    msg = _freeform(text=b"hello")
+    packet = encode(msg)
+    assert len(packet) == NOTE_HEADER_BYTES + len(b"hello")
+    assert packet[NOTE_HEADER_BYTES:] == b"hello"
+
+
+def test_an_empty_tail_is_a_legal_packet_not_a_truncated_one():
+    # A note whose text divides evenly ends with a fragment carrying nothing.
+    # Refusing that would make the splitter's arithmetic a special case.
+    packet = encode(_freeform(text=b""))
+    assert len(packet) == NOTE_HEADER_BYTES
+    assert decode(packet).text == b""
+
+
+def test_trailing_bytes_are_the_message_for_a_tail_bearing_type():
+    # The exact inverse of the rule the five fixed types hold, which is why
+    # both are stated: extra bytes are an error there and the payload here.
+    packet = encode(_freeform(text=b"one"))
+    assert decode(packet + b"two").text == b"onetwo"
+
+
+def test_a_freeform_shorter_than_its_fixed_fields_is_truncated_not_empty():
     frame = struct.pack(">BBH", int(MessageType.FREEFORM), 1, 1)
-    with pytest.raises(ReservedMessageType):
+    with pytest.raises(TruncatedMessage):
         decode(frame)
 
 
-def test_freeform_is_the_only_reserved_tag_and_has_no_layout():
-    assert MessageType.FREEFORM not in {cls.TAG for cls in BUILT}
+def test_encode_refuses_a_fragment_that_does_not_fit_the_budget():
+    # Still one packet or an error. That the type is fragmented elsewhere does
+    # not license this layer to split anything.
+    with pytest.raises(PayloadTooLarge):
+        encode(_freeform(text=b"x" * 200), max_payload_bytes=DEFAULT_MAX_PAYLOAD_BYTES)
+
+
+def test_encode_refuses_a_tail_that_is_not_bytes():
+    # str is refused rather than encoded: a note is cut on a byte budget, so
+    # whoever holds str has not been through the splitter.
+    with pytest.raises(FieldRangeError):
+        encode(_freeform(text="not bytes"))
+
+
+def test_freeform_is_built_and_nothing_is_reserved_any_more():
     assert MessageType.FREEFORM == 0x07
+    assert MessageType.FREEFORM in {cls.TAG for cls in BUILT}
+    assert RESERVED_TYPES == frozenset()
 
 
 def test_reserved_and_unknown_are_siblings_not_subclasses():
@@ -473,7 +519,7 @@ def test_every_short_prefix_of_a_valid_message_is_rejected(cls):
             decode(packet[:length])
 
 
-@pytest.mark.parametrize("cls", BUILT, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("cls", FIXED, ids=lambda c: c.__name__)
 def test_trailing_bytes_are_rejected_rather_than_ignored(cls):
     packet = encode(_extreme_instances(cls)[0])
     for extra in [b"\x00", b"\xff", b"more", bytes(200)]:
@@ -482,7 +528,7 @@ def test_trailing_bytes_are_rejected_rather_than_ignored(cls):
         assert exc.value.kind == "trailing"
 
 
-@pytest.mark.parametrize("cls", BUILT, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("cls", FIXED, ids=lambda c: c.__name__)
 def test_two_concatenated_messages_are_rejected(cls):
     # One message is one packet. Concatenation is a sender bug, and silently
     # decoding the first half would hide it.
@@ -794,14 +840,21 @@ def test_every_built_type_has_a_distinct_tag():
     assert len(tags) == len(set(tags))
 
 
-def test_the_five_built_types_are_exactly_the_ones_specified():
+def test_the_built_types_are_exactly_the_ones_specified():
     assert {cls.TAG for cls in BUILT} == {
         MessageType.HEARTBEAT,
         MessageType.TASK_ANNOUNCE,
         MessageType.BID,
         MessageType.GRANT,
         MessageType.ACK,
+        MessageType.FREEFORM,
     }
+
+
+def test_only_freeform_carries_a_variable_tail():
+    # The restriction is structural: a tail has no length of its own, so it can
+    # only be the last field, and only one field can be last.
+    assert set(_TAILS) == {Freeform}
 
 
 def test_message_type_values_match_the_wire_contract():

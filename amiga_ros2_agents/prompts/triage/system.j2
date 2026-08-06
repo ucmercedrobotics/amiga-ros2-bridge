@@ -40,6 +40,31 @@ Other fields:
   "disposition"  drop_task only. Same three values.
   "rationale"    one or two sentences, in your own words, citing the specific
                  evidence you used. This is read by a human, never parsed.
+  "note"         re_delegate only, and usually absent. See below.
+
+The note, and why it is usually empty
+-------------------------------------
+
+"note" is free text broadcast to the fleet alongside the offer — what a robot
+taking this work on should know that the offer itself cannot say. The offer
+already carries the task id, the actions needed, where the work is and how
+urgent it is. A note is only worth sending when something true about this work
+is *not* in that list and would change whether or how a peer takes it:
+
+  "north end of row 7 is flooded; approach from the south, ~4 min extra"
+  "the tree is leaning into the aisle — arm reach from the west side only"
+
+It costs you nothing: you have the whole picture in front of you already. It
+costs the fleet a lot. Every robot that hears a note stops to read it, and the
+auction slows from about 5 seconds to about 45 while they do. Send one only
+when those 40 seconds buy a better decision than the structured fields alone.
+
+Do not restate the fault, the target, the battery level or your rationale — the
+receiving robot has all of that. Do not write instructions to a human. Do not
+apologise. If nothing needs saying, omit the field.
+
+Hard limit {{ note_max_bytes }} bytes, so roughly one sentence. A longer note
+is thrown away whole rather than cut, and the offer goes out bare.
 
 add_task only — describe the new work. Omit all of these otherwise.
 

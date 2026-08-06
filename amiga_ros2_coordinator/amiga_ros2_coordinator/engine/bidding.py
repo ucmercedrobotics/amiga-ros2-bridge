@@ -33,7 +33,7 @@ from typing import Callable, Optional
 
 from amiga_ros2_comms.codec import COST_MAX, ETA_MAX_S, ETA_RESOLUTION_S
 
-from .model import Fitness, Task
+from ..vocabulary.model import Fitness, Task
 
 #: Default longest a bidder will sit on a bid, in seconds. The worst-fitting
 #: robot waits about this long; the best waits about none of it.
@@ -146,6 +146,12 @@ class PendingBid:
     #: Best cost overheard from another bidder on this task, if any. Kept for
     #: the log line: "suppressed, 40 beat our 90" is a diagnosable sentence.
     best_overheard: Optional[int] = None
+    #: Whether this bid is waiting on a note being interpreted, and therefore
+    #: running on the longer backoff. Recorded rather than inferred, because a
+    #: revision that lands has to recompute send_at with the same clock the
+    #: original used -- recomputing a deliberative bid on the fast backoff
+    #: would move it *earlier* than it was already scheduled for.
+    deliberative: bool = False
 
     def outranked_by(self, cost: int, eta_s: int, bidder_id: int, our_id: int) -> bool:
         """Whether an overheard bid beats ours on the arbiter's own ordering.

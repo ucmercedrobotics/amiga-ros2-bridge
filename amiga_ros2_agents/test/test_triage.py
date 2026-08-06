@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from amiga_ros2_agents import triage_node as tn
+from amiga_ros2_agents.coordination import triage_node as tn
 from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
 
 

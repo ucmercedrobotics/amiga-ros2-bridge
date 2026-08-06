@@ -107,11 +107,30 @@ answered it. "What do we do about it?" is the model's call.
 
 Navigation and the mission/behaviour-tree stack are separate existing nodes,
 reached through ports defined in
-[`interfaces.py`](amiga_ros2_coordinator/interfaces.py) and mocked in the
+[`interfaces.py`](amiga_ros2_coordinator/ports/interfaces.py) and mocked in the
 tests. `main()` supplies placeholders that decline everything and say so once —
 enough to run on a bench with two radios and watch the peer registry populate.
 Wiring the real stacks means passing two objects to `CoordinatorNode` and
 changing nothing else.
+
+## Layout
+
+Five directories, and the split between them is the ports-and-adapters one this
+layer is built on. Imports run down the list and never back up.
+
+| Directory | What lives there |
+| --- | --- |
+| `vocabulary/` | The nouns, the closed action unions, and what this robot can do. |
+| `ports/` | The seams, declared as Protocols. No ROS types. |
+| `engine/` | Contract net itself — the state machine, auctions, bidding, the peer registry. |
+| `adapters/` | Where the ports meet the real robot. **Every ROS dependency is here.** |
+| `nodes/` | The three processes: `coordinator`, `coordinator_sim`, `escalate`. |
+
+The top three import no rclpy and no message package, which is what the Tests
+section below is claiming when it says the engine has no ROS in it.
+[`test_layering.py`](test/test_layering.py) checks that rather than trusting it:
+it is the kind of property that decays on one convenient import, and no other
+test in the suite would notice the day it does.
 
 ## Scope
 

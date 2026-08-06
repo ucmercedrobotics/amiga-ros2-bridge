@@ -169,8 +169,30 @@ amiga:
 	./scripts/bringup_amiga_tmux.sh
 
 ROBOT_COUNT ?= 1
+# Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
+# so this is the dial on how much coordination traffic the fleet can sustain.
+LORA_SF ?= 7
+# Set COORDINATION=false to bring up the robots without the radio layer.
+COORDINATION ?= true
 sim:
-	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=$(ROBOT_COUNT)
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
+		robot_count:=$(ROBOT_COUNT) \
+		launch_coordination:=$(COORDINATION) \
+		lora_spreading_factor:=$(LORA_SF)
+
+# Poke one robot into shedding a task, so the fleet has something to auction.
+# Run it against a `make sim ROBOT_COUNT=3` that is already up. SCENARIO_ROBOT
+# is a namespace: robot 1 is unnamespaced, so leave it empty to target robot 1.
+SCENARIO_ROBOT ?= amiga2
+SCENARIO_TASK ?= 42
+SCENARIO_TREE ?= 60
+SCENARIO_NOTE ?= north end of row 7 is flooded; approach from the south, expect 4 min extra
+fleet-scenario:
+	ros2 run amiga_ros2_coordinator escalate \
+		--robot "$(SCENARIO_ROBOT)" \
+		--task $(SCENARIO_TASK) \
+		--tree $(SCENARIO_TREE) \
+		--note "$(SCENARIO_NOTE)"
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

@@ -32,7 +32,7 @@ from typing import Dict, List, Optional
 
 from amiga_ros2_comms.codec import Bid
 
-from .model import Task
+from ..vocabulary.model import Task
 
 
 @dataclass(frozen=True)

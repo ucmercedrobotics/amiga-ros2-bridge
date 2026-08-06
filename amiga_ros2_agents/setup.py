@@ -42,11 +42,12 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "ltl_gen = amiga_ros2_agents.ltl_gen_node:main",
-            "mission_planner = amiga_ros2_agents.mission_planner_node:main",
-            "arbiter = amiga_ros2_agents.arbiter_node:main",
-            "world_state = amiga_ros2_agents.world_state_node:main",
-            "triage = amiga_ros2_agents.triage_node:main",
+            "ltl_gen = amiga_ros2_agents.verification.ltl_gen_node:main",
+            "mission_planner = amiga_ros2_agents.replanning.mission_planner_node:main",
+            "arbiter = amiga_ros2_agents.replanning.arbiter_node:main",
+            "world_state = amiga_ros2_agents.replanning.world_state_node:main",
+            "triage = amiga_ros2_agents.coordination.triage_node:main",
+            "mission_bridge = amiga_ros2_agents.coordination.mission_bridge_node:main",
         ],
     },
 )

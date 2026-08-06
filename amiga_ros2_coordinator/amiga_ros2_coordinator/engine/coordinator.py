@@ -51,7 +51,7 @@ lock released, so there is no lock-order inversion between the two.
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional
 
 from amiga_ros2_comms.codec import (
@@ -69,7 +69,7 @@ from amiga_ros2_comms.codec import (
     target_fields,
     target_of,
 )
-from amiga_ros2_comms.reliability import Outcome
+from amiga_ros2_comms.reliability import CompletedNote, NoteTooLong, Outcome
 
 from .auction import Auction, ReceivedBid
 from .bidding import (
@@ -80,17 +80,33 @@ from .bidding import (
     make_backoff,
     quantized_eta,
 )
-from .interfaces import MissionInterface, NavInterface, NullPreemption, PreemptionSignal
-from .model import Fitness, MissionDelta, Task, TaskState
-from .reasoning import AnomalyInterpreter, MissionReplanner, ReplanResult
+from ..ports.interfaces import (
+    MissionInterface,
+    NavInterface,
+    NullPreemption,
+    PreemptionSignal,
+)
+from ..vocabulary.model import Fitness, MissionDelta, Task, TaskState
+from ..ports.reasoning import (
+    AnomalyInterpreter,
+    IgnoreNotes,
+    MissionReplanner,
+    NoteInterpreter,
+    ReplanResult,
+)
 from .registry import DEFAULT_PEER_TIMEOUT_SEC, PeerRegistry
-from .schema import (
+from ..vocabulary.schema import (
     AddTask,
     AnomalyContext,
     DropTask,
+    KeepBid,
     LocalDisposition,
+    NoteContext,
     ReDelegate,
+    ReviseBid,
+    WithdrawBid,
     validate_action,
+    validate_revision,
 )
 
 
@@ -121,6 +137,46 @@ class CoordinatorParams:
     #: Longest a bidder sits on a bid. See the class docstring.
     bid_max_backoff_sec: float = DEFAULT_MAX_BACKOFF_SEC
     bid_jitter_fraction: float = DEFAULT_JITTER_FRACTION
+
+    # -- the deliberative clock -------------------------------------------
+    #
+    # An auction with a note attached runs on these instead. Reading a note is
+    # a language-model call taking seconds, and the fast values above are
+    # sub-second for exactly the bidder whose mind the note is most worth
+    # changing -- backoff is linear in cost, so the best-fitting bidder waits
+    # least. There is no arrangement of a 2 s backoff and a 5 s window that
+    # gets an interpretation in before the bid goes out.
+    #
+    # So a note-bearing auction is a slower auction, deliberately and
+    # measurably. That is the trade the whole feature makes: allocation latency
+    # for allocation quality. Nothing here paces the radio -- the packets go out
+    # as fast as ever, we just wait longer before deciding.
+    #
+    # Multipliers rather than absolute seconds, because there is only one
+    # auction clock here and this is a factor applied to it. A fleet that runs
+    # short auctions gets a proportionally short deliberative auction, and
+    # every relationship the fast values already satisfy -- backoff inside the
+    # window, bid memory outlasting the window -- keeps holding when both sides
+    # scale together. Two absolute settings would let a deployment tune one and
+    # silently break the other.
+    #: Window for an auction whose announcement carries a note, as a multiple
+    #: of ``announce_window_sec``. 9x the 5 s default is 45 s -- room for a
+    #: model call plus the backoff that follows it.
+    note_window_multiplier: float = 9.0
+    #: Longest a bidder sits on a bid it is having a note interpreted for, as a
+    #: multiple of ``bid_max_backoff_sec``.
+    note_backoff_multiplier: float = 10.0
+
+    @property
+    def note_announce_window_sec(self) -> float:
+        """The deliberative window, in seconds."""
+        return self.announce_window_sec * self.note_window_multiplier
+
+    @property
+    def note_bid_max_backoff_sec(self) -> float:
+        """The deliberative backoff ceiling, in seconds."""
+        return self.bid_max_backoff_sec * self.note_backoff_multiplier
+
     #: How long we remember having bid on a task, so a GRANT that arrives after
     #: our bid can still be matched to it. Must outlast the announcer's window
     #: plus its whole GRANT retransmit campaign.
@@ -161,6 +217,30 @@ class CoordinatorParams:
                 f"bidder would transmit after the auction closed, so fitness "
                 f"ordering would decide nothing."
             )
+        # The same relationship again, on the deliberative clock. It does not
+        # follow from the fast one: the two multipliers are independent, and
+        # scaling the backoff faster than the window is exactly how a
+        # deliberative auction would close before its bids went out.
+        if self.note_window_multiplier < 1.0:
+            raise ValueError(
+                "note_window_multiplier must be >= 1.0; an auction that has to "
+                "wait for an interpretation cannot be shorter than one that "
+                "does not"
+            )
+        if self.note_backoff_multiplier < 1.0:
+            raise ValueError("note_backoff_multiplier must be >= 1.0")
+        worst_note_backoff = self.note_bid_max_backoff_sec * (
+            1.0 + self.bid_jitter_fraction
+        )
+        if worst_note_backoff >= self.note_announce_window_sec:
+            raise ValueError(
+                f"note_backoff_multiplier={self.note_backoff_multiplier} gives a "
+                f"deliberative backoff of up to {worst_note_backoff:.2f}s with "
+                f"jitter, which is not shorter than the deliberative window of "
+                f"{self.note_announce_window_sec:.2f}s "
+                f"(note_window_multiplier={self.note_window_multiplier}). The "
+                f"worst-fitting bidder would transmit after the auction closed."
+            )
         if self.max_delegation_attempts < 1:
             raise ValueError("max_delegation_attempts must be >= 1")
         if self.bid_memory_sec <= self.announce_window_sec:
@@ -185,6 +265,10 @@ class OwnedTask:
     #: What to do if delegation fails outright. From the ReDelegate action.
     fallback: LocalDisposition = LocalDisposition.HOLD
     reason_code: int = ReasonCode.UNSPECIFIED
+    #: Free text to broadcast alongside the announcement, from the ReDelegate
+    #: action. Empty means an ordinary fast auction; anything else makes this a
+    #: deliberative one, on the longer clock.
+    note: str = ""
     #: Full announce-and-grant cycles spent on this task.
     delegation_attempts: int = 0
     #: Set once a GRANT is in flight; cleared if it fails to deliver.
@@ -195,6 +279,18 @@ class OwnedTask:
     last_announced_at: float = float("-inf")
     #: When the task reached a terminal state, for pruning.
     settled_at: Optional[float] = None
+    #: Whether the task is currently part of our own mission plan.
+    #:
+    #: The invariant: **the mission holds a task iff we still intend to execute
+    #: it ourselves.** Announcing means we do not, so a task leaves at announce
+    #: time rather than at transfer time -- otherwise the announcer sits on work
+    #: it has already said it cannot do for the length of an auction, which on
+    #: the deliberative clock is most of a minute.
+    #:
+    #: A field rather than something inferred from ``state``, because it is what
+    #: keeps every replan a real change: an auction can fail and hand the task
+    #: back, and the verifier must be told that exactly once.
+    in_mission: bool = True
 
     @property
     def ours(self) -> bool:
@@ -220,6 +316,7 @@ class CoordinatorSession:
         fitness_fn: Optional[Callable[..., Fitness]] = None,
         rng: Optional[random.Random] = None,
         on_event: Optional[Callable[[str, str], None]] = None,
+        note_interpreter: Optional[NoteInterpreter] = None,
     ):
         if not 0 < int(node_id) <= 255:
             raise ValueError(f"node_id must be 1..255, got {node_id}")
@@ -239,8 +336,18 @@ class CoordinatorSession:
 
         self.cap_mask = cap_mask(*capabilities) if capabilities else 0
 
+        self._interpret_note = note_interpreter or IgnoreNotes()
+
         self._backoff = make_backoff(
             self.params.bid_max_backoff_sec,
+            self.params.bid_jitter_fraction,
+            rng,
+        )
+        # The same function on the deliberative clock. Two bound functions
+        # rather than one that takes a window, so every call site has already
+        # decided which auction it is in and cannot forget to say.
+        self._note_backoff = make_backoff(
+            self.params.note_bid_max_backoff_sec,
             self.params.bid_jitter_fraction,
             rng,
         )
@@ -254,6 +361,12 @@ class CoordinatorSession:
         self._tasks: Dict[int, OwnedTask] = {}
         self._bids: Dict[int, PendingBid] = {}
         self._next_heartbeat_at = 0.0
+        # Notes waiting to be interpreted. Filled under the lock by whichever
+        # of the two arrival orders happened; drained off it by the node, which
+        # makes the model call and comes back through revise_bid. The same
+        # two-door shape as anomaly_context / report_infeasible(action=...),
+        # and for the same reason -- a model call must not run on this lock.
+        self._note_requests: List[NoteContext] = []
 
         self._counters = {
             "anomalies": 0,
@@ -283,6 +396,19 @@ class CoordinatorSession:
             "heartbeats_sent": 0,
             "preemptions_requested": 0,
             "rx_ignored": 0,
+            # Notes. notes_sent/notes_received are traffic; the rest are the
+            # question the experiment is actually asking -- how often does text
+            # reach a bidder in time to change anything, and what does it change.
+            "notes_sent": 0,
+            "notes_received": 0,
+            "notes_before_announce": 0,
+            "notes_after_announce": 0,
+            "notes_orphaned": 0,
+            "notes_too_late": 0,
+            "note_interpret_failed": 0,
+            "bids_kept_after_note": 0,
+            "bids_revised_by_note": 0,
+            "bids_withdrawn_by_note": 0,
         }
 
     # ==================================================================
@@ -452,6 +578,7 @@ class CoordinatorSession:
             self._tasks[action.task.task_id] = record
         record.fallback = action.fallback
         record.reason_code = action.reason_code
+        record.note = action.note
 
         if record.state in (TaskState.ANNOUNCED, TaskState.GRANTED):
             # Already in flight. Re-entering would abandon the bids we have
@@ -507,6 +634,20 @@ class CoordinatorSession:
         record.state = TaskState.ANNOUNCED
         record.delegation_attempts += 1
         record.last_announced_at = now
+
+        # The note goes out *before* the announcement, always. A bidder fixes
+        # its bid the instant an ANNOUNCE decodes, so text arriving afterwards
+        # has missed the only synchronous moment there is -- it can still
+        # revise a bid that has not been transmitted, but only this ordering
+        # gets it there reliably. Sent first even though it is several packets
+        # and the announcement is one.
+        sent_note = self._emit_note(record)
+        window = (
+            self.params.note_announce_window_sec
+            if sent_note
+            else self.params.announce_window_sec
+        )
+
         record.auction = Auction(
             task=record.task,
             expected_bidders=frozenset(
@@ -515,7 +656,7 @@ class CoordinatorSession:
                 if peer.robot_id not in record.excluded_bidders
             ),
             opened_at=now,
-            closes_at=now + self.params.announce_window_sec,
+            closes_at=now + window,
             next_announce_at=now + self.params.announce_repeat_sec,
         )
         self._emit_announce(record, now)
@@ -524,8 +665,54 @@ class CoordinatorSession:
             "info",
             f"announced task {record.task.task_id} "
             f"({len(record.auction.expected_bidders)} capable peers), "
-            f"window {self.params.announce_window_sec}s",
+            f"window {window}s{' with a note' if sent_note else ''}",
         )
+
+        # And now stop waiting for it. We reported this task infeasible, which
+        # is why it is on the air at all, so continuing to hold it in our own
+        # mission would have us sitting on work we already said we cannot do --
+        # for a whole deliberative window, which is where this stops being
+        # theoretical. The invariant is: the mission holds a task iff we still
+        # intend to execute it ourselves. Announcing means we do not.
+        #
+        # The counterpart is in _dispose_locally: an auction that fails has to
+        # put the task back, because by then it is ours again.
+        self._request_yield(f"task {record.task.task_id} announced to the fleet")
+        self._leave_mission(record, "announced to the fleet")
+
+    def _emit_note(self, record: OwnedTask) -> bool:
+        """Broadcast the task's note, if it has one. Returns whether it went.
+
+        A note failing to go out is not an auction failing. The announcement
+        carries the whole machine-readable requirement by itself, so the worst
+        case here is the fast auction we would have had anyway -- which is why
+        this catches rather than propagates, and why the window is chosen from
+        the *result* of this call rather than from whether a note exists.
+        """
+        if not record.note:
+            return False
+        try:
+            fragments = self._reliability.send_note(record.task.task_id, record.note)
+        except NoteTooLong as exc:
+            self._event(
+                "warn",
+                f"note for task {record.task.task_id} is too long to send "
+                f"({exc}); announcing without it",
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001 - the radio, the codec, anything
+            self._event(
+                "warn",
+                f"note for task {record.task.task_id} could not be sent: {exc}; "
+                f"announcing without it",
+            )
+            return False
+        self._counters["notes_sent"] += 1
+        self._event(
+            "info",
+            f"note for task {record.task.task_id} sent as {fragments} fragment(s)",
+        )
+        return True
 
     def _emit_announce(self, record: OwnedTask, now: float) -> None:
         task = record.task
@@ -683,12 +870,11 @@ class CoordinatorSession:
         self._event(
             "info", f"task {record.task.task_id} is robot {winner_id}'s; confirmed"
         )
-        self._replan(
-            MissionDelta(
-                removed=[record.task],
-                cause=f"transferred to robot {winner_id}",
-            )
-        )
+        # Normally a no-op: the task left our mission when we announced it, and
+        # the transfer only confirms that was right. It still goes through the
+        # helper because a GRANT can also be delivered for a task that reached
+        # a winner without an announce cycle of ours.
+        self._leave_mission(record, f"transferred to robot {winner_id}")
 
     def _grant_failed(self, record: OwnedTask, winner_id: int, now: float) -> None:
         """The winner never acknowledged. The task is still ours -- fall back.
@@ -741,20 +927,25 @@ class CoordinatorSession:
             self._counters["tasks_dropped"] += 1
             self._safe(lambda: self._mission.release(record.task), None)
             self._request_yield(f"task {record.task.task_id} dropped")
-            self._replan(
-                MissionDelta(removed=[record.task], cause="dropped, undelegable")
-            )
+            self._leave_mission(record, "dropped, undelegable")
         elif disposition is LocalDisposition.HOLD:
-            # Kept, unexecuted. Nothing about the mission has changed, so there
-            # is nothing for the replanner to verify -- and calling it on a
-            # non-change is how a verifier learns to distrust its inputs.
+            # Kept, unexecuted -- and ours again. If this task went to auction
+            # it left the mission when we announced it, so holding it now is a
+            # real change the verifier has to be told about. (If it never
+            # reached an auction the helper does nothing, which is the case the
+            # old "nothing has changed" comment described.)
             record.state = TaskState.OURS
             self._counters["tasks_held"] += 1
             self._event("info", f"task {record.task.task_id} held for a later attempt")
+            self._rejoin_mission(record, "held after delegation failed")
         else:  # REQUEST_HUMAN
             record.state = TaskState.OURS
             self._counters["escalated_to_human"] += 1
             self._request_yield(f"task {record.task.task_id} needs an operator")
+            # Back in the mission for the same reason: it is ours, nobody else
+            # is going to do it, and the operator's decision should be made
+            # about a mission that still contains the work.
+            self._rejoin_mission(record, "escalated to an operator")
             self._event(
                 "warn",
                 f"task {record.task.task_id} could not be delegated or handled; "
@@ -837,14 +1028,187 @@ class CoordinatorSession:
         # cannot" are different facts, and the wire distinguishes them so an
         # announcer can stop waiting.
         cost = fitness.cost if fitness.feasible else COST_MAX
-        self._bids[task_id] = PendingBid(
+
+        # Did a note about this task get here first? That is the arrival order
+        # the sender aims for, and the only one that reliably works -- this
+        # method is the single synchronous moment at which a bid is decided, so
+        # a lookup is the only kind of question that can be asked inside it.
+        note = self._note_for(int(announce.src), task_id)
+        backoff = self._note_backoff if note is not None else self._backoff
+
+        pending = PendingBid(
             task_id=task_id,
             task=task,
             announcer_id=int(announce.src),
             fitness=fitness,
-            send_at=now + self._backoff(cost),
+            send_at=now + backoff(cost),
             created_at=now,
+            deliberative=note is not None,
         )
+        self._bids[task_id] = pending
+
+        if note is not None:
+            # Queued, not called. Interpreting it is a model call taking
+            # seconds and this runs under the lock that tick and on_message
+            # need. The wider backoff above is what buys the answer time to
+            # arrive before send_at.
+            self._counters["notes_before_announce"] += 1
+            self._request_interpretation(note, pending, now)
+
+    # ------------------------------------------------------------------
+    # Notes
+    #
+    # Two doors, like the anomaly path, and for the same reason: interpreting
+    # a note is a model call taking seconds and it cannot run on this lock.
+    # Inbound notes queue a NoteContext; the node drains the queue off the
+    # lock, calls the interpreter, and comes back through revise_bid.
+    # ------------------------------------------------------------------
+
+    def on_note(self, note: CompletedNote) -> None:
+        """A note arrived whole. Installed as the reliability layer's on_note.
+
+        Never raises, for the same reason ``on_message`` never does -- this is
+        one call away from the radio, and it is the only path in the system
+        where another robot's *sentences* reach us.
+        """
+        try:
+            with self._lock:
+                now = self._clock()
+                self._counters["notes_received"] += 1
+
+                if int(note.src) == self.node_id:
+                    self._counters["rx_ignored"] += 1
+                    return
+
+                pending = self._bids.get(int(note.task_id))
+                if pending is None:
+                    # No bid to revise. Either the announcement has not arrived
+                    # yet -- the intended order, and _on_announce will find this
+                    # note in the reliability layer's cache -- or we are not
+                    # bidding on this task at all. Nothing to do either way.
+                    self._counters["notes_orphaned"] += 1
+                    return
+
+                if pending.sent_at is not None:
+                    # The bid is already on the air. A revision cannot be
+                    # un-transmitted, so this note is a loss: it is counted,
+                    # logged, and changes nothing.
+                    self._counters["notes_too_late"] += 1
+                    self._event(
+                        "info",
+                        f"note about task {note.task_id} arrived after our bid "
+                        f"went out; ignored",
+                    )
+                    return
+
+                self._counters["notes_after_announce"] += 1
+                self._request_interpretation(note, pending, now)
+        except Exception as exc:  # noqa: BLE001 - never let the radio kill us
+            self._event("warn", f"handling a note raised: {exc}")
+
+    def _note_for(self, src: int, task_id: int) -> Optional[CompletedNote]:
+        """A note this announcer already finished about this task, if any."""
+        getter = getattr(self._reliability, "completed_note", None)
+        if getter is None:
+            # A reliability layer without note support. Bidding still works;
+            # it is the fast auction and always was.
+            return None
+        return self._safe(lambda: getter(int(src), int(task_id)), None)
+
+    def _request_interpretation(
+        self, note: CompletedNote, pending: PendingBid, now: float
+    ) -> None:
+        """Queue a note for interpretation. Caller holds the lock."""
+        self._note_requests.append(
+            NoteContext(
+                text=note.text,
+                task_id=int(note.task_id),
+                src=int(note.src),
+                task=pending.task,
+                cost=int(pending.fitness.cost),
+                eta_s=float(pending.fitness.eta_s),
+                feasible=bool(pending.fitness.feasible),
+                at=now,
+            )
+        )
+
+    def take_note_requests(self) -> "list[NoteContext]":
+        """Drain the notes waiting to be interpreted.
+
+        The node calls this, runs the interpreter **off this lock**, and hands
+        each answer back through :meth:`revise_bid`. Draining rather than
+        peeking, so a request is dispatched once even if the node's tick and
+        its inbound callback race.
+        """
+        with self._lock:
+            requests, self._note_requests = self._note_requests, []
+            return requests
+
+    def note_interpreter(self) -> NoteInterpreter:
+        """The configured interpreter, for a caller that will run it off-lock."""
+        return self._interpret_note
+
+    def revise_bid(self, task_id: int, revision: object) -> Optional[object]:
+        """Apply a finished note interpretation to a bid not yet transmitted.
+
+        Returns the revision that was applied, or None if it was refused or
+        arrived too late. Validated exactly as an anomaly interpretation is --
+        the closed union is the guarantee, and it does not get to be skipped by
+        taking a different door.
+        """
+        with self._lock:
+            now = self._clock()
+            try:
+                revision = validate_revision(revision)
+            except Exception as exc:  # noqa: BLE001 - a parser that half-succeeded
+                self._counters["note_interpret_failed"] += 1
+                self._event("warn", f"note interpretation refused: {exc}")
+                return None
+
+            pending = self._bids.get(int(task_id))
+            if pending is None or pending.sent_at is not None:
+                # The auction moved on while the model was thinking. Counted
+                # rather than forced: a bid already on the air is a fact, and
+                # the deliberative window exists precisely so this stays rare.
+                self._counters["notes_too_late"] += 1
+                return None
+
+            if isinstance(revision, KeepBid):
+                self._counters["bids_kept_after_note"] += 1
+                return revision
+
+            if isinstance(revision, WithdrawBid):
+                del self._bids[int(task_id)]
+                self._counters["bids_withdrawn_by_note"] += 1
+                self._event(
+                    "info",
+                    f"withdrew our bid on task {task_id} after reading the "
+                    f"announcer's note: {revision.reason or 'no reason given'}",
+                )
+                return revision
+
+            # ReviseBid. The delta is relative because the interpretation may
+            # have run before we had an announcement to cost, so it is a claim
+            # about the work rather than about our schedule.
+            was = int(pending.fitness.cost)
+            cost = max(0, min(was + int(revision.cost_delta), COST_MAX))
+            pending.fitness = replace(pending.fitness, cost=cost)
+
+            # Re-derive send_at from created_at on the clock this bid started
+            # on, so a revised bid sits exactly where a bid of that cost would
+            # have. Anchored to created_at rather than to now, because the wait
+            # already served is part of the ordering the backoff encodes.
+            backoff = self._note_backoff if pending.deliberative else self._backoff
+            pending.send_at = max(now, pending.created_at + backoff(cost))
+
+            self._counters["bids_revised_by_note"] += 1
+            self._event(
+                "info",
+                f"revised our bid on task {task_id} from {was} to {cost} after "
+                f"reading the announcer's note: "
+                f"{revision.reason or 'no reason given'}",
+            )
+            return revision
 
     def _assess(self, task: Task) -> Fitness:
         """Ask our own nodes what this task would cost us.
@@ -1037,6 +1401,30 @@ class CoordinatorSession:
     # ==================================================================
     # Plumbing
     # ==================================================================
+
+    def _leave_mission(self, record: OwnedTask, cause: str) -> None:
+        """Take the task out of our own mission. Idempotent.
+
+        Idempotence is the point: several paths end with the task gone --
+        announced, transferred, dropped -- and they can run in sequence over
+        one task. Only the first is a change.
+        """
+        if not record.in_mission:
+            return
+        record.in_mission = False
+        self._replan(MissionDelta(removed=[record.task], cause=cause))
+
+    def _rejoin_mission(self, record: OwnedTask, cause: str) -> None:
+        """Put the task back into our own mission. Idempotent.
+
+        The counterpart of announcing. An auction that fails hands the task
+        back, and the mission has to be told -- otherwise the robot has quietly
+        lost the work it was holding.
+        """
+        if record.in_mission:
+            return
+        record.in_mission = True
+        self._replan(MissionDelta(added=[record.task], cause=cause))
 
     def _replan(self, delta: MissionDelta) -> Optional[ReplanResult]:
         """Call the verification point. Never lets its failure become ours."""

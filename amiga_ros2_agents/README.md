@@ -5,18 +5,49 @@ and talk to each other over ROS topics and services — there is no HTTP layer, 
 agent discovery and no A2A. Everyone on this network is known ahead of time, so
 a DDS participant is the whole story.
 
+## Layout
+
+Five directories, and what separates them is what each part is allowed to know.
+The dependency direction runs down this list and never back up.
+
+| Directory | What lives there |
+| --- | --- |
+| `runtime/` | How an agent is wired, with nothing about what it decides. |
+| `mission/` | The plan document: its schema, and the tasks inside it. |
+| `verification/` | The LTL specification, the Promela model, and SPIN. |
+| `replanning/` | The self-correction loop — the agents that repair a plan in flight. |
+| `coordination/` | Where this stack meets the fleet. |
+
+`runtime/` knows nothing about missions. `mission/` and `verification/` are
+libraries with no rclpy in them, so they unit-test with no ROS and no network —
+which is what makes the verification claim below checkable on its own. Only
+`replanning/` and `coordination/` hold a ROS node. When an agent needs
+something a sibling agent also needs, it imports the library, never the other
+agent.
+
 | File | What it is |
 | --- | --- |
-| `llm.py` | The only LiteLLM entry point. Model/endpoint selection lives here. |
-| `prompts.py` | The only Jinja2 entry point. `render("<agent>/<file>.j2", **vars)`. |
-| `status.py` | `StatusPublisher` — every agent's status snapshot on `/agents/<name>/status`. |
-| `xsd.py` | BT.CPP mission schema loading, shared by the arbiter and the planner. |
-| `spin.py` | `run()` — the init/spin/shutdown every agent's `main()` delegates to. |
-| `mission_planner_node.py` | **Mission planner** — minimally edits the BT.CPP XML plan on failure. |
-| `arbiter_node.py` | **Arbiter** — gates candidate edits; sole writer of `/mission/xml`. |
-| `world_state_node.py` | **World state** — aggregates action feedback into `/world_state`. |
-| `ltl_gen_node.py` | **LTL generator** — natural-language mission → Promela/SPIN LTL. |
-| `triage_node.py` | **Triage** — decides what happens to work the local loop could not recover. |
+| `runtime/llm.py` | The only LiteLLM entry point. Model/endpoint selection lives here. |
+| `runtime/prompts.py` | The only Jinja2 entry point. `render("<agent>/<file>.j2", **vars)`. |
+| `runtime/status.py` | `StatusPublisher` — every agent's status snapshot on `/agents/<name>/status`. |
+| `runtime/spin.py` | `run()` — the init/spin/shutdown every agent's `main()` delegates to. |
+| `mission/xsd.py` | BT.CPP mission schema loading, shared by the arbiter and the planner. |
+| `mission/mission_tasks.py` | The only module that turns plan XML into task records and back. |
+| `verification/ltl.py` | Mission text → LTL formula. The specification. |
+| `verification/promela.py` | Behaviour tree → Promela model, and the propositions it establishes. |
+| `verification/verify.py` | SPIN, and the three-way verdict: holds, violated, or not established. |
+| `verification/ltl_gate.py` | The four ordered checks the arbiter runs. |
+| `verification/ltl_gen_node.py` | **LTL generator** — natural-language mission → Promela/SPIN LTL. |
+| `replanning/mission_planner_node.py` | **Mission planner** — minimally edits the BT.CPP XML plan on failure. |
+| `replanning/arbiter_node.py` | **Arbiter** — gates candidate edits; sole writer of `/mission/xml`. |
+| `replanning/world_state_node.py` | **World state** — aggregates action feedback into `/world_state`. |
+| `coordination/triage_node.py` | **Triage** — decides what happens to work the local loop could not recover. |
+| `coordination/mission_bridge_node.py` | **Mission bridge** — answers the coordinator's questions about the plan, read-only. |
+
+`world_state` sits under `replanning/` because the planner's context window is
+what it feeds; `mission_bridge` sits under `coordination/` because the only
+reason it exists is that the coordinator never parses XML.
+| `mission_bridge_node.py` | **Mission bridge** — not an agent, and no model. Summarises `/mission/xml` for the coordinator's mission port, so the coordinator never parses XML. |
 
 ## The replanning loop
 
@@ -57,19 +88,55 @@ different work? The answer is constrained to those three typed actions by the
 service definition, so a coordinator built and tested against a stub does not
 change when a real model sits behind it.
 
-`ltl_gen` sits outside this loop: it turns a plain-English mission into an LTL
-formula on `/mission/ltl`, via the `/mission/generate_ltl` service or the
-`/mission/text` topic.
+`ltl_gen` exposes the same translation over ROS — `/mission/generate_ltl` or the
+`/mission/text` topic — but the arbiter does not go through it. The gate needs a
+formula *inside* the decision that publishes `/mission/xml`, and a service call
+from there would make the gate depend on another node being up. Both share
+`ltl.py`, so there is still one place that turns English into a formula.
+
+### Verification
+
+Every candidate plan is checked against the LTL specification its own mission
+text yields, and the two halves are produced independently: `ltl.py` sees the
+`<Mission>` text and never the tree, `promela.py` compiles the tree and never
+sees the formula. Neither can be bent to fit the other, which is what makes
+their agreement evidence rather than construction.
+
+That only holds if the mission text is fixed, so **a replan may not rewrite
+`<Mission>`** — a planner that could would be authoring the specification it is
+graded against. The one exception is the coordinator absorbing a peer's task,
+which genuinely changes what this robot's mission is; the clause is generated
+from the announcement's own fields, never by a model.
+
+All of it is in `verification/`, and the four library modules there hold no
+rclpy — the model checking is something you can point at a plan and a formula
+with no robot in the loop, which is why `test_verify.py` runs SPIN for real
+rather than mocking it. `ltl_gen_node` is the one agent in that directory.
+Atomic propositions are named by content — `at_tree_10`, `sampled_tree_10` — so
+they survive a replan reordering or dropping tasks. The naming scheme is
+mandated by `prompts/ltl_gen/system.j2` and emitted by `promela.py`; that shared
+convention is the whole contract between the two halves.
+
+Needs `spin` on PATH (`scripts/ci/install_spin.sh`, built from source so it
+works on aarch64). Without it, plans are accepted and recorded as
+`ltl_unverified` — never silently as verified.
 
 ## ROS interfaces
 
 | Agent | Subscribes | Publishes | Services |
 | --- | --- | --- | --- |
 | `mission_planner` | `/mission/xml`, `/rosout`, `/bt/status_change`, `/mission/rejection`, `/mission/abort`, `/world_state` | `/mission/candidate_xml`, `/mission/planner_status` | — |
-| `arbiter` | `/mission/candidate_xml`, `/mission/xml`, `/bt/status_change` | `/mission/xml`, `/mission/rejection`, `/mission/abort`, `/mission/viability_budget` | — |
+| `arbiter` | `/mission/candidate_xml`, `/mission/xml`, `/bt/status_change` | `/mission/xml`, `/mission/rejection`, `/mission/abort`, `/mission/viability_budget` | `/mission/verify_replan` (`amiga_interfaces/srv/VerifyReplan`) |
 | `world_state` | action feedback/status topics, `/mission_status` | `/world_state` (1 Hz JSON) | — |
 | `ltl_gen` | `/mission/text` | `/mission/ltl` | `/mission/generate_ltl` (`amiga_interfaces/srv/GenerateLTL`) |
 | `triage` | `/bt/status_change`, `/rosout`, `/world_state`, `/mission/xml`, `/mission/abort`, `/mission/planner_status` | `/coordination/infeasible` | `/coordination/interpret_anomaly` (`amiga_interfaces/srv/InterpretAnomaly`) |
+| `mission_bridge` | `mission/xml` | `mission/coordination_state` (latched JSON) | — |
+
+`mission_bridge` is the only node here whose topic names are *relative*, so a
+namespaced instance is per-robot. Everything else in this package hardcodes
+absolute names (`/mission/xml`, `/bt/status_change`, `/world_state`), which is
+fine for one agent stack and is what has to change before a fleet can run one
+stack per robot.
 
 Every agent also publishes `/agents/<node_name>/status` as JSON. That topic is
 `TRANSIENT_LOCAL` depth 1, so a late subscriber still gets the last value — which

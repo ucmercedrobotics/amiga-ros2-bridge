@@ -2,11 +2,13 @@
 """Make bytes arrive, and arrive once. The engine, with no ROS in it.
 
 One instance per robot. It owns sequence numbers, ACKs, retransmit timers and
-the dedup cache, and it owes the layer above exactly three things::
+the dedup cache, and it owes the layer above exactly five things::
 
     send_reliable(dst, msg) -> Future[Outcome]   unicast, ACKed, retransmitted
     send_broadcast(msg)     -> bool              one shot, no timer
+    send_note(task_id, txt) -> int               split across several of those
     on_deliver(msg)                              inbound, decoded, once each
+    on_note(note)                                inbound, whole, or not at all
 
 What it does *not* do is decide anything. It never looks at a task ID, never
 compares a bid, never forms an opinion about who should own what. It reports
@@ -14,9 +16,17 @@ delivered-or-failed and hands the coordinator the facts; the coordinator draws
 the conclusions. The one exception is addressing -- "who is this for" -- and
 that is quarantined in addressing.py.
 
-It also never fragments. Every built message fits one packet by construction
-(codec.MAX_MESSAGE_BYTES is 13), so a message too large to send is a design
-error to be raised, not a stream to be split.
+``send_note`` does pass a task ID through, and that is not an exception to the
+rule: it is the key fragments are grouped by, and this layer no more interprets
+it than the dedup cache interprets a ``seq``.
+
+Fragmentation is confined to notes, and notes are the only thing that has it.
+Every other built message fits one packet by construction (codec.
+MAX_MESSAGE_BYTES is 19), so one of those being too large to send is still a
+design error to be raised rather than a stream to be split. Splitting and
+reassembly live in notes.py; what this file adds is the routing -- a fragment
+goes to the reassembler instead of upward, and a note goes upward only once it
+is whole.
 
 Two conventions make this testable without a radio, and are worth stating:
 
@@ -25,9 +35,12 @@ time.monotonic, but a test passes a counter it controls and drives an entire
 retransmit campaign, TTL expiry included, in microseconds with no sleeping and
 no flakiness.
 
-**The link is a callable.** ``send_frame(payload)`` takes bytes and is expected
-to lose some of them. In the node it publishes to /lora/tx; in the tests it is a
-lossy in-memory pipe to another session. Nothing here knows the difference.
+**The link is a callable.** ``send_frame(payload, priority)`` takes bytes and a
+transmit-ordering class (see priority.py) and is expected to lose some of them.
+In the node it publishes to /lora/tx; in the tests it is a lossy in-memory pipe
+to another session. Nothing here knows the difference. The priority is a hint
+passed downward and nothing more -- this layer never reorders, delays or paces
+anything, it only labels what it hands over.
 
 Threading: every public method is safe to call from any thread. Callbacks --
 ``on_deliver`` and future resolutions -- are always invoked *after* the lock is
@@ -40,15 +53,17 @@ import time
 from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..codec import (
     DEFAULT_MAX_PAYLOAD_BYTES,
+    MAX_NOTE_FRAGMENTS,
     ROBOT_ID_NONE,
     SEQ_MAX,
     SRC_MAX,
     Ack,
     CodecError,
+    Freeform,
     Message,
     ReservedMessageType,
     UnknownMessageType,
@@ -57,6 +72,8 @@ from ..codec import (
 )
 from .addressing import addressee_of, is_reliable, is_unicast
 from .dedup import DedupCache
+from .notes import CompletedNote, NoteReassembler, split_note
+from .priority import URGENT, priority_of
 
 
 class Outcome(Enum):
@@ -115,6 +132,17 @@ class ReliabilityParams:
     max_pending: int = 32
     #: Per-message budget handed to the codec.
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    #: How long an incomplete note waits for its missing fragments. Generous
+    #: against the announce window it is meant to inform: a note whose tail
+    #: arrives after the auction closed is useless, but holding it costs one
+    #: buffer slot and discarding it early costs the note.
+    note_ttl_sec: float = 30.0
+    #: How long a *finished* note is kept for the announcement that follows it.
+    #: Must outlast the gap between a note and its ANNOUNCE plus the whole
+    #: announce window, or the lookup that justifies sending notes first fails.
+    note_completed_ttl_sec: float = 60.0
+    #: Fragments one outbound note may be split into.
+    max_note_fragments: int = MAX_NOTE_FRAGMENTS
 
     def __post_init__(self):
         if self.retransmit_timeout_sec <= 0:
@@ -129,6 +157,12 @@ class ReliabilityParams:
             )
         if self.max_pending < 1:
             raise ValueError("max_pending must be >= 1")
+        if self.note_ttl_sec <= 0:
+            raise ValueError("note_ttl_sec must be positive")
+        if self.note_completed_ttl_sec <= 0:
+            raise ValueError("note_completed_ttl_sec must be positive")
+        if self.max_note_fragments < 1:
+            raise ValueError("max_note_fragments must be >= 1")
 
 
 @dataclass
@@ -143,6 +177,10 @@ class _Pending:
     attempts: int = 0
     deadline: float = 0.0
     kind: str = ""
+    #: Transmit class of the original. Carried so a retransmit is queued exactly
+    #: as urgently as the message it repeats -- a GRANT that fell behind is if
+    #: anything more urgent than one that has not been sent yet.
+    priority: int = URGENT
 
 
 class ReliabilitySession:
@@ -151,11 +189,12 @@ class ReliabilitySession:
     def __init__(
         self,
         node_id: int,
-        send_frame: Callable[[bytes], None],
+        send_frame: Callable[[bytes, int], None],
         params: Optional[ReliabilityParams] = None,
         on_deliver: Optional[Callable[[Message], None]] = None,
         clock: Callable[[], float] = None,
         on_event: Optional[Callable[[str, str], None]] = None,
+        on_note: Optional[Callable[[CompletedNote], None]] = None,
     ):
         if not ROBOT_ID_NONE < int(node_id) <= SRC_MAX:
             # A robot transmitting as ROBOT_ID_NONE would have its ACKs
@@ -171,6 +210,7 @@ class ReliabilitySession:
         self._on_deliver = on_deliver
         self._clock = clock or time.monotonic
         self._on_event = on_event
+        self._on_note = on_note
 
         self._lock = threading.RLock()
         self._next_seq = 0
@@ -178,6 +218,11 @@ class ReliabilitySession:
         self._dedup = DedupCache(
             ttl_sec=self.params.dedup_ttl_sec,
             max_entries=self.params.dedup_max_entries,
+        )
+        self._notes = NoteReassembler(
+            ttl_sec=self.params.note_ttl_sec,
+            completed_ttl_sec=self.params.note_completed_ttl_sec,
+            max_fragments=self.params.max_note_fragments,
         )
         self._counters = {
             "tx_broadcast": 0,
@@ -285,6 +330,7 @@ class ReliabilitySession:
             # burying it in a FAILED future would make it look like radio loss.
             payload = encode(msg, max_payload_bytes=self.params.max_payload_bytes)
 
+            priority = priority_of(msg)
             self._pending[msg.seq] = _Pending(
                 seq=msg.seq,
                 dst=int(dst),
@@ -292,10 +338,11 @@ class ReliabilitySession:
                 future=future,
                 deadline=self._clock() + self.params.retransmit_timeout_sec,
                 kind=type(msg).__name__,
+                priority=priority,
             )
             self._counters["tx_reliable"] += 1
 
-        self._transmit(payload)
+        self._transmit(payload, priority)
         return future
 
     def send_broadcast(self, msg: Message) -> bool:
@@ -323,9 +370,49 @@ class ReliabilitySession:
             msg.src = self.node_id
             msg.seq = self.next_seq()
             payload = encode(msg, max_payload_bytes=self.params.max_payload_bytes)
+            priority = priority_of(msg)
             self._counters["tx_broadcast"] += 1
 
-        return self._transmit(payload)
+        return self._transmit(payload, priority)
+
+    def send_note(self, task_id: int, text: str, note_id: Optional[int] = None) -> int:
+        """Broadcast free text about ``task_id``. Returns fragments emitted.
+
+        Each fragment is an ordinary broadcast: its own ``seq``, its own dedup
+        entry, BULK priority, no ACK and no retransmit. That follows from
+        addressing and is not a shortcut -- a note goes to whoever is out there,
+        and there is no receiver set to collect confirmations from.
+
+        Which means a note can arrive with a hole in it and be dropped. The
+        design tolerates that because the ANNOUNCE this text accompanies carries
+        the requirement on its own; see notes.py. **Send the note before that
+        announcement**, since a bidder fixes its bid the moment an announcement
+        decodes, and text arriving afterwards has missed the only synchronous
+        moment there is.
+
+        Raises NoteTooLong for text that needs more fragments than the cap
+        allows, rather than truncating somebody's sentence on their behalf.
+        """
+        with self._lock:
+            if note_id is None:
+                # The sequence number does double duty: it is already unique
+                # per sender, and its low byte is enough to separate two notes
+                # about one task, which is all note_id has to do.
+                note_id = self._next_seq & 0xFF
+            fragments = split_note(
+                task_id=task_id,
+                note_id=note_id,
+                text=text,
+                max_payload_bytes=self.params.max_payload_bytes,
+                max_fragments=self.params.max_note_fragments,
+            )
+
+        # Off the lock, one ordinary broadcast each -- so a fragment is stamped,
+        # encoded, counted and queued by exactly the path every other outbound
+        # message takes, with nothing about notes duplicated here.
+        for fragment in fragments:
+            self.send_broadcast(fragment)
+        return len(fragments)
 
     # ------------------------------------------------------------------
     # Inbound
@@ -343,6 +430,7 @@ class ReliabilitySession:
         """
         ack_payload: Optional[bytes] = None
         deliver: Optional[Message] = None
+        note: Optional[CompletedNote] = None
         confirmed: Optional[_Pending] = None
 
         with self._lock:
@@ -353,8 +441,9 @@ class ReliabilitySession:
                 self._counters["rx_unknown_type"] += 1
                 return
             except ReservedMessageType:
-                # FREEFORM. Allocated, unbuilt, and needs the fragmentation
-                # this layer deliberately does not have.
+                # A tag we allocated but have not built. None currently are;
+                # the branch is the forward-compatibility contract, not dead
+                # code waiting to be deleted.
                 self._counters["rx_reserved_type"] += 1
                 return
             except CodecError:
@@ -394,18 +483,34 @@ class ReliabilitySession:
                 # closed. Addressing decides who owes an ACK, not who may
                 # listen.
                 if self._dedup.first_sight((msg.src, msg.seq), now):
-                    self._counters["rx_delivered"] += 1
-                    deliver = msg
+                    if isinstance(msg, Freeform):
+                        # A fragment is not traffic for the coordinator. It
+                        # goes to the reassembler, and only a note that arrived
+                        # whole goes up -- so nothing above this layer ever
+                        # sees half a sentence and has to decide what to do
+                        # with it. rx_delivered counts messages delivered
+                        # upward, so a fragment is not one until it completes
+                        # a note.
+                        note = self._notes.add(msg, now)
+                    else:
+                        self._counters["rx_delivered"] += 1
+                        deliver = msg
                 else:
                     self._counters["rx_duplicates"] += 1
 
         # Every effect below runs with the lock released.
         if ack_payload is not None:
-            self._transmit(ack_payload, is_ack=True)
+            # URGENT unconditionally. An ACK is the one frame whose whole value
+            # is its timing: the sender is sitting on a retransmit timer, and an
+            # ACK that queues behind a burst of traffic arrives as a duplicate
+            # of a send that has already been declared failed.
+            self._transmit(ack_payload, URGENT, is_ack=True)
         if confirmed is not None:
             self._finish(confirmed, Outcome.DELIVERED)
         if deliver is not None:
             self._dispatch(deliver)
+        if note is not None:
+            self._dispatch_note(note)
 
     def _match_ack(self, ack: Ack) -> Optional[_Pending]:
         """Find the pending send this ACK confirms. Caller holds the lock."""
@@ -457,7 +562,7 @@ class ReliabilitySession:
         leak a timer when a send resolves early.
         """
         now = self._clock()
-        retransmit: List[bytes] = []
+        retransmit: List[Tuple[bytes, int]] = []
         expired: List[_Pending] = []
 
         with self._lock:
@@ -477,11 +582,16 @@ class ReliabilitySession:
                 pending.attempts += 1
                 pending.deadline = now + self._interval(pending.attempts)
                 self._counters["tx_retransmits"] += 1
-                retransmit.append(pending.payload)
+                retransmit.append((pending.payload, pending.priority))
             self._dedup.prune(now)
+            # Notes have no retransmit campaign to expire them, so this tick is
+            # the only thing that ever gives up on one whose fragments never
+            # all arrived -- and notes_abandoned is what the loss experiment
+            # actually measures.
+            self._notes.prune(now)
 
-        for payload in retransmit:
-            self._transmit(payload)
+        for payload, priority in retransmit:
+            self._transmit(payload, priority)
         for pending in expired:
             self._finish(pending, Outcome.FAILED)
 
@@ -496,13 +606,19 @@ class ReliabilitySession:
     # Plumbing
     # ------------------------------------------------------------------
 
-    def _transmit(self, payload: bytes, is_ack: bool = False) -> bool:
-        """Hand a packet to the link. Never raises into a caller."""
+    def _transmit(self, payload: bytes, priority: int, is_ack: bool = False) -> bool:
+        """Hand a packet to the link, labelled. Never raises into a caller.
+
+        ``priority`` is passed straight through to ``send_frame`` and is not
+        acted on here. Nothing in this layer queues, reorders or delays a frame
+        -- the link below is where the backlog forms, so that is where the
+        ordering has to be applied.
+        """
         if is_ack:
             with self._lock:
                 self._counters["tx_acks"] += 1
         try:
-            self._send_frame(payload)
+            self._send_frame(payload, priority)
             return True
         except Exception as exc:  # noqa: BLE001 - any link fault, same handling
             with self._lock:
@@ -528,6 +644,15 @@ class ReliabilitySession:
         except Exception as exc:  # noqa: BLE001 - the coordinator's problem, not ours
             self._event("warn", f"on_deliver raised for {type(msg).__name__}: {exc}")
 
+    def _dispatch_note(self, note: CompletedNote) -> None:
+        """Hand a completed note up. Must run with the lock released."""
+        if self._on_note is None:
+            return
+        try:
+            self._on_note(note)
+        except Exception as exc:  # noqa: BLE001 - the coordinator's problem, not ours
+            self._event("warn", f"on_note raised for task {note.task_id}: {exc}")
+
     def _event(self, level: str, message: str) -> None:
         if self._on_event is not None:
             self._on_event(level, message)
@@ -541,6 +666,22 @@ class ReliabilitySession:
         with self._lock:
             self._on_deliver = callback
 
+    def set_on_note(self, callback: Optional[Callable[[CompletedNote], None]]) -> None:
+        """Install the completed-note callback. Safe to call after construction."""
+        with self._lock:
+            self._on_note = callback
+
+    def completed_note(self, src: int, task_id: int) -> Optional[CompletedNote]:
+        """The note ``src`` most recently finished about ``task_id``, if any.
+
+        What makes sending notes before their announcement worth doing: a
+        bidder fixes its bid the instant an ANNOUNCE decodes, and this turns
+        "did the text get here in time" into a lookup it can do inside that
+        moment rather than a call it would have to wait on.
+        """
+        with self._lock:
+            return self._notes.completed(src, task_id, self._clock())
+
     @property
     def pending(self) -> int:
         """Reliable sends currently awaiting an ACK."""
@@ -551,6 +692,7 @@ class ReliabilitySession:
         with self._lock:
             counters = dict(self._counters)
             counters.update(self._dedup.stats())
+            counters.update(self._notes.stats())
             counters["pending"] = len(self._pending)
             counters["next_seq"] = self._next_seq
             return counters

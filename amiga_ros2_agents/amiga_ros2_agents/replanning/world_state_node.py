@@ -20,8 +20,8 @@ from nav2_msgs.action import NavigateToPose
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from . import spin
-from .status import StatusPublisher
+from ..runtime import spin
+from ..runtime.status import StatusPublisher
 
 # Publish rate in seconds — 1.0 = 1 Hz.
 TELEMETRY_RATE = 1.0

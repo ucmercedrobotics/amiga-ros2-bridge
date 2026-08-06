@@ -50,6 +50,7 @@ from ..codec import (
     Message,
 )
 from ..lora.airtime import RadioConfig, airtime_sec
+from .notes import CompletedNote
 from .session import ReliabilityParams, ReliabilitySession
 
 
@@ -312,6 +313,14 @@ class ReliabilityNode(Node):
         """Broadcast ``msg`` once, best-effort. See ReliabilitySession."""
         return self._session.send_broadcast(msg)
 
+    def send_note(self, task_id: int, text: str) -> int:
+        """Broadcast free text about ``task_id``. See ReliabilitySession."""
+        return self._session.send_note(task_id, text)
+
+    def completed_note(self, src: int, task_id: int):
+        """The note ``src`` most recently finished about ``task_id``, or None."""
+        return self._session.completed_note(src, task_id)
+
     def set_on_deliver(self, callback: Optional[Callable[[Message], None]]) -> None:
         """Install the deduplicated inbound callback.
 
@@ -319,6 +328,14 @@ class ReliabilityNode(Node):
         Do not block in it -- hand off to your own executor.
         """
         self._session.set_on_deliver(callback)
+
+    def set_on_note(self, callback: Optional[Callable[[CompletedNote], None]]) -> None:
+        """Install the completed-note callback.
+
+        Called once per note that arrived whole, never for a fragment and never
+        for a note that lost one. Same threading rule as ``set_on_deliver``.
+        """
+        self._session.set_on_note(callback)
 
     @property
     def node_id(self) -> int:
@@ -333,9 +350,14 @@ class ReliabilityNode(Node):
     # Topic plumbing
     # ------------------------------------------------------------------
 
-    def _publish_frame(self, payload: bytes) -> None:
+    def _publish_frame(self, payload: bytes, priority: int) -> None:
+        # The priority rides on the message rather than being inferred by the
+        # bridge, so the bridge can order its outbound queue without ever
+        # reading a payload byte. Classification is priority.py's; this is only
+        # the wire it travels on.
         msg = LoRaFrame()
         msg.data = list(payload)
+        msg.priority = int(priority)
         self._tx_pub.publish(msg)
 
     def _on_rx(self, msg: LoRaFrame) -> None:

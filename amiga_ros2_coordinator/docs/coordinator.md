@@ -24,12 +24,45 @@ It does not do transport (that is the reliability layer), does not fragment
 judgement are calls to injected interfaces answered elsewhere. It does not
 implement navigation or the mission stack either — those are separate existing
 nodes reached through the ports in
-[`interfaces.py`](../amiga_ros2_coordinator/interfaces.py).
+[`interfaces.py`](../amiga_ros2_coordinator/ports/interfaces.py).
 
 The test for whether a change belongs here: it is about *deciding* something.
 If it is about getting bytes there, it belongs one layer down. If it needs a
 language model or the LTL backend, it goes behind one of the two reasoning
 interfaces, not into the state machine.
+
+## Watching a fleet do this
+
+```bash
+make sim ROBOT_COUNT=3          # three robots, one virtual radio, three coordinators
+make fleet-scenario             # tell robot 2 it cannot finish task 42
+```
+
+`sim_bringup.launch.py` brings up the coordination layer alongside each robot
+when `launch_coordination` is true, which is the default: one `lora_sim` medium
+for the fleet, and per robot a `lora_bridge`, a `mission_bridge` and a
+`coordinator_sim`. Robot *i* gets `node_id:=i`; robot 1 is unnamespaced and the
+rest live under `amiga2`, `amiga3`, …
+
+`fleet-scenario` wraps `ros2 run amiga_ros2_coordinator escalate`, which
+publishes one escalation on a chosen robot's `coordination/infeasible` — the
+same message the triage agent publishes when the planner and the arbiter have
+both given up. Everything after that is the real stack. Useful well beyond the
+demo: it is the manual injection point for any bench run.
+
+```bash
+ros2 run amiga_ros2_coordinator escalate --robot amiga2 --task 42 --tree 60 \
+    --note "north end of row 7 is flooded; approach from the south"
+```
+
+Two knobs make the fleet asymmetric, which is what makes an auction worth
+watching. `batteries:=100,20,100` gives robot 2 a flat battery, which enters the
+bid as a cost penalty below 50%. Distance does the rest on its own, since the
+nav port costs travel from each robot's actual GPS fix.
+
+Worth knowing before it puzzles you: `COORDINATION=false` turns the whole layer
+off, and with `ROBOT_COUNT=1` you get a fleet of one — it comes up, heartbeats
+into an empty channel and has nobody to trade with.
 
 ## Where an anomaly comes from
 
@@ -202,7 +235,7 @@ flag — an acknowledgement, not a handshake: nothing here waits for it, and a
 tree that never sends one leaves the flag raised, which is the safe direction.
 
 The capability to hard-interrupt is **absent by construction**: there is no
-`abort()`, `cancel()` or `stop()` anywhere in the ports in `interfaces.py`. The
+`abort()`, `cancel()` or `stop()` anywhere in the ports in `ports/interfaces.py`. The
 acceptance suite pins this from the other side — the nav and mission fakes
 *do* carry those methods, and the preemption tests assert none was ever called.
 
@@ -213,7 +246,7 @@ Both are ports; one is now answered by a real agent, the other is still stubbed.
 
 | point | answered by | in tests |
 | --- | --- | --- |
-| `interpret_anomaly(context) -> ActionSchema` | the **triage agent** (`amiga_ros2_agents/triage_node.py`) over the BT fault, the `/rosout` window around it, the world state and the live peer list | `ScriptedInterpreter` |
+| `interpret_anomaly(context) -> ActionSchema` | the **triage agent** (`amiga_ros2_agents/coordination/triage_node.py`) over the BT fault, the `/rosout` window around it, the world state and the live peer list | `ScriptedInterpreter` |
 | `replan_and_verify(delta) -> ReplanResult` | **not built** — the existing replan generation + LTL verification (SPIN/Spot, Z3 for the BT) | `AcceptEverything` |
 
 The load-bearing constraint is the **closed union**: `interpret_anomaly`
@@ -283,9 +316,42 @@ and say so once in the log — enough to run on a bench with two radios and watc
 the peer registry populate. Wiring the real stacks means passing two objects
 and changing nothing else.
 
-`MissionInterface` is the seam that is **not** wired yet, and it is not just
-missing code: against the real planner and arbiter, `can_absorb` and `absorb`
-are slow and refusable rather than fast and certain. See "Not done yet".
+### The wired ports: `coordinator_sim`
+
+`nodes/sim_node.py` is the second entry point, and it does exactly that — three
+objects to the same constructor, and not one line of `engine/coordinator.py`
+or `nodes/coordinator_node.py` knows it exists.
+
+| port | implementation | reads |
+| --- | --- | --- |
+| nav | `nav_ports.GpsNav` | `gps/pvt`, `/orchard/tree_info_json` |
+| mission | `mission_ports.BehaviorTreeMission` | `mission/coordination_state` |
+| replanner | `replanner_client.VerifyingReplanner` | `/mission/verify_replan` |
+
+**Every one of them answers from cache, and none of them blocks.** That is not
+a shortcut, it is the constraint: `_assess` calls `can_reach`, `eta`,
+`can_absorb`, `current_task_id` and `battery_percent` from `_on_announce`,
+under the lock that `tick` and `on_message` need, and `_replan` is called under
+it too. A service call, an action, or a model round trip in any of them stops
+this robot's heartbeats and auctions for its duration, and a robot that stops
+answering is one the fleet writes off as dead.
+
+Two consequences worth stating plainly:
+
+* **Travel is costed as a straight line**, not a planned route. The fleet works
+  unknown, changing environments — the global costmap builds as the robot
+  drives and is not a surveyed map — so a planner asked about a place the robot
+  has never been near answers "is there a path through what I have already
+  seen", not "can I get there". `NavInterface.eta` only ever promised an
+  answer that is *comparable* between robots, and distance over a nominal speed
+  is exactly that.
+* **`absorb`, `release` and `mark_transferred` do not edit the plan.** The
+  arbiter does, from the same ownership change sent over `VerifyReplan`. Two
+  writers for one event is how a subtree gets grafted twice.
+
+`can_absorb` and `battery_percent` come from `mission_bridge` in
+`amiga_ros2_agents`, which watches `/mission/xml` and republishes a latched
+summary. The coordinator still never parses XML.
 
 ## Reliability, consumed in-process
 
@@ -395,32 +461,64 @@ crossing two robots**: two coordinators, two reliability layers, a relay for
 the radio, real ROS in between, and nothing faked but nav and the mission
 stack.
 
+[`test_fleet_auction.py`](../test/test_fleet_auction.py) does the same with
+**three robots on one shared channel**, which is the smallest fleet where the
+mechanism is observable rather than tautological: with a single possible bidder
+there is nothing to order and nothing to suppress. It runs the scenario `make
+fleet-scenario` runs by hand — robot 1 sheds a task with a note on it, the note
+fragments precede the announcement, robot 1 leaves the task immediately, the
+closer of the two bidders wins and the further one suppresses itself on
+overhearing it.
+
+The last test there is the control, and it is the one the note design rests on:
+**the same auction reaches the same winner when every note fragment is
+dropped**. The channel is a node that copies frames, so it can filter by
+decoded message type and remove exactly the `Freeform` frames and nothing else.
+A note improves a decision; it is never what makes one possible.
+
 ## Not done yet
 
-- **`replan_and_verify`.** Still `AcceptEverything`. The real one is a round
-  trip through `mission_planner` + `arbiter`, and — the part that does not
-  exist yet in any form — an **LTL/Z3 verification step in the arbiter's accept
-  path**. `ltl_gen` today turns English into a formula, publishes it to
-  `/mission/ltl`, and nobody subscribes.
-- **Real nav and mission adapters.** The ports are defined and mocked; the ROS
-  clients to the existing nodes are not written. The mission one is not just
-  unwritten but **under-specified**: `can_absorb`/`absorb` are declared fast and
-  certain, and against the real planner and arbiter they are neither. Either a
-  GRANT is only confirmed once the winner's arbiter accepts the edit — which
-  makes bidders commit before they know they can — or bidders pre-verify during
-  the announce window, which makes the window seconds long and drags an LLM call
-  into the auction. That is a real decision and it has not been made.
-- **The winner's side of the task ↔ mission mapping is unwired.** Both
-  directions now *exist*:
-  `amiga_ros2_agents/mission_tasks.py` resolves a failing BT node to the subtree
-  it belongs to, and `insert_task` grafts a subtree into another plan — with
-  `test_mission_tasks.py` checking the result still validates against the XSD
-  for every example mission. What is missing is the adapter that calls it when a
-  GRANT is confirmed, which is the same missing piece as the bullet above.
+- **`replan_and_verify` — asynchrony.** Now `VerifyingReplanner`, which reaches
+  the arbiter's `/mission/verify_replan`; the arbiter applies the edit to the
+  plan it holds and runs it through the same `_evaluate` a planner-authored
+  candidate goes through. What is *not* resolved is that this is called from
+  inside the lock `tick` and `on_message` need, and one round trip costs a C
+  compile (`spin -search` regenerates and builds `pan`, ~1.4 s measured on the
+  Jetson) before any model call. So the request is dispatched on a thread and
+  the verdict arrives late, routed to the anomaly path — the same place the
+  inline rejection in `_take_on` goes, just later. Nothing unverified reaches
+  the robot regardless, because the arbiter is the sole writer of
+  `/mission/xml` and publishes only after the gate passes. Making the *coordinator*
+  wait for a verdict would need the lock split, which is a larger change than
+  the hook itself.
+- ~~**Real nav and mission adapters**~~ — written; see "The wired ports" above.
+  `GpsNav`, `BehaviorTreeMission` and `mission_bridge` are behind
+  `coordinator_sim`. What the decision came out as, since it was called out here
+  as unmade: **bidders do not pre-verify.** `can_absorb` answers from a cached
+  capacity number, so it stays fast and certain and the announce window stays
+  short; the winner's arbiter gates the edit *after* the ACK, and a rejection
+  comes back around as an anomaly. So bidders do commit before they know they
+  can — the other horn of that dilemma — and the cost is bounded by the fact
+  that a rejected absorb re-offers the task rather than losing it. Dragging an
+  LLM call into the auction was the alternative, and the note path already shows
+  what that costs: a 5 s window becomes 45 s.
+- ~~**The winner's side of the task ↔ mission mapping**~~ — wired, but only for
+  the shape `mission_tasks.synthesize` supports: a **tree**-targeted task using
+  `MoveToTreeID` and optionally `SampleLeaf`. GPS- and aisle-targeted tasks can
+  be announced, bid on and won, and then the winner cannot rebuild a subtree for
+  them. `GpsNav` resolves all three kinds, so the auction is wider than the
+  execution; `escalate --gps` warns about exactly this.
 - **COMPLETE and RELEASE.** The other unicast types, once the codec has them —
   a task finishing and a task being handed back are currently invisible to the
   fleet.
-- **FREEFORM and fragmentation**, and any receive-side interpretation of free
-  text. Deferred with the reliability layer's fragmentation, together or not at
-  all.
+- ~~**FREEFORM and fragmentation**~~ — built. A `ReDelegate` may carry a `note`,
+  which is broadcast before its announcement and interpreted by the
+  `NoteInterpreter` port into one of `KeepBid | ReviseBid | WithdrawBid`. An
+  auction carrying a note runs on the deliberative clock
+  (`note_window_multiplier`), because a model call is orders of magnitude
+  slower than a bid backoff.
+
+  Still deferred: a real `NoteInterpreter` behind the port (the default,
+  `IgnoreNotes`, records notes and changes nothing), and forward error
+  correction for the fragments — a note that loses one is dropped.
 - **Cross-vendor / wire-level A2A** (Paper B).

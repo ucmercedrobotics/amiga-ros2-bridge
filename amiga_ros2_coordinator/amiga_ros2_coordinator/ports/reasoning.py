@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The two places where open-ended reasoning belongs, and the stubs holding them.
+"""The places where open-ended reasoning belongs, and the stubs holding them.
 
 Everything else in this package is a decision procedure: given these bids, this
-one wins; given this heartbeat gap, that peer is gone. Two questions are not
+one wins; given this heartbeat gap, that peer is gone. Three questions are not
 like that, and pretending otherwise is how you get a coordinator full of
 heuristics nobody can justify:
 
@@ -12,6 +12,12 @@ heuristics nobody can justify:
         Answered in production by the triage agent in ``amiga_ros2_agents``,
         which reads the behaviour-tree fault, the /rosout window around it and
         the world state, and returns one of the typed actions.
+
+    interpret_note(context) -> BidRevision
+        another robot attached a sentence to a task it is offering. Does it
+        change what we should bid? The only inbound path where somebody else's
+        text steers a decision, which is why its union is the narrowest one
+        here -- it can make us bid worse or not bid, and nothing else.
 
     replan_and_verify(delta) -> ReplanResult
         our mission just changed. Is the new one still coherent, and does it
@@ -38,13 +44,17 @@ the real triage agent lives in node.py, where the ROS dependency belongs.
 from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence, runtime_checkable
 
-from .model import MissionDelta
-from .schema import (
+from ..vocabulary.model import MissionDelta
+from ..vocabulary.schema import (
     ActionSchema,
     AnomalyContext,
+    BidRevision,
+    KeepBid,
     LocalDisposition,
+    NoteContext,
     ReDelegate,
     validate_action,
+    validate_revision,
 )
 
 
@@ -111,6 +121,68 @@ class ScriptedInterpreter:
         index = min(len(self.calls), len(self._actions) - 1)
         self.calls.append(context)
         return validate_action(self._actions[index])
+
+
+# ==========================================================================
+# Note interpretation
+# ==========================================================================
+
+
+@runtime_checkable
+class NoteInterpreter(Protocol):
+    """Turns another robot's sentence into one of three bid revisions."""
+
+    def interpret_note(self, context: NoteContext) -> BidRevision:
+        """Decide what ``context.text`` means for a bid we were going to make.
+
+        Must return a member of the BidRevision union. Raising is permitted and
+        is handled by the coordinator as "no interpretation available" -- the
+        bid goes out exactly as fitness decided, which is the safe direction:
+        an uninterpretable note leaves the auction working the way it worked
+        before notes existed.
+
+        Called *off* the coordinator's lock, like interpret_anomaly and for the
+        same reason: this is a model call taking seconds, and the lock it would
+        otherwise hold is the one ``tick`` and ``on_message`` need.
+        """
+
+
+class IgnoreNotes:
+    """The default: notes are recorded and change nothing.
+
+    The right default because it is the behaviour of the system as it was
+    before notes existed. A robot with no interpreter wired should still hear
+    notes, still count them, and still bid on mechanics alone -- rather than
+    silently ignore a whole message type or, worse, act on text nobody
+    interpreted.
+    """
+
+    def __init__(self):
+        self.calls: "list[NoteContext]" = []
+
+    def interpret_note(self, context: NoteContext) -> BidRevision:
+        self.calls.append(context)
+        return KeepBid(reason="no note interpreter configured")
+
+
+class ScriptedNoteInterpreter:
+    """Returns a prepared sequence of revisions, one per note.
+
+    The note counterpart of ScriptedInterpreter, with the same last-one-repeats
+    behaviour, so a test that only cares about the first revision does not have
+    to count notes.
+    """
+
+    def __init__(self, revisions: Sequence[BidRevision]):
+        if not revisions:
+            raise ValueError("ScriptedNoteInterpreter needs at least one revision")
+        self._revisions = list(revisions)
+        self.calls: "list[NoteContext]" = []
+
+    def interpret_note(self, context: NoteContext) -> BidRevision:
+        index = min(len(self.calls), len(self._revisions) - 1)
+        self.calls.append(context)
+        return validate_revision(self._revisions[index])
 
 
 # ==========================================================================
