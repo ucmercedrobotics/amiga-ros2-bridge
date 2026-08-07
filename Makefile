@@ -168,7 +168,7 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 1
+ROBOT_COUNT ?= 5
 # Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
 # so this is the dial on how much coordination traffic the fleet can sustain.
 LORA_SF ?= 7

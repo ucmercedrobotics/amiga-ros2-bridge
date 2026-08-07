@@ -281,6 +281,11 @@ def launch_setup(context, *args, **kwargs):
         # own robot1_name arg, not threaded through here, same as before this
         # file generalized to N robots).
         ns = "" if (i == 1 and robot_count == 1) else f"{name_prefix}{i}"
+        # Matches the frame_prefix given to robot_state_publisher in
+        # urdf.launch.py — needed anywhere a node's frame-name parameter
+        # would otherwise default to a bare "base_link"/"lidar_link" that no
+        # longer exists once this robot's own TF is prefixed.
+        frame_prefix = f"{ns}/" if ns else ""
 
         # ── Base description/TF (identical-to-hardware stack) ─────────────
         # publish_joints:=false because the joint_state_broadcaster is the
@@ -430,13 +435,16 @@ def launch_setup(context, *args, **kwargs):
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
                             "max_object_distance": 5.0,
+                            # base_frame/lidar_link default to bare
+                            # "base_link"/"lidar_link" in the node itself,
+                            # which stopped existing on this robot's own
+                            # /<ns>/tf the moment robot_state_publisher got a
+                            # frame_prefix (see urdf.launch.py) — every TF
+                            # lookup here would fail without this.
+                            "base_frame": f"{frame_prefix}base_link",
+                            "lidar_link": f"{frame_prefix}lidar_link",
                         }
                     ],
-                    # base_frame/lidar_link stay bare ("base_link"/
-                    # "lidar_link") — each robot's TF lives on its own
-                    # namespaced tf topic (see tf_remaps below), not on a
-                    # prefixed frame_id string, matching every other
-                    # TF-consuming node in this repo.
                     remappings=tf_remaps(ns),
                 ),
             ]
