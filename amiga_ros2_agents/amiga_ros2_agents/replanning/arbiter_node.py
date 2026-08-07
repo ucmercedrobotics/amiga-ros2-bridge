@@ -6,7 +6,9 @@ Arbiter agent that gates candidate mission edits before they reach the robot.
 For each candidate (from /mission/candidate_xml) it checks, in order:
     1. Well-formed XML
     2. Validates against the real BT.CPP XSD
-    3. No orphaned SampleLeaf (semantic)
+    3. Preconditions (semantic): every action has what mission.ontology says it
+       needs by the time the plan reaches it — today, a SampleLeaf must be
+       somewhere a robot has actually approached a tree
     4. Objective preservation / mission viability (semantic):
          - each NEW dropped tree must be justified (permanent failure)
          - total dropped trees must stay within a model-determined viability
@@ -24,6 +26,14 @@ Outcomes:
 
 The viability budget is obtained once, up front, via a single LLM call when the
 pristine mission is first seen.
+
+Parameters:
+    ltl_verification (bool, default True)
+        False runs checks 1-3 only. Those decide whether a plan will run; 4-7
+        decide whether it is still the mission that was asked for, which is the
+        claim verification makes. Off, every accept is reported unverified —
+        `verified` in the service response, `ltl_unverified` in the status —
+        so a run with the gate down can never be mistaken for one without.
 """
 
 import json
@@ -40,7 +50,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from ..mission import mission_tasks, xsd
+from ..mission import mission_tasks, ontology, orchard, xsd
 from ..runtime import llm, prompts, spin
 from ..runtime.status import StatusPublisher
 from ..verification import ltl_gate
@@ -56,6 +66,12 @@ PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 DEFAULT_VIABILITY_BUDGET = 2  # fallback total-drop budget if the model call fails
 
+#: Where the orchard map arrives. Absolute, like the coordinator's: there is one
+#: orchard and every robot is in it. Only the *soft* half of the ontology needs
+#: it -- which aisle a tree is reached from -- so an arbiter that never receives
+#: one still gates plans exactly as it did before.
+ORCHARD_TOPIC = "/orchard/tree_info_json"
+
 
 class ArbiterNode(Node):
     """Gates candidate mission edits before they reach the robot."""
@@ -63,6 +79,23 @@ class ArbiterNode(Node):
     def __init__(self):
         super().__init__("arbiter")
         self._lock = Lock()
+
+        #: With verification off, checks 4-7 do not run: no LTL formula, no SPIN,
+        #: no viability budget, no edit-size or rate limit. What survives is the
+        #: part that decides whether a plan will *run* -- well-formed XML, the
+        #: XSD, and the ontology's required preconditions -- and not the part
+        #: that decides whether it is still the mission that was asked for.
+        #:
+        #: For bringing the coordination loop up end to end, where the question
+        #: is whether a task crosses robots and comes back as executable XML,
+        #: and the formal argument is a separate claim made separately. Never a
+        #: default: an unverified accept must not be indistinguishable from a
+        #: verified one, which is also why it is logged at startup and counted
+        #: as ``ltl_unverified``.
+        self.declare_parameter("ltl_verification", True)
+        self.ltl_verification = bool(
+            self.get_parameter("ltl_verification").get_parameter_value().bool_value
+        )
 
         self.active_mission_xml: Optional[str] = None
         self.original_objectives: Optional[set] = (
@@ -100,15 +133,24 @@ class ArbiterNode(Node):
         self.xsd_schema = xsd.load_schema(self.get_logger())
         self._ltl_gate = ltl_gate.LtlGate(xsd.resolve_path(self.get_logger()))
 
+        #: The tree -> aisle map, once the orchard arrives. None until then, and
+        #: the ontology reads that as "the aisle is unknown" rather than as a
+        #: reason to refuse anything.
+        self.orchard: Optional[orchard.Orchard] = None
+
         self.create_subscription(
             String, "/mission/candidate_xml", self._on_candidate, 10
         )
+        self.create_subscription(String, ORCHARD_TOPIC, self._on_orchard, 10)
         self.create_subscription(String, "/mission/xml", self._on_mission, 10)
         self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
         self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
         self.rejection_pub = self.create_publisher(String, "/mission/rejection", 10)
         self.abort_pub = self.create_publisher(String, "/mission/abort", 10)
         self.budget_pub = self.create_publisher(String, "/mission/viability_budget", 10)
+        self.replan_request_pub = self.create_publisher(
+            String, "/mission/replan_request", 10
+        )
 
         # The coordinator's entry point. Reentrant plus the multithreaded
         # executor in main(): the gate runs a model call and a SPIN process, and
@@ -125,6 +167,12 @@ class ArbiterNode(Node):
         self.status.publish(self.get_status())
 
         self.get_logger().info("ArbiterNode started — gating /mission/candidate_xml")
+        if not self.ltl_verification:
+            self.get_logger().warn(
+                "ltl_verification=false — plans are checked for whether they RUN "
+                "(XSD + preconditions), not for whether they still satisfy the "
+                "mission. Every accept will be reported unverified."
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -157,6 +205,10 @@ class ArbiterNode(Node):
                 self.get_logger().info(
                     f"Captured original mission objectives: trees {trees}"
                 )
+                if not self.ltl_verification:
+                    # Both threads below exist only to have an answer ready for
+                    # checks 4 and 5, which are not going to run.
+                    return
                 Thread(
                     target=self._compute_viability_budget,
                     args=(mission_text, trees),
@@ -175,6 +227,22 @@ class ArbiterNode(Node):
 
     def _on_candidate(self, msg: String):
         self._decide(msg.data)
+
+    def _on_orchard(self, msg: String):
+        """The tree -> aisle map. Latched by keeping the last one that parsed.
+
+        A dump that does not parse is ignored rather than replacing a good map
+        with an empty one -- losing the aisles mid-mission would quietly turn
+        every prerequisite into an unknown.
+        """
+        parsed = orchard.parse(msg.data)
+        if not parsed:
+            return
+        with self._lock:
+            first = self.orchard is None
+            self.orchard = parsed
+        if first:
+            self.get_logger().info(f"Orchard map: {len(parsed)} trees placed in aisles")
 
     def _on_verify_replan(self, request, response):
         """The coordinator's way in: this robot's workload changed.
@@ -203,7 +271,7 @@ class ArbiterNode(Node):
             return response
 
         try:
-            candidate, appendix = self._apply_task_edit(request, active)
+            candidate, appendix, dropped = self._apply_task_edit(request, active)
         except ValueError as exc:
             response.reason = str(exc)
             self.get_logger().warn(f"REJECTED coordinator edit — {exc}")
@@ -221,7 +289,10 @@ class ArbiterNode(Node):
         )
 
         accepted = False
-        self._ltl_gate.allow_mission_text(appendix)
+        # Only meaningful while there is a formula for the text to be checked
+        # against; with verification off there is nothing to grant permission to.
+        if self.ltl_verification:
+            self._ltl_gate.allow_mission_text(appendix)
         with self._lock:
             self.justified_drops |= departing
         try:
@@ -230,7 +301,8 @@ class ArbiterNode(Node):
             # One candidate only. Leaving it armed would let the planner's next
             # edit inherit the coordinator's permission to change the mission
             # text, which is the whole thing that rule prevents.
-            self._ltl_gate.allow_mission_text("")
+            if self.ltl_verification:
+                self._ltl_gate.allow_mission_text("")
             if not accepted:
                 # The edit did not go through, so nothing was handed over.
                 # Leaving the drop justified would licence the planner to drop
@@ -238,10 +310,67 @@ class ArbiterNode(Node):
                 with self._lock:
                     self.justified_drops -= departing
 
+        if accepted:
+            self._request_replan(request, candidate, dropped)
+
         response.accepted = accepted
         response.verified = verified
         response.reason = reason
         return response
+
+    def _request_replan(self, request, committed: str, dropped: List[str]) -> None:
+        """Ask this robot's planner to re-plan around the workload it now has.
+
+        The edit that just committed is *structurally* correct and no more than
+        that. Absorbing a task installs the floor ``synthesize`` could build
+        from seven bytes -- the objective and the prerequisites the ontology
+        knows about -- with nothing said about where it belongs in the run, what
+        it costs, or what the peer knew about doing it. Shedding one can leave a
+        drive into an aisle with no work at the end of it. Both are plans that
+        run; neither is a plan anybody would have written.
+
+        So the deterministic half stops here and the model is handed the
+        question, with the ontology's findings as the reason. What comes back is
+        a candidate on ``/mission/candidate_xml`` and is gated like any other --
+        this publishes a *request*, never a plan, which is what keeps the LLM
+        outside the loop that decides what the robot actually runs.
+        """
+        try:
+            doc = etree.fromstring(committed.encode("utf-8"))
+        except etree.XMLSyntaxError:
+            return
+        with self._lock:
+            orchard_map = self.orchard
+        findings = ontology.dangling(doc, orchard_map)
+
+        payload = {
+            "cause": "task_transferred" if request.removing else "task_absorbed",
+            "task_id": int(request.task_id),
+            "target": {
+                "kind": TargetKind(int(request.target_kind)).name.lower(),
+                "a": int(request.target_a),
+                "b": int(request.target_b),
+            },
+            "capabilities": mission_tasks.capability_names(
+                int(request.required_capabilities)
+            ),
+            # Steps the announcement asked for that the rebuild could not
+            # supply -- an arm pose it has no parameters for, an aisle it has no
+            # map for. The planner is the only thing here that can fill them in.
+            "dropped": list(dropped),
+            "findings": findings,
+            # What the peer knew about doing this work, if anything reached us.
+            # The one piece of the request no amount of structure could derive.
+            "note": str(getattr(request, "note", "") or ""),
+            "timestamp_ms": int(time.time() * 1000),
+        }
+        message = String()
+        message.data = json.dumps(payload)
+        self.replan_request_pub.publish(message)
+        self.get_logger().info(
+            f"Requested replan ({payload['cause']} task {payload['task_id']}): "
+            f"{len(findings)} finding(s), dropped {payload['dropped'] or 'nothing'}"
+        )
 
     def _objectives_leaving(self, active: str, candidate: str) -> set:
         """Objective trees in the old plan that the edited one no longer has."""
@@ -254,8 +383,9 @@ class ArbiterNode(Node):
             return set()
         return before - after
 
-    def _apply_task_edit(self, request, active: str) -> Tuple[str, str]:
-        """The plan with the task added or removed, and the sanctioned text.
+    def _apply_task_edit(self, request, active: str) -> Tuple[str, str, List[str]]:
+        """The plan with the task added or removed, the sanctioned text, and
+        whatever the rebuild could not supply.
 
         Raises ValueError with a reason the coordinator can log and act on.
         """
@@ -268,7 +398,7 @@ class ArbiterNode(Node):
             # Losing work never widens what the mission claims to do, so the
             # text stands and the formula with it -- which is exactly how a plan
             # that quietly drops an objective gets caught.
-            return edited, ""
+            return edited, "", []
 
         task = mission_tasks.MissionTask(
             task_id=task_id,
@@ -282,12 +412,17 @@ class ArbiterNode(Node):
             priority=int(request.priority),
             xml=request.task_xml or "",
         )
+        dropped: List[str] = []
         if not task.xml:
             # Won from a peer: TASK_ANNOUNCE has no room for a subtree, so it is
-            # rebuilt from the fields. Still a candidate like any other -- the
-            # XSD check and the verification below both run on it.
+            # rebuilt from the fields -- against *this* robot's orchard, not the
+            # announcer's plan, because the route in is the winner's to choose.
+            # Still a candidate like any other: the XSD check and the
+            # verification below both run on it.
+            with self._lock:
+                orchard_map = self.orchard
             rebuilt = mission_tasks.synthesize(
-                task, xsd.resolve_path(self.get_logger())
+                task, xsd.resolve_path(self.get_logger()), orchard_map
             )
             if rebuilt is None:
                 raise ValueError(
@@ -295,8 +430,9 @@ class ArbiterNode(Node):
                     f"(target_kind {int(request.target_kind)}, capabilities "
                     f"{mission_tasks.capability_names(task.capabilities)})"
                 )
+            dropped = rebuilt.dropped
             # MissionTask is frozen: a new one, not an assignment.
-            task = replace(task, xml=rebuilt)
+            task = replace(task, xml=rebuilt.xml)
 
         edited = mission_tasks.insert_task(active, task)
         if edited is None:
@@ -309,7 +445,7 @@ class ArbiterNode(Node):
         clause = _mission_clause(task)
         if clause:
             edited = _extend_mission_text(edited, clause)
-        return edited, clause
+        return edited, clause, dropped
 
     def _decide(self, candidate: str) -> Tuple[bool, bool, str]:
         """Evaluate a candidate, act on the verdict, and report it.
@@ -443,10 +579,19 @@ class ArbiterNode(Node):
         if self.xsd_schema is not None and not self.xsd_schema.validate(doc):
             return False, f"XSD validation failed: {self.xsd_schema.error_log}", False
 
-        # 3. Semantic: orphaned SampleLeaf
-        ok, reason = self._check_no_orphan_sample(doc)
+        # 3. Semantic: every action has what it needs by the time it runs
+        ok, reason = self._check_preconditions(doc)
         if not ok:
             return False, reason, False
+
+        # Everything below asks whether the candidate is still the mission that
+        # was asked for. That is the question the flag turns off; the three
+        # checks above ask whether it will run at all, and always hold.
+        if not self.ltl_verification:
+            with self._lock:
+                self._last_status["ltl_unverified"] += 1
+                self._last_status["ltl_last_reason"] = "verification disabled"
+            return True, "", False
 
         # 4. Semantic: objective preservation / viability
         ok, reason, abort = self._check_objective_preserved(doc)
@@ -511,29 +656,25 @@ class ArbiterNode(Node):
 
         return True, "", False
 
-    @staticmethod
-    def _check_no_orphan_sample(doc) -> Tuple[bool, str]:
-        """Every SampleLeaf must be preceded (within its parent Sequence) by a
-        MoveToTreeID with approach_tree="true" — otherwise the robot would
-        sample wherever it happens to be standing."""
-        for sample in doc.iter("SampleLeaf"):
-            parent = sample.getparent()
-            approached = False
-            for sibling in parent:
-                if sibling is sample:
-                    break
-                if (
-                    sibling.tag == "MoveToTreeID"
-                    and sibling.get("approach_tree", "").lower() == "true"
-                ):
-                    approached = True
-            if not approached:
-                name = sample.get("name", "<unnamed>")
-                return False, (
-                    f"orphaned SampleLeaf '{name}': no preceding MoveToTreeID "
-                    f'with approach_tree="true" in its Sequence'
-                )
-        return True, ""
+    def _check_preconditions(self, doc) -> Tuple[bool, str]:
+        """Every action must have what it needs by the time the plan reaches it.
+
+        One rule today — a ``SampleLeaf`` needs the robot to be at a tree, or it
+        samples wherever it happens to be standing — but asked of
+        ``mission.ontology`` rather than restated here, because ``promela``
+        refuses the same plans for the same reason and two copies of a rule
+        disagree eventually. These did: this check used to scan only the
+        ``SampleLeaf``'s own siblings, so a plan that approaches the tree in one
+        ``RetryUntilSuccessful`` and samples it in the next was rejected even
+        though nothing was wrong with it — and that is how the mission planner
+        writes a retried sample.
+
+        Soft preconditions (a tree move expects its aisle move first) are not
+        checked here. They are advice for a planner, not grounds for refusal;
+        every plan in ``examples/`` omits them and runs.
+        """
+        problems = ontology.violations(doc, self.orchard)
+        return (False, problems[0]) if problems else (True, "")
 
     @staticmethod
     def _changed_line_ratio(original: str, edited: str) -> float:

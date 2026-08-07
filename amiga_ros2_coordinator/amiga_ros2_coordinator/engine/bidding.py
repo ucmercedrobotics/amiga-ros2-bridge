@@ -152,6 +152,13 @@ class PendingBid:
     #: original used -- recomputing a deliberative bid on the fast backoff
     #: would move it *earlier* than it was already scheduled for.
     deliberative: bool = False
+    #: The note's text, captured when the bid was formed rather than looked up
+    #: again if we win. A note expires (``session.note_ttl_sec``) well inside
+    #: the window a note-bearing announcement stays open, so by GRANT time the
+    #: sentence that explains how to do the work is usually already gone --
+    #: and that sentence is the only thing in a transfer that no amount of
+    #: structure could have derived.
+    note: str = ""
 
     def outranked_by(self, cost: int, eta_s: int, bidder_id: int, our_id: int) -> bool:
         """Whether an overheard bid beats ours on the arbiter's own ordering.

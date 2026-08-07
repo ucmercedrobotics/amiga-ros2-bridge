@@ -110,7 +110,7 @@ class VerifyingReplanner:
                 self._inflight += 1
             Thread(
                 target=self._run,
-                args=(task, removing),
+                args=(task, removing, delta.note),
                 daemon=True,
                 name=f"verify-task-{int(task.task_id)}",
             ).start()
@@ -135,9 +135,9 @@ class VerifyingReplanner:
         with self._lock:
             return self._inflight == 0
 
-    def _run(self, task, removing: bool) -> None:
+    def _run(self, task, removing: bool, note: str = "") -> None:
         try:
-            result = self._ask(task, removing)
+            result = self._ask(task, removing, note)
         except Exception as exc:  # noqa: BLE001 - a thread that dies silently
             result = ReplanResult(False, None, f"verification raised: {exc}")
         finally:
@@ -167,7 +167,7 @@ class VerifyingReplanner:
                 f"{result.reason}"
             )
 
-    def _ask(self, task, removing: bool) -> ReplanResult:
+    def _ask(self, task, removing: bool, note: str = "") -> ReplanResult:
         if not self._client.wait_for_service(timeout_sec=SERVICE_WAIT_SEC):
             message = f"{self._service_name} unavailable"
             if self._require_verifier:
@@ -183,6 +183,9 @@ class VerifyingReplanner:
         request.target_b = int(task.location.b)
         request.priority = int(task.priority)
         request.task_xml = _subtree_of(task)
+        # Captured when we bid, not looked up now: by GRANT time the note
+        # has usually already expired out of the reliability layer.
+        request.note = str(note or "")
 
         future = self._client.call_async(request)
         # Deliberately not spin_until_future_complete: this may run on a thread

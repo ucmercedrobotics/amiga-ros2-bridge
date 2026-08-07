@@ -952,12 +952,13 @@ class CoordinatorSession:
                 f"an operator is needed",
             )
 
-    def _take_on(self, task: Task, now: float, cause: str) -> None:
+    def _take_on(self, task: Task, now: float, cause: str, note: str = "") -> None:
         """Add ``task`` to our own mission and verify what that made.
 
         Shared by the AddTask action and by winning someone else's auction --
         the two are the same event from different directions, and a rejected
-        replan has to mean the same thing in both.
+        replan has to mean the same thing in both. ``note`` is empty for the
+        first: an operator adding a task locally has no peer to have heard from.
         """
         record = self._tasks.get(task.task_id)
         if record is not None and record.ours:
@@ -967,7 +968,7 @@ class CoordinatorSession:
         self._counters["tasks_absorbed"] += 1
         self._request_yield(f"task {task.task_id} absorbed ({cause})")
 
-        result = self._replan(MissionDelta(added=[task], cause=cause))
+        result = self._replan(MissionDelta(added=[task], cause=cause, note=note))
         if result is not None and result.rejected:
             # The mission we just made does not verify. Hand the task straight
             # back to the anomaly path: "work we hold and cannot complete" is
@@ -1044,6 +1045,7 @@ class CoordinatorSession:
             send_at=now + backoff(cost),
             created_at=now,
             deliberative=note is not None,
+            note=note.text if note is not None else "",
         )
         self._bids[task_id] = pending
 
@@ -1319,7 +1321,12 @@ class CoordinatorSession:
             )
             return
 
-        self._take_on(pending.task, now, cause=f"won auction from {grant.src}")
+        self._take_on(
+            pending.task,
+            now,
+            cause=f"won auction from {grant.src}",
+            note=pending.note,
+        )
 
     # ==================================================================
     # Time

@@ -173,6 +173,12 @@ class MissionDelta:
     added: "list[Task]" = field(default_factory=list)
     #: Why this delta happened. Diagnostics and prompt context, not dispatch.
     cause: str = ""
+    #: What the peer that raised this work said about doing it, when a
+    #: deliberative note reached us before we bid. Carried on the delta because
+    #: this is the path that reaches the replanner, and the replanner is the
+    #: only thing that can act on a sentence -- everything else in a delta is a
+    #: field the fleet derived, and this is the one thing it could not have.
+    note: str = ""
 
 
 def capability_name(capability: int) -> str:

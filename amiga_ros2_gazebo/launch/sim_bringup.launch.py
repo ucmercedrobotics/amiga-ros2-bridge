@@ -219,6 +219,7 @@ def launch_setup(context, *args, **kwargs):
     launch_coordination = (
         LaunchConfiguration("launch_coordination").perform(context).lower() == "true"
     )
+    ltl_verification = LaunchConfiguration("ltl_verification").perform(context).lower()
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
     )
@@ -483,6 +484,7 @@ def launch_setup(context, *args, **kwargs):
                     use_sim_time="true",
                     launch_mission_bridge="false",
                     battery_percent=str(batteries[i - 1]),
+                    ltl_verification=ltl_verification,
                 )
             )
 
@@ -558,6 +560,15 @@ def generate_launch_description():
                 "'100,20,100'. Short lists are padded with 100. Below 50% "
                 "enters the bid as a cost penalty, so this is the cheapest way "
                 "to make a fleet bid asymmetrically without moving anyone.",
+            ),
+            DeclareLaunchArgument(
+                "ltl_verification",
+                default_value="true",
+                description="False drops the arbiter's formal gate: plans are "
+                "still checked for whether they RUN (XSD + the ontology's "
+                "required preconditions) but not for whether they still "
+                "satisfy the mission. For bringing the coordination loop up "
+                "end to end; every accept is then reported unverified.",
             ),
             DeclareLaunchArgument(
                 "lora_spreading_factor",

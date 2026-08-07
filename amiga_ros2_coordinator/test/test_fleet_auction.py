@@ -415,6 +415,45 @@ def test_a_bidder_reads_the_note_before_deciding_what_to_bid(ros, fleet_factory)
     assert interpreter.calls[0].task_id == TASK_ID
 
 
+def test_the_note_reaches_the_winners_replanner(ros, fleet_factory):
+    """The end of the note's journey, and the reason it has one.
+
+    A note used to be consumed at the bid: it revised a cost and was then
+    thrown away. But the sentence is not about *whether* to take the work -- it
+    is about how the work has to be done, which is a question only the winner's
+    planner ever asks, and it asks it after the auction is already over.
+
+    Carried on the delta rather than fetched at GRANT time. A note expires
+    (``session.note_ttl_sec``) well inside the window a note-bearing
+    announcement stays open, so by the time the GRANT lands, looking it up
+    again would usually find nothing.
+    """
+    fleet = fleet_factory()
+    fleet.shed()
+
+    winner = fleet.robots[3]
+    assert wait_until(lambda: winner.session.task(TASK_ID) is not None)
+    assert wait_until(lambda: winner.replanner.calls > 0), "the winner never replanned"
+
+    absorbed = [d for d in winner.replanner.deltas if d.added]
+    assert absorbed, f"no absorption delta: {winner.replanner.deltas}"
+    assert absorbed[0].note == NOTE
+
+
+def test_an_auction_with_no_note_carries_no_note(ros, fleet_factory):
+    """The other half: the field is empty when nobody said anything.
+
+    Without this the test above would pass just as well against a delta that
+    always carried the last note anybody had heard, about any task.
+    """
+    fleet = fleet_factory(drop=lambda message: isinstance(message, Freeform))
+    fleet.shed()
+
+    winner = fleet.robots[3]
+    assert wait_until(lambda: winner.replanner.calls > 0)
+    assert all(delta.note == "" for delta in winner.replanner.deltas)
+
+
 def test_a_weaker_bidder_suppresses_itself_on_overhearing_a_better_one(
     ros, fleet_factory
 ):

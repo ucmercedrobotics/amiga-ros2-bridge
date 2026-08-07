@@ -71,6 +71,103 @@ def test_a_sampling_mission_splits_into_one_task_per_tree():
     assert {task.target.a for task in sampling} == {10, 60}
 
 
+#: The three plans the upstream mission planner wrote for the three-robot run,
+#: and the tree each of their two units is about.
+PLANNER_PLANS = {
+    "aisle_sample_10_60.xml": [10, 60],
+    "aisle_sample_12_62.xml": [12, 62],
+    "aisle_sample_14_64.xml": [14, 64],
+}
+
+
+@pytest.mark.parametrize("name,trees", sorted(PLANNER_PLANS.items()))
+def test_a_planner_written_mission_splits_into_one_task_per_tree(name, trees):
+    """The shape that used to defeat every rule here.
+
+    These plans put the aisle move *outside* the retry wrapper that holds the
+    tree move and the sample, so the mission's top Sequence has leaves and
+    control nodes side by side. That was taken whole -- the entire mission read
+    back as one task, so nothing in it could be offered to anybody, and the
+    fleet had nothing to auction on the very plans it was going to be run with.
+    """
+    tasks = mission_tasks.tasks_in(example(name))
+
+    assert [task.target.a for task in tasks] == trees
+    for task in tasks:
+        assert task.delegable
+        assert task.capabilities == cap_mask(
+            Capability.MOVE_TO_AISLE_HEAD,
+            Capability.MOVE_TO_TREE_ID,
+            Capability.SAMPLE_LEAF,
+        ), "the aisle move is part of the unit, so it is part of what is announced"
+
+
+@pytest.mark.parametrize("name,trees", sorted(PLANNER_PLANS.items()))
+def test_shedding_a_tree_takes_the_way_in_with_it(name, trees, schema):
+    """Handing tree 60 away removes the drive into tree 60's aisle.
+
+    Not a tidiness point. What is left has to be a plan the loser can keep
+    running: valid against the schema, still holding the work it did not give
+    up, and still readable as the tasks it has -- otherwise the transfer
+    succeeds on the radio and the robot is left with a mission it cannot load.
+    """
+    mission = example(name)
+    tasks = mission_tasks.tasks_in(mission)
+    kept, given = tasks[0], tasks[1]
+
+    without = mission_tasks.remove_task(mission, given.task_id)
+    assert without is not None
+
+    document = etree.fromstring(without.encode())
+    assert schema.validate(document), schema.error_log
+    assert [t.task_id for t in mission_tasks.tasks_in(without)] == [kept.task_id]
+
+    aisle_ids = {el.get("id") for el in document.iter("MoveToAisleHead")}
+    tree_ids = {el.get("id") for el in document.iter("MoveToTreeID")}
+    assert str(given.target.a) not in tree_ids
+    assert str(_aisle_in(given.xml)) not in aisle_ids
+
+
+def test_a_prerequisite_two_tasks_share_is_not_cut_with_either_of_them():
+    """One aisle move, two trees in that aisle. Give one away; the other stays.
+
+    The unit that *holds* the shared step is still the one that carries it --
+    it sits there and it leads there -- but cutting it out would leave the
+    second tree with no way in, in a plan nobody edited to say so. So the task
+    describes the whole unit and the removal leaves the shared step behind.
+    """
+    plan = (
+        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
+        '<BehaviorTree ID="T"><Sequence>'
+        '<MoveToAisleHead name="into_6" action_name="move_to_aisle_head" id="6"/>'
+        '<RetryUntilSuccessful name="r60" num_attempts="3"><Sequence name="s60">'
+        '<MoveToTreeID name="v60" action_name="follow_tree_id_waypoint" id="60" '
+        'approach_tree="true"/>'
+        '<SampleLeaf name="p60" action_name="segment_leaves"/>'
+        "</Sequence></RetryUntilSuccessful>"
+        '<RetryUntilSuccessful name="r61" num_attempts="3"><Sequence name="s61">'
+        '<MoveToTreeID name="v61" action_name="follow_tree_id_waypoint" id="61" '
+        'approach_tree="true"/>'
+        '<SampleLeaf name="p61" action_name="segment_leaves"/>'
+        "</Sequence></RetryUntilSuccessful>"
+        "</Sequence></BehaviorTree></root>"
+    )
+    tasks = mission_tasks.tasks_in(plan)
+    assert [task.target.a for task in tasks] == [60, 61]
+    # The first unit is *about* the aisle move -- it is announced with it.
+    assert tasks[0].capabilities & (1 << Capability.MOVE_TO_AISLE_HEAD)
+
+    without = mission_tasks.remove_task(plan, tasks[0].task_id)
+    document = etree.fromstring(without.encode())
+    assert [el.get("id") for el in document.iter("MoveToAisleHead")] == ["6"]
+    assert [el.get("id") for el in document.iter("MoveToTreeID")] == ["61"]
+
+
+def _aisle_in(subtree_xml: str):
+    head = etree.fromstring(subtree_xml.encode()).find("MoveToAisleHead")
+    return head.get("id") if head is not None else None
+
+
 def test_a_retry_wrapper_is_one_task_not_two():
     """reactive_fallbacks.xml wraps each sampling pair in RetryUntilSuccessful.
 
@@ -217,15 +314,75 @@ def test_task_ids_are_unique_within_a_mission():
 
 
 def test_a_declared_task_id_wins_over_the_derived_one():
-    """Once the planner names its units, the plan is the authority."""
+    """Once the planner names its units, the plan is the authority.
+
+    Declaring an id also says *this is one unit*: the sequence is no longer cut
+    up by objective, because a plan that numbered something has said where its
+    boundaries are, and guessing different ones would give the fleet two names
+    for the same work.
+    """
     declared = example("sample_leafs.xml").replace(
-        "<Sequence>", '<Sequence name="Whole_Mission" task_id="4210">', 1
+        "<Sequence>", '<Sequence name="Whole_Mission__task_4210">', 1
     )
     tasks = mission_tasks.tasks_in(declared)
-    # The named sequence wraps the whole mission, so it is a container rather
-    # than a unit -- the declaration is read, but it does not make the mission
-    # into one task. What matters is that parsing it does not fail.
-    assert tasks
+    assert [task.task_id for task in tasks] == [4210]
+    assert tasks[0].name == "Whole_Mission"
+
+
+def test_the_id_lives_in_the_name_because_an_attribute_would_not_load():
+    """The constraint this encoding exists for.
+
+    BT.CPP parses every attribute that is not ``ID``, ``name`` or a
+    pre/post-condition as a *port*, and refuses to build a tree that declares
+    one the node type does not provide. So ``task_id="5"`` on a ``<Sequence>``
+    is not a slower path or a lossy one, it is a mission that does not run --
+    and the worst place for that is a subtree a winner just absorbed, where it
+    lands after the auction has already succeeded.
+    """
+    attribute = example("sample_leafs.xml").replace(
+        "<Sequence>", '<Sequence name="Whole_Mission" task_id="4210">', 1
+    )
+    tasks = mission_tasks.tasks_in(attribute)
+    assert 4210 not in [task.task_id for task in tasks]
+
+    rebuilt = mission_tasks.name_with_task_id("Whole_Mission", 4210)
+    assert "task_id" not in rebuilt
+    assert mission_tasks.declared_task_id(rebuilt) == 4210
+    assert mission_tasks.task_label(rebuilt) == "Whole_Mission"
+
+
+def test_an_unlabelled_declaration_is_the_form_the_arbiter_already_writes():
+    """``task_<n>`` is what an absorbed task is named; it declares its id too."""
+    assert mission_tasks.declared_task_id("task_77") == 77
+    assert mission_tasks.name_with_task_id("task_77", 77) == "task_77"
+    # Nothing underneath to fall back to, so the whole name stands rather than
+    # leaving an operator display blank.
+    assert mission_tasks.task_label("task_77") == "task_77"
+
+
+def test_a_number_outside_the_wire_range_is_a_name_and_not_a_declaration():
+    """0 is the wire's "no task" and 70000 does not survive a TASK_ANNOUNCE."""
+    for name in ("Stage__task_0", "Stage__task_70000"):
+        assert mission_tasks.declared_task_id(name) is None
+        assert mission_tasks.task_label(name) == name
+
+
+def test_a_leaf_named_like_a_declaration_does_not_rename_its_unit():
+    """The id is read from the unit's own name, never from ``_name_of``'s fallback.
+
+    ``_name_of`` reaches down into the leaves when a control node is unnamed,
+    which is the common shape. If that fallback could declare, a planner
+    numbering its *steps* would be silently renumbering the fleet's tasks.
+    """
+    plan = (
+        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
+        '<BehaviorTree ID="T"><Sequence>'
+        '<MoveToTreeID name="task_9" action_name="follow_tree_id_waypoint" '
+        'id="10" approach_tree="true"/>'
+        '<SampleLeaf name="s10" action_name="segment_leaves"/>'
+        "</Sequence></BehaviorTree></root>"
+    )
+    assert [task.task_id for task in mission_tasks.tasks_in(plan)] != [9]
 
 
 def test_the_same_plan_read_twice_gives_the_same_ids():
@@ -312,6 +469,72 @@ def test_removing_a_task_leaves_the_rest_of_the_mission_intact():
     # The other tree is untouched: shedding one unit must not disturb the plan
     # around it.
     assert any(t.target == Target.tree(10) for t in remaining)
+
+
+def test_shedding_a_retried_task_does_not_leave_its_wrapper_behind(schema):
+    """The loser's plan has to still load, and an empty decorator does not.
+
+    ``RetryUntilSuccessful`` around a single ``Sequence`` is how a retried
+    objective is written, and it is the shape that separates units cleanly --
+    so it is the shape a shed most often cuts out of. Leaving the wrapper
+    childless breaks the plan of the robot that gave the work away, after the
+    transfer has already been agreed.
+    """
+    mission = (
+        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
+        '<BehaviorTree ID="T"><Sequence name="Both">'
+        '<RetryUntilSuccessful name="RetryTree10" num_attempts="3">'
+        '<Sequence name="Tree10Seq">'
+        '<MoveToTreeID name="V10" action_name="follow_tree_id_waypoint" '
+        'id="10" approach_tree="true"/>'
+        '<SampleLeaf name="S10" action_name="segment_leaves"/>'
+        "</Sequence></RetryUntilSuccessful>"
+        '<RetryUntilSuccessful name="RetryTree60" num_attempts="3">'
+        '<Sequence name="Tree60Seq">'
+        '<MoveToTreeID name="V60" action_name="follow_tree_id_waypoint" '
+        'id="60" approach_tree="true"/>'
+        '<SampleLeaf name="S60" action_name="segment_leaves"/>'
+        "</Sequence></RetryUntilSuccessful>"
+        "</Sequence></BehaviorTree></root>"
+    )
+    task = next(
+        t for t in mission_tasks.tasks_in(mission) if t.target == Target.tree(60)
+    )
+
+    without = mission_tasks.remove_task(mission, task.task_id)
+
+    assert without is not None
+    doc = etree.fromstring(without.encode())
+    assert [node.get("name") for node in doc.iter("RetryUntilSuccessful")] == [
+        "RetryTree10"
+    ]
+    assert schema.validate(doc), schema.error_log
+
+
+def test_shedding_the_last_task_still_leaves_a_document_with_a_tree_in_it():
+    """A mission with nothing left has no valid form; it can still be readable.
+
+    The XSD requires a control node to hold at least one child, so a plan whose
+    last unit was shed will be refused whichever way this goes. What is worth
+    pinning is which refusal: the arbiter can read an empty ``<BehaviorTree>``
+    as "this mission no longer does anything". A document the pruning walked all
+    the way out of has no tree at all, and it could only call that malformed.
+    """
+    mission = (
+        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
+        '<BehaviorTree ID="T"><Sequence name="Only">'
+        '<MoveToTreeID name="V10" action_name="follow_tree_id_waypoint" '
+        'id="10" approach_tree="true"/>'
+        "</Sequence></BehaviorTree></root>"
+    )
+    task = mission_tasks.tasks_in(mission)[0]
+
+    without = mission_tasks.remove_task(mission, task.task_id)
+
+    assert without is not None
+    doc = etree.fromstring(without.encode())
+    assert doc.find("BehaviorTree") is not None
+    assert not mission_tasks.tasks_in(without)
 
 
 def test_removing_a_task_that_is_not_there_reports_so():

@@ -12,7 +12,9 @@ radio carries becomes a candidate at all, which is the step between winning an
 auction and having a mission you can run.
 """
 
+import json
 import os
+import struct
 import sys
 
 import pytest
@@ -21,6 +23,7 @@ from lxml import etree
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from amiga_interfaces.srv import VerifyReplan  # noqa: E402
+from amiga_ros2_agents.mission import orchard  # noqa: E402
 from amiga_ros2_agents.replanning.arbiter_node import ArbiterNode  # noqa: E402
 from amiga_ros2_agents.verification import ltl, ltl_gate, verify  # noqa: E402
 from amiga_ros2_comms.codec import (  # noqa: E402
@@ -66,6 +69,7 @@ def request_for(
     caps=(Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF),
     removing=False,
     task_xml="",
+    note="",
 ):
     message = VerifyReplan.Request()
     message.removing = removing
@@ -76,7 +80,28 @@ def request_for(
     message.target_b = 0
     message.priority = 100
     message.task_xml = task_xml
+    message.note = note
     return message
+
+
+def replan_requests(node):
+    """Capture what the arbiter asks its planner for. Returns a live list."""
+    captured = []
+    node.replan_request_pub.publish = lambda msg: captured.append(json.loads(msg.data))
+    return captured
+
+
+def real_orchard():
+    """The tree -> aisle map out of a real mission binary."""
+    with open(os.path.join(EXAMPLES, "aisle_sample_10_60.bin"), "rb") as handle:
+        data = handle.read()
+    offset, frames = 0, []
+    while offset + 4 <= len(data):
+        (length,) = struct.unpack(">I", data[offset : offset + 4])
+        offset += 4
+        frames.append(data[offset : offset + length])
+        offset += length
+    return orchard.parse(frames[1].decode())
 
 
 def call(node, message):
@@ -142,7 +167,7 @@ def test_permission_to_extend_does_not_outlive_the_call(arbiter):
 def test_supplied_subtree_is_used_verbatim(arbiter):
     """A task our own planner shed carries its XML; it is not re-synthesised."""
     subtree = (
-        '<Sequence name="Handmade" task_id="99">'
+        '<Sequence name="Handmade__task_99">'
         '<MoveToTreeID name="V22" action_name="follow_tree_id_waypoint" id="22" '
         'approach_tree="true"/>'
         '<SampleLeaf name="S22" action_name="segment_leaves"/>'
@@ -266,6 +291,197 @@ def test_violating_absorption_is_rejected_with_a_counterexample(arbiter):
     assert not response.accepted
     assert response.verified
     assert "violation" in response.reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# Handing the question on: what the deterministic half cannot decide
+# ---------------------------------------------------------------------------
+
+
+@needs_spin
+def test_absorbing_a_task_asks_this_robots_planner_to_replan(arbiter):
+    """The committed edit is structural, and nothing here pretends otherwise.
+
+    ``synthesize`` appends the objective and its prerequisites to the end of the
+    plan, because appending is the only placement this layer can justify. Where
+    the work actually belongs in the run is a planning judgement, so the arbiter
+    commits a plan that *runs* and then asks the thing that can make that
+    judgement -- as a request, never as a plan, which is what keeps the model
+    outside the decision that publishes /mission/xml.
+    """
+    asked = replan_requests(arbiter)
+    assert call(arbiter, request_for(tree=35)).accepted
+
+    assert len(asked) == 1
+    assert asked[0]["cause"] == "task_absorbed"
+    assert asked[0]["task_id"] == 4210
+    assert asked[0]["target"] == {"kind": "tree", "a": 35, "b": 0}
+
+
+@needs_spin
+def test_the_peers_note_is_what_the_planner_is_given(arbiter):
+    """The one thing in a transfer that no amount of structure could derive.
+
+    Every other field is something the fleet computed. This is a sentence about
+    the world that only the robot which raised the task knew, carried across a
+    radio that fits 328 bytes of it -- and it is useless anywhere but here,
+    because a planner is the only thing in this system that can act on prose.
+    """
+    asked = replan_requests(arbiter)
+    note = "north end of column 6 is flooded; enter from the south"
+    assert call(arbiter, request_for(tree=35, note=note)).accepted
+    assert asked[0]["note"] == note
+
+
+@needs_spin
+def test_a_rebuilt_task_names_the_step_it_could_not_supply(arbiter):
+    """Without an orchard the winner cannot choose the lane, and says so.
+
+    ``dropped`` is the handover from the deterministic half to the planner: it
+    is not an error, it is the list of things seven bytes of radio could not
+    carry and only this robot can put back.
+    """
+    asked = replan_requests(arbiter)
+    assert call(
+        arbiter,
+        request_for(
+            tree=35,
+            caps=(
+                Capability.MOVE_TO_AISLE_HEAD,
+                Capability.MOVE_TO_TREE_ID,
+                Capability.SAMPLE_LEAF,
+            ),
+        ),
+    ).accepted
+    assert asked[0]["dropped"] == ["MoveToAisleHead"]
+
+
+@needs_spin
+def test_with_the_orchard_the_winner_builds_the_way_in_itself(arbiter):
+    """And then has nothing to report as missing."""
+    arbiter.orchard = real_orchard()
+    asked = replan_requests(arbiter)
+    assert call(
+        arbiter,
+        request_for(
+            tree=60,
+            caps=(
+                Capability.MOVE_TO_AISLE_HEAD,
+                Capability.MOVE_TO_TREE_ID,
+                Capability.SAMPLE_LEAF,
+            ),
+        ),
+    ).accepted
+
+    assert asked[0]["dropped"] == []
+    document = etree.fromstring(arbiter.active_mission_xml.encode())
+    assert "6" in {el.get("id") for el in document.iter("MoveToAisleHead")}
+
+
+def test_shedding_a_task_reports_what_it_left_behind():
+    """The user's opening ask: after a task is given away, replan anyway.
+
+    Shedding is not a local edit. Tree 60 leaves and the drive back out of its
+    aisle stays -- a step that now establishes something nothing in the plan
+    needs. That is invisible in the XML and obvious in the ontology's terms, so
+    the planner is told in those terms rather than handed a diff and asked to
+    notice.
+    """
+    node = ArbiterNode()
+    try:
+        with open(os.path.join(EXAMPLES, "aisle_sample_10_60.xml")) as handle:
+            node.active_mission_xml = handle.read()
+        node.orchard = real_orchard()
+        node.ltl_verification = False  # the finding is the subject, not the gate
+        asked = replan_requests(node)
+
+        task_id = _task_id_of(node.active_mission_xml, "move_to_tree60")
+        assert call(node, request_for(task_id=task_id, removing=True)).accepted
+
+        assert asked[0]["cause"] == "task_transferred"
+        findings = " ".join(asked[0]["findings"])
+        assert "exit_col_10" in findings
+        assert "in_aisle(10)" in findings
+        assert "enter_col_10" not in findings, "the way in to work we kept is not dead"
+    finally:
+        node.destroy_node()
+
+
+# ---------------------------------------------------------------------------
+# The gate, switched off
+# ---------------------------------------------------------------------------
+
+
+def unverified_arbiter():
+    node = ArbiterNode()
+    node.ltl_verification = False
+    node.active_mission_xml = ACTIVE
+    return node
+
+
+def test_with_verification_off_a_task_is_absorbed_without_spin_or_a_model():
+    """What the flag is for: bringing the coordination loop up end to end.
+
+    No formula, no SPIN, no viability budget -- the ``_ltl_gate`` here would
+    raise if it were consulted, which is how this test knows it was not.
+    """
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None
+        response = call(node, request_for(tree=35))
+        assert response.accepted, response.reason
+        ids = {
+            mv.get("id")
+            for mv in etree.fromstring(node.active_mission_xml.encode()).iter(
+                "MoveToTreeID"
+            )
+            if mv.get("approach_tree") == "true"
+        }
+        assert ids == {"10", "60", "35"}
+    finally:
+        node.destroy_node()
+
+
+def test_an_unverified_accept_never_claims_to_have_been_verified():
+    """An accept with the gate down must not read like one that passed.
+
+    This is the whole cost of the flag, and the reason it is not a default: the
+    claim "this plan satisfies the mission" is exactly what was skipped, so
+    saying it anyway would make the flag a way of faking the result.
+    """
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None
+        response = call(node, request_for(tree=35))
+        assert response.accepted
+        assert not response.verified
+        assert node.get_status()["ltl_unverified"] == 1
+        assert node.get_status()["ltl_checked"] == 0
+    finally:
+        node.destroy_node()
+
+
+def test_verification_off_still_refuses_a_plan_that_cannot_run():
+    """The three checks that survive are the ones about running, not meaning.
+
+    A sample with nowhere to sample is not a question about whether the plan
+    still matches the mission -- it is a plan that puts the arm out in the
+    middle of an aisle. Turning off verification must not turn that off.
+    """
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None
+        orphan = ACTIVE.replace(
+            '<SampleLeaf name="Sample_Leaves_Tree_10" action_name="segment_leaves"/>',
+            '<SampleLeaf name="Sample_Leaves_Tree_10" action_name="segment_leaves"/>'
+            '<MoveToAisleHead name="Leave" action_name="move_to_aisle_head" id="4"/>'
+            '<SampleLeaf name="Sample_Nowhere" action_name="segment_leaves"/>',
+        )
+        accepted, _, reason = node._decide(orphan)
+        assert not accepted
+        assert "Sample_Nowhere" in reason
+    finally:
+        node.destroy_node()
 
 
 def _task_id_of(mission_xml: str, node_name: str) -> int:

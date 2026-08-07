@@ -40,9 +40,11 @@ files in ``amiga_ros2_behavior_tree/examples/``.
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from lxml import etree
+
+from amiga_ros2_agents.mission import ontology
 
 #: Control nodes the emitter walks. Matches the XSD's ControlFlowGroup; kept as
 #: a literal rather than parsed out of the schema because each one needs its own
@@ -109,17 +111,18 @@ class _Emitter:
     threading five accumulators through every call.
     """
 
-    def __init__(self, actions: List[str]):
+    def __init__(self, actions: List[str], orchard=None):
         self.actions = actions
+        self.orchard = orchard
         self.stmts: List[str] = []
         self.macros: Dict[str, str] = {}
         self.latches: Set[str] = set()
         self.visit_order: List[str] = []
-        #: Tree the robot is currently standing at, as the walk sees it. This is
-        #: what lets a SampleLeaf know which tree it samples -- the leaf itself
-        #: carries no location, which is exactly why the arbiter refuses an
-        #: orphaned one.
-        self._at: Optional[str] = None
+        #: What the walk knows is true here -- where the robot is, which aisle
+        #: it is in, what it has already done. This is what lets a SampleLeaf
+        #: know which tree it samples: the leaf itself carries no location,
+        #: which is exactly why the ontology refuses an orphaned one.
+        self._state = ontology.State()
 
     # -- macros ---------------------------------------------------------
 
@@ -157,49 +160,63 @@ class _Emitter:
         if not branches:
             return
         self.stmts.append(f"{indent}if")
-        at_before = self._at
-        ends: List[Optional[str]] = []
+        before = self._state
+        ends: List[ontology.State] = []
         for branch in branches:
             self.stmts.append(f"{indent}:: true ->")
-            self._at = at_before
+            self._state = before
             # Wrap the branch so a bare action still forms a valid option body.
             holder = etree.Element("Sequence")
             holder.append(_copy(branch))
             self.walk(holder, indent + "    ")
-            ends.append(self._at)
+            ends.append(self._state)
         self.stmts.append(f"{indent}fi;")
-        # Position after the choice is only known if every branch agrees.
-        self._at = ends[0] if len(set(ends)) == 1 else None
+        # Only what every branch agrees on survives the choice.
+        merged = ends[0]
+        for state in ends[1:]:
+            merged = merged.merge(state)
+        self._state = merged
 
     def _emit_action(self, node, indent: str) -> None:
+        """One action leaf -> one d_step, and one entry in the vocabulary.
+
+        Which proposition it defines is the ontology's call, not this module's.
+        Deciding it here from the tag was how the emitter and the arbiter came
+        to hold two copies of the same rule, and the copies disagreed: a plan
+        that approaches a tree in one ``RetryUntilSuccessful`` and samples it in
+        the next modelled fine here and was rejected there.
+        """
         tag = node.tag
         assigns = [f"step = {tag}"]
 
-        if tag == "MoveToTreeID":
-            tree_id = node.get("id")
-            if tree_id is None:
-                raise PromelaError("<MoveToTreeID> without id")
-            assigns.append(f"tree = {tree_id}")
-            self._at = tree_id
-            if node.get("approach_tree", "").lower() == "true":
-                ap = f"at_tree_{tree_id}"
-                self._macro(ap, f"(step == MoveToTreeID && tree == {tree_id})")
-                self.visit_order.append(tree_id)
-        elif tag == "SampleLeaf":
-            if self._at is None:
-                # The arbiter's orphan check should have caught this first; if
-                # it did not, refusing to model it is better than modelling a
-                # sample of nowhere.
-                raise PromelaError("<SampleLeaf> with no preceding MoveToTreeID")
-            ap = f"sampled_tree_{self._at}"
+        step, self._state = ontology.advance(self._state, node, self.orchard)
+        if step.violation:
+            # Refusing to model it is better than modelling a sample of nowhere.
+            raise PromelaError(step.violation)
+
+        where = next((f for f in step.establishes if f.kind in ontology.WHERE), None)
+        if where is not None and where.kind in (ontology.AT_TREE, ontology.AT_WAYPOINT):
+            assigns.append(f"tree = {where.arg}")
+
+        if step.proposition == ontology.OBJECTIVE:
+            # Positional, not latching: a proposition claiming the robot is in
+            # two places at once is not useful.
+            ap = f"{ontology.AT_TREE}_{where.arg}"
+            self._macro(ap, f"(step == {tag} && tree == {where.arg})")
+            self.visit_order.append(where.arg)
+        elif step.proposition == ontology.ACHIEVEMENT:
+            fact = step.establishes[0]
+            ap = f"{fact.kind}_{fact.arg}"
             self._latch(ap)
             assigns.append(f"{ap}_f = true")
-        else:
-            # Every other action still advances the trace and can be referred to
-            # by an <action>_done proposition, but carries no location.
+        elif step.proposition == ontology.DONE:
+            # The action advances the trace and can be referred to by an
+            # <action>_done proposition, but carries no location.
             ap = f"{_ident(tag)}_done"
             self._latch(ap)
             assigns.append(f"{ap}_f = true")
+        # SILENT: transit. It moves the robot without being somewhere the
+        # mission asked for, so it defines nothing -- see _objective_tree_ids.
 
         self.stmts.append(f"{indent}d_step {{ {'; '.join(assigns)} }}")
 
@@ -211,11 +228,15 @@ def _copy(node):
     return clone
 
 
-def compile_mission(mission_xml: str, xsd_path: str) -> Model:
+def compile_mission(mission_xml: str, xsd_path: str, orchard=None) -> Model:
     """Compile a mission's behaviour tree into a Promela model.
 
     Raises ``PromelaError`` with a reason a planner can act on. Returning a
     model that says nothing would be worse: it would verify.
+
+    ``orchard`` is optional and changes nothing about the propositions -- it
+    only lets the ontology bind ``in_aisle`` facts to real aisle numbers, which
+    matters to the closure and to synthesis rather than to the model.
     """
     try:
         doc = etree.fromstring(mission_xml.encode("utf-8"))
@@ -231,7 +252,7 @@ def compile_mission(mission_xml: str, xsd_path: str) -> Model:
         raise PromelaError(f"{len(trees)} <BehaviorTree> elements, expected 1")
 
     actions = action_pool(xsd_path)
-    emitter = _Emitter(actions)
+    emitter = _Emitter(actions, orchard)
     emitter.walk(trees[0])
 
     if not emitter.stmts:

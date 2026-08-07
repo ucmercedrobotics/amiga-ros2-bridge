@@ -179,11 +179,20 @@ COORDINATION ?= true
 # amiga_ros2_agents/README.md. It also switches the coordinators over to asking
 # those agents instead of their local stubs.
 AGENTS ?= false
+# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
+# they will RUN -- well-formed XML, the XSD, and the ontology's required
+# preconditions -- but not for whether they still satisfy the mission: no
+# formula, no SPIN, no viability budget, no edit-size or rate limit. For
+# bringing the coordination loop up end to end, where the question is whether a
+# task crosses robots and comes back as executable XML. Every accept is then
+# reported unverified, in the service response and in the arbiter's status.
+LTL ?= true
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
 		launch_coordination:=$(COORDINATION) \
 		launch_agents:=$(AGENTS) \
+		ltl_verification:=$(LTL) \
 		lora_spreading_factor:=$(LORA_SF)
 
 # Poke one robot into shedding a task, so the fleet has something to auction.

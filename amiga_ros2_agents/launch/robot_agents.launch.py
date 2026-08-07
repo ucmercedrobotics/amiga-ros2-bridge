@@ -56,6 +56,7 @@ ROBOT_INTERFACES = [
     "/mission/planner_status",
     "/mission/viability_budget",
     "/mission/verify_replan",
+    "/mission/replan_request",
     "/mission_status",
     # The tree.
     "/bt/status_change",
@@ -106,6 +107,17 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument(
+                "ltl_verification",
+                default_value="true",
+                description="False makes the arbiter gate on whether a plan "
+                "will RUN -- well-formed XML, the XSD, and the ontology's "
+                "required preconditions -- and skip the checks that decide "
+                "whether it is still the mission that was asked for: no "
+                "formula, no SPIN, no viability budget, no edit-size or rate "
+                "limit. For bringing the coordination loop up end to end. "
+                "Every accept is then reported unverified.",
+            ),
+            DeclareLaunchArgument(
                 "launch_mission_bridge",
                 default_value="true",
                 description="Start the mission bridge alongside the agents. "
@@ -131,7 +143,19 @@ def generate_launch_description() -> LaunchDescription:
                 Node(
                     package=PACKAGE,
                     executable=agent,
-                    parameters=[{"use_sim_time": use_sim_time}],
+                    parameters=[
+                        {
+                            "use_sim_time": use_sim_time,
+                            # Only the arbiter declares it; a parameter a node
+                            # never declares is ignored, so passing it to all
+                            # of them keeps this a one-line table entry rather
+                            # than a special case in the loop.
+                            "ltl_verification": ParameterValue(
+                                LaunchConfiguration("ltl_verification"),
+                                value_type=bool,
+                            ),
+                        }
+                    ],
                     **common,
                 )
                 for agent in AGENTS

@@ -28,7 +28,7 @@ from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from ..mission import xsd
+from ..mission import mission_tasks, ontology, xsd
 from ..runtime import llm, prompts, spin
 from ..runtime.status import StatusPublisher
 
@@ -50,16 +50,11 @@ PLANNER_MAX_TOKENS = 8192
 # ---------------------------------------------------------------------------
 # Mission grammar — injected into both prompt templates
 # ---------------------------------------------------------------------------
-VALID_LEAVES = [
-    {
-        "tag": "MoveToTreeID",
-        "attrs": 'name, action_name="follow_tree_id_waypoint", id (int), approach_tree (true/false)',
-    },
-    {
-        "tag": "SampleLeaf",
-        "attrs": 'name, action_name="segment_leaves"',
-    },
-]
+# Read from the installed XSD at startup, never listed here. The literal this
+# replaces held two actions of the schema's nine, and MoveToAisleHead was not
+# one of them — so the replanner could not write an aisle move into a plan that
+# was full of them, and every replan flattened the prerequisite chain the rest
+# of this package now depends on.
 VALID_CONTROLS = [
     "Sequence",
     "ReactiveSequence",
@@ -95,12 +90,19 @@ class MissionPlannerNode(Node):
         # installed share directory (single source of truth with the BT executor)
         self.xsd_schema = xsd.load_schema(self.get_logger())
         self.xsd_text = xsd.read_text(self.get_logger())
+        self.valid_leaves = mission_tasks.action_grammar(
+            xsd.resolve_path(self.get_logger())
+        )
 
         self.system_prompt = prompts.render(
             "mission_planner/system.j2",
-            valid_leaves=VALID_LEAVES,
+            valid_leaves=self.valid_leaves,
             valid_controls=VALID_CONTROLS,
             max_edit_lines=MAX_EDIT_LINES,
+            # What the actions mean to each other. Without this the model can
+            # write every leaf the schema allows and still produce a plan that
+            # samples from the aisle head.
+            ontology_rules=ontology.RULES,
         )
 
         # Subscriptions
@@ -110,6 +112,9 @@ class MissionPlannerNode(Node):
         self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
         self.create_subscription(String, "/mission/abort", self._on_abort, 10)
         self.create_subscription(String, "/world_state", self._on_world_state, 10)
+        self.create_subscription(
+            String, "/mission/replan_request", self._on_replan_request, 10
+        )
 
         # Publisher — candidates only; the Arbiter owns /mission/xml
         self.mission_pub = self.create_publisher(String, "/mission/candidate_xml", 10)
@@ -123,6 +128,9 @@ class MissionPlannerNode(Node):
         self._last_failure_event = None  # the event we're currently trying to fix
         self._last_rejection_reason = None  # feedback to inject into the retry prompt
         self._mission_aborted = False  # set when arbiter declares non-viable
+        # (template, extra) of the session in flight, so a rejection retries the
+        # same question rather than the default one.
+        self._last_planner_call = ("mission_planner/replan_user.j2", {})
 
         self.status = StatusPublisher(self)
         self.status.publish(self.get_status())
@@ -207,6 +215,54 @@ class MissionPlannerNode(Node):
         # Run planner in a background thread so the spin loop stays responsive
         Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
 
+    def _on_replan_request(self, msg: String):
+        """This robot's workload changed; the plan that made it is structural.
+
+        The arbiter has already committed an edit — a task absorbed from a peer
+        or one handed away — and what it committed is what the deterministic
+        half could build: the objective plus the prerequisites the ontology
+        knows about. Nothing in it says where the new work belongs in the run,
+        what the peer knew about doing it, or which leftover steps now lead
+        nowhere. That is the part only a planner can write, and it is why the
+        request carries findings and a note rather than a diff.
+
+        Same session machinery as a fault, and deliberately so: what comes out
+        is a candidate on ``/mission/candidate_xml`` and the arbiter gates it
+        exactly as it gates a fault-driven edit. No second writer of
+        ``/mission/xml``, no model call inside a service handler.
+        """
+        if self._mission_aborted:
+            return
+        try:
+            request = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().error("Could not parse /mission/replan_request payload")
+            return
+        if not isinstance(request, dict):
+            return
+
+        # A pseudo-event, so the retry counter, the memory and the rejection
+        # loop all key off this the way they key off a failing node.
+        cause = str(request.get("cause", "workload_changed"))
+        event = {
+            "node": f"{cause}:{request.get('task_id')}",
+            "reason": cause,
+            "timestamp_ms": request.get("timestamp_ms", 0),
+        }
+        self.get_logger().info(
+            f"Replan requested — {cause} task {request.get('task_id')}, "
+            f"{len(request.get('findings') or [])} finding(s)"
+        )
+        Thread(
+            target=self._run_planner,
+            args=(event, []),
+            kwargs={
+                "template": "mission_planner/replan_request_user.j2",
+                "extra": {"request": request},
+            },
+            daemon=True,
+        ).start()
+
     def _on_rejection(self, msg: String):
         """Arbiter rejected our last candidate — retry with the reason as feedback,
         bounded by MAX_REJECTION_RETRIES per BT failure."""
@@ -251,6 +307,7 @@ class MissionPlannerNode(Node):
                 self._rejection_retries += 1
                 self._last_rejection_reason = reason
                 attempt = self._rejection_retries
+                template, extra = self._last_planner_call
                 gave_up = False
 
         if gave_up:
@@ -260,7 +317,12 @@ class MissionPlannerNode(Node):
         self.get_logger().warn(
             f"Candidate rejected ({reason}) — retry {attempt}/{MAX_REJECTION_RETRIES}"
         )
-        Thread(target=self._run_planner, args=(event, []), daemon=True).start()
+        Thread(
+            target=self._run_planner,
+            args=(event, []),
+            kwargs={"template": template, "extra": extra},
+            daemon=True,
+        ).start()
 
     def _on_abort(self, msg: String):
         """Arbiter declared the mission non-viable — stop replanning entirely.
@@ -284,8 +346,21 @@ class MissionPlannerNode(Node):
     # Planner
     # ------------------------------------------------------------------
 
-    def _run_planner(self, event: Dict, log_context: List[Dict]):
-        """One planning session: build context → call LLM → publish candidate."""
+    def _run_planner(
+        self,
+        event: Dict,
+        log_context: List[Dict],
+        template: str = "mission_planner/replan_user.j2",
+        extra: Optional[Dict] = None,
+    ):
+        """One planning session: build context → call LLM → publish candidate.
+
+        ``template`` and ``extra`` are what let a workload change reuse this
+        verbatim. Everything after the prompt is the same either way — the XSD
+        check, the candidate publish, the memory, the rejection loop — and
+        forking it would mean the arbiter's retry feedback only worked for one
+        of the two reasons a robot replans.
+        """
         with self._lock:
             xml = self.current_mission_xml
             sessions_done = self._last_status["sessions"]
@@ -312,6 +387,10 @@ class MissionPlannerNode(Node):
                 self._rejection_retries = 0
                 self._last_rejection_reason = None
             self._last_failure_event = event
+            # Held so a rejection retries the session that was actually run. A
+            # retry that fell back to the fault template would ask the model to
+            # fix a failing node for a session that had no failure in it.
+            self._last_planner_call = (template, dict(extra or {}))
 
         self.get_logger().info(_box(f"Mission Planner — session {sessions_done + 1}"))
 
@@ -339,8 +418,12 @@ class MissionPlannerNode(Node):
         with self._lock:
             rejection_note = self._last_rejection_reason
 
+        fields = dict(extra or {})
+        if "request" in fields:
+            fields["request_json"] = json.dumps(fields["request"], indent=2)
+
         prompt = prompts.render(
-            "mission_planner/replan_user.j2",
+            template,
             rejection_reason=rejection_note,
             event=json.dumps(event, indent=2),
             mission_xml=xml,
@@ -351,8 +434,10 @@ class MissionPlannerNode(Node):
             failure_node=failure_node,
             memory_summary=json.dumps(memory_summary, indent=2),
             failure_context_sec=FAILURE_CONTEXT_SEC,
-            valid_leaves=VALID_LEAVES,
+            valid_leaves=self.valid_leaves,
+            ontology_rules=ontology.RULES,
             max_edit_lines=MAX_EDIT_LINES,
+            **fields,
         )
 
         self.get_logger().info(

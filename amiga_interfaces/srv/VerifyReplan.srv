@@ -34,6 +34,19 @@ uint8 priority
 # from the fields above.
 string task_xml
 
+# What the robot that raised this task said about doing it -- the deliberative
+# note that preceded the announcement, if one arrived before we bid.
+#
+# The only field here that no amount of structure could derive. Everything else
+# says what the work is; this says something about the world that only the peer
+# knows, and it is what the winner's planner is given when it elaborates the
+# rebuilt task. Empty is the normal case: most announcements carry no note.
+#
+# Captured at bid time, not fetched here. A note expires (session.note_ttl_sec)
+# well inside the window a note-bearing announcement stays open, so asking for
+# it again at GRANT would usually find nothing.
+string note
+
 ---
 # Response
 
