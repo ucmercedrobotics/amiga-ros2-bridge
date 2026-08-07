@@ -156,6 +156,18 @@ ci-lint:
 oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
+VLM_IMAGE_TOPIC ?= /oak0/rgb/image_raw
+VLM_URL ?= http://localhost:8000/v1/chat/completions
+VLM_QUESTION ?= Describe what you see.
+vlm:
+	ros2 run amiga_vlm_bridge vlm_server --ros-args \
+		-p image_topic:=${VLM_IMAGE_TOPIC} \
+		-p vlm_url:=${VLM_URL} \
+		-p system_prompt:="You are a helpful assistant describing a farm robot's camera view."
+
+vlm-ask:
+	ros2 service call /vlm/ask amiga_vlm_interfaces/srv/VlmAsk "{question: '${VLM_QUESTION}'}"
+
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 
