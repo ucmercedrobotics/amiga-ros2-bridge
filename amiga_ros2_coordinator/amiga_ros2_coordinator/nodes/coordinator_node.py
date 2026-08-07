@@ -947,7 +947,7 @@ class CoordinatorNode(Node):
         return self.session.stats()
 
     def _log_stats(self) -> None:
-        self.get_logger().info(
+        self.get_logger().debug(
             " ".join(f"{k}={v}" for k, v in sorted(self.stats().items()))
         )
 

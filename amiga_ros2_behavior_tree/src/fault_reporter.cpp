@@ -44,22 +44,27 @@ void FaultReporter::callback(BT::Duration /*timestamp*/,
                              const BT::TreeNode &node,
                              BT::NodeStatus prev_status,
                              BT::NodeStatus status) {
-  if (status != BT::NodeStatus::FAILURE) {
-    return;
-  }
   // Leaves only. A control node reporting FAILURE is reporting its child's.
   const BT::NodeType type = node.type();
-  if (type != BT::NodeType::ACTION && type != BT::NodeType::CONDITION) {
+  const bool is_leaf =
+      type == BT::NodeType::ACTION || type == BT::NodeType::CONDITION;
+  const bool is_failure = is_leaf && status == BT::NodeStatus::FAILURE;
+  // SUCCESS only from actions: a condition succeeds on nearly every tick and
+  // would flood this topic for no consumer that needs it.
+  const bool is_success =
+      type == BT::NodeType::ACTION && status == BT::NodeStatus::SUCCESS;
+  if (!is_failure && !is_success) {
     return;
   }
 
   const double now = node_->now().seconds();
   const uint16_t uid = node.UID();
-  auto it = last_reported_.find(uid);
-  if (it != last_reported_.end() && (now - it->second) < min_interval_sec_) {
+  auto &throttle_map = is_failure ? last_failure_reported_ : last_success_reported_;
+  auto it = throttle_map.find(uid);
+  if (it != throttle_map.end() && (now - it->second) < min_interval_sec_) {
     return;
   }
-  last_reported_[uid] = now;
+  throttle_map[uid] = now;
 
   json event;
   // These three keys are the contract MissionPlannerNode and ArbiterNode
@@ -76,8 +81,13 @@ void FaultReporter::callback(BT::Duration /*timestamp*/,
   event["status"] = statusName(status);
   event["source"] = "leaf";
 
-  RCLCPP_WARN(node_->get_logger(), "BT fault: %s (%s) failed",
-              node.name().c_str(), node.registrationName().c_str());
+  if (is_failure) {
+    RCLCPP_WARN(node_->get_logger(), "BT fault: %s (%s) failed",
+                node.name().c_str(), node.registrationName().c_str());
+  } else {
+    RCLCPP_INFO(node_->get_logger(), "BT leaf succeeded: %s (%s)",
+                node.name().c_str(), node.registrationName().c_str());
+  }
   publish(event.dump());
 }
 

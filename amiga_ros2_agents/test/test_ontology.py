@@ -259,6 +259,90 @@ def test_a_choice_keeps_only_what_both_branches_establish():
     assert left.merge(left).facts == left.facts
 
 
+# ==========================================================================
+# Pruning what has already happened
+# ==========================================================================
+
+
+def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
+    """The names /bt/status_change actually reports, resolved to tree ids."""
+    got = ontology.sample_leaf_trees(example("aisle_sample_10_60.xml"), orchard_map)
+    assert got == {"sample_tree10": "10", "sample_tree60": "60"}
+
+
+def test_pruning_nothing_returns_the_plan_unchanged():
+    plan = example("aisle_sample_10_60.xml")
+    assert ontology.prune_completed(plan, set()) is plan
+
+
+def test_a_completed_tree_and_its_retry_wrapper_are_removed(orchard_map):
+    """Removing the objective must not leave an empty RetryUntilSuccessful.
+
+    That is how every plan this fleet flies wraps a sample -- see
+    PLANNER_PLANS above -- so a prune that only deleted the leaves would hand
+    the model back a plan with a dangling, childless retry in it.
+    """
+    pruned = ontology.prune_completed(
+        example("aisle_sample_10_60.xml"), {"10"}, orchard_map
+    )
+    remaining_ids = {
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
+    }
+    assert remaining_ids == {"60"}
+    assert pruned.find(".//RetryUntilSuccessful[@name='retry_tree10']") is None
+    assert pruned.find(".//RetryUntilSuccessful[@name='retry_tree60']") is not None
+
+
+def test_a_completed_trees_own_aisle_head_goes_with_it(orchard_map):
+    """Tree 10's aisle (10) belongs to no other tree in this plan, so both its
+    enter and exit MoveToAisleHead should go; tree 60's aisle (6) must stay."""
+    pruned = ontology.prune_completed(
+        example("aisle_sample_10_60.xml"), {"10"}, orchard_map
+    )
+    aisle_ids = [
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToAisleHead"
+    ]
+    assert aisle_ids == ["6", "6"]
+
+
+def test_a_shared_aisle_head_survives_for_the_tree_still_pending():
+    """Two trees in the same aisle: finishing one must not strand the other.
+
+    A synthetic plan, because none of the real examples share an aisle -- the
+    property this checks is that ``prune_completed`` looks at every remaining
+    objective before deciding an aisle head is unneeded, not just the one
+    being removed.
+    """
+    plan = etree.fromstring(
+        b"<Sequence>"
+        b'<MoveToAisleHead name="enter" id="6"/>'
+        b'<MoveToTreeID name="v1" id="55" approach_tree="true"/>'
+        b'<SampleLeaf name="sample_tree55"/>'
+        b'<MoveToTreeID name="v2" id="60" approach_tree="true"/>'
+        b'<SampleLeaf name="sample_tree60"/>'
+        b'<MoveToAisleHead name="exit" id="6"/>'
+        b"</Sequence>"
+    )
+    orchard_map = orchard.Orchard({55: 6, 60: 6})
+    pruned = ontology.prune_completed(plan, {"55"}, orchard_map)
+    remaining_ids = {
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
+    }
+    assert remaining_ids == {"60"}
+    aisle_heads = [el for el in ontology.actions_in(pruned) if el.tag == "MoveToAisleHead"]
+    assert len(aisle_heads) == 2, "aisle 6 is still needed for tree 60"
+
+
+def test_an_unknown_completed_tree_is_ignored(orchard_map):
+    """A tree id that names nothing in the plan is not a defect to raise."""
+    plan = example("aisle_sample_10_60.xml")
+    pruned = ontology.prune_completed(plan, {"9999"}, orchard_map)
+    remaining_ids = {
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
+    }
+    assert remaining_ids == {"10", "60"}
+
+
 def _orchard_frame(name: str) -> str:
     """The orchard JSON out of a mission binary: length-prefixed frame two."""
     import struct

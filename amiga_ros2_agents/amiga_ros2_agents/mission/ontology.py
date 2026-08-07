@@ -44,6 +44,7 @@ No ROS, no lxml beyond element inspection, so this is testable against real
 mission files with nothing running.
 """
 
+import copy
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 
@@ -518,6 +519,124 @@ def dangling(root, orchard=None) -> List[str]:
                 f"plan does not contain"
             )
     return out
+
+
+def prune_completed(root, completed, orchard=None):
+    """A copy of ``root`` with each already-sampled tree's objective removed.
+
+    ``completed`` is tree ids (str or int) the robot has actually sampled this
+    session -- see the SUCCESS half of ``/bt/status_change``, the only place
+    in the stack that observes a leaf finishing. The executor rebuilds its
+    tree from scratch and ticks from the root on every new plan (there is no
+    resume point), so a replan that leaves a finished tree's steps in place
+    drives the robot back through them. This is the deterministic half of
+    fixing that: what is mechanical -- "this already happened, stop asking
+    for it" -- is decided here, not left to the model's edit budget the way
+    ``dangling``'s findings are.
+
+    For each completed tree, removes the smallest ancestor that isolates its
+    ``MoveToTreeID``/``SampleLeaf`` pair (climbing through a wrapping
+    ``RetryUntilSuccessful`` the way the planner's own plans are shaped, but
+    stopping the moment an ancestor holds any other tree's actions too), then
+    drops any ``MoveToAisleHead`` whose aisle no *remaining* tree still needs
+    -- never one a still-pending tree shares it with.
+
+    Trees ``completed`` names that the plan does not contain, or that have no
+    orchard entry, are silently ignored: nothing here is a violation, only a
+    removal of what is provably already done.
+    """
+    completed_ids = {str(t).strip() for t in completed}
+    if not completed_ids:
+        return root
+
+    doc = copy.deepcopy(root)
+    objectives = _objective_bindings(doc, orchard)
+
+    to_remove = set()
+    aisles_still_needed = set()
+    for move, sample, tree_id in objectives:
+        if tree_id in completed_ids:
+            to_remove.add(_isolated_ancestor(move, {move, sample}))
+        else:
+            aisle = orchard.aisle_of(tree_id) if orchard is not None else None
+            if aisle is not None:
+                aisles_still_needed.add(str(aisle))
+
+    for node in to_remove:
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
+
+    # 2. An aisle head only outlives the trees it was for if one of them
+    #    hasn't happened yet.
+    for element in list(doc.iter("MoveToAisleHead")):
+        if (element.get("id") or "").strip() not in aisles_still_needed:
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+
+    return doc
+
+
+def sample_leaf_trees(root, orchard=None) -> Dict[str, str]:
+    """Every ``SampleLeaf``'s ``name`` -> the tree id it binds to.
+
+    BT.CPP reports a leaf's *name* on status-change, not a tree id -- that
+    attribute lives on the ``MoveToTreeID`` ahead of it, which is this
+    schema's concept, not BT.CPP's. This is how a SUCCESS event's ``node``
+    field (e.g. ``"sample_tree60"``) becomes a tree id for a completed-
+    objectives ledger, using the same binding ``prune_completed`` removes by.
+    """
+    return {
+        (sample.get("name") or ""): tree_id
+        for _, sample, tree_id in _objective_bindings(root, orchard)
+    }
+
+
+def _objective_bindings(root, orchard=None):
+    """Every ``(MoveToTreeID, SampleLeaf, tree_id)`` triple in the plan.
+
+    The binding ``advance`` computes -- which tree a sample lands on is a
+    function of where the state says the robot is, not of anything on the
+    ``SampleLeaf`` element itself -- kept here instead of discarded, for
+    ``prune_completed`` and ``sample_leaf_trees`` to share.
+    """
+    state = State()
+    last_move_for: Dict[str, object] = {}
+    out = []
+    for element in actions_in(root):
+        if element.tag == "MoveToTreeID" and (
+            element.get("approach_tree") or ""
+        ).strip().lower() == "true":
+            last_move_for[(element.get("id") or "").strip()] = element
+        step, state = advance(state, element, orchard)
+        if element.tag == "SampleLeaf":
+            sampled = next(
+                (f for f in step.establishes if f.kind == SAMPLED_TREE), None
+            )
+            if sampled is not None and sampled.arg in last_move_for:
+                out.append((last_move_for[sampled.arg], element, sampled.arg))
+    return out
+
+
+def _isolated_ancestor(element, ours: set):
+    """The highest ancestor of ``element`` whose action leaves are all in ``ours``.
+
+    A bare pair of siblings climbs no further than themselves; a pair wrapped
+    in ``RetryUntilSuccessful<Sequence>`` -- how every plan this fleet flies
+    writes an objective -- climbs to that wrapper, so removing it does not
+    leave an empty retry shell behind.
+    """
+    node = element
+    parent = node.getparent()
+    while parent is not None:
+        descendants = {e for e in parent.iter() if is_action(e)}
+        if descendants <= ours:
+            node = parent
+            parent = parent.getparent()
+        else:
+            break
+    return node
 
 
 def _used_later(facts, rest) -> bool:

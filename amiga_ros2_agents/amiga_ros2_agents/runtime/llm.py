@@ -60,8 +60,9 @@ def _env(*names: str, default: str = "") -> str:
     return default
 
 
-MODEL = _env("AGENT_MODEL", "LOCAL_MODEL", default="hosted_vllm/openai/gpt-oss-20b")
+MODEL = _env("AGENT_MODEL", "LOCAL_MODEL", default="hosted_vllm/openai/gpt-oss-120b")
 API_BASE = _env("AGENT_API_BASE", "LOCAL_API_BASE", default="http://localhost:8000/v1")
+OPENAI_API_KEY = _env("OPENAI_API_KEY", "LOCAL_OPENAI_API_KEY", default="dummy")
 TEMPERATURE = float(_env("AGENT_TEMPERATURE", "MODEL_TEMPERATURE", default="0.2"))
 MAX_TOKENS = int(_env("AGENT_MAX_TOKENS", "MODEL_MAX_TOKENS", default="2048"))
 
@@ -98,6 +99,7 @@ def complete(
                 messages=messages,
                 temperature=TEMPERATURE if temperature is None else temperature,
                 max_tokens=MAX_TOKENS if max_tokens is None else max_tokens,
+                api_key=OPENAI_API_KEY or None,
                 api_base=base or None,
             )
             # Some providers return a None content on an empty/filtered reply

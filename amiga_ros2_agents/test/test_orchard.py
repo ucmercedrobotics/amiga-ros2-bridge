@@ -114,3 +114,22 @@ def test_an_unplaceable_tree_is_left_out_rather_than_defaulted(orchard_map):
     assert orchard_map.aisle_of(99999) is None
     assert orchard_map.aisle_of(None) is None
     assert orchard_map.aisle_of("not a tree") is None
+
+
+def test_aisles_are_the_ones_with_a_tree_in_them(orchard_map):
+    """Every aisle a real objective could name, for reciting the valid set."""
+    assert {10, 6, 12, 8, 14} <= orchard_map.aisles()
+
+
+def test_facts_for_trees_is_scoped_to_what_was_asked(orchard_map):
+    """A replan prompt should pay for the trees it has, not the whole orchard."""
+    facts = orchard.facts_for_trees(orchard_map, ["10", "60"])
+    assert facts == {10: 10, 60: 6}
+
+
+def test_facts_for_trees_reports_unknown_rather_than_dropping_it(orchard_map):
+    """A tree the orchard has no entry for is still worth telling the model
+    about -- as an honest unknown, not a silent omission it can't tell apart
+    from "this tree doesn't exist"."""
+    facts = orchard.facts_for_trees(orchard_map, ["99999"])
+    assert facts == {99999: None}

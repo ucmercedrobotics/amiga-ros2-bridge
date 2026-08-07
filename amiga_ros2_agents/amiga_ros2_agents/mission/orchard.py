@@ -68,6 +68,16 @@ class Orchard:
         except (TypeError, ValueError):
             return None
 
+    def aisles(self) -> set:
+        """Every aisle id that has at least one tree in it.
+
+        For reciting the valid set to a planner, not for answering "is this
+        aisle real" -- a real orchard's outermost column has no aisle at all,
+        and that absence is exactly what makes this set worth stating rather
+        than assumed.
+        """
+        return set(self._aisle_by_tree.values())
+
 
 def parse(payload) -> Orchard:
     """An ``Orchard`` from the orchard JSON, empty if it cannot be read.
@@ -101,6 +111,23 @@ def parse(payload) -> Orchard:
             continue
         aisle_by_tree[index] = aisle
     return Orchard(aisle_by_tree)
+
+
+def facts_for_trees(orchard: Orchard, tree_ids) -> Dict[int, Optional[int]]:
+    """``tree_id -> aisle_of(tree_id)`` for exactly the trees asked about.
+
+    Scoped rather than the whole map so a prompt pays only for the trees an
+    active mission actually references -- a replanner and, later, the LTL
+    arbiter both want this same slice, which is why it lives here rather than
+    inlined in either caller.
+    """
+    out: Dict[int, Optional[int]] = {}
+    for t in tree_ids:
+        try:
+            out[int(t)] = orchard.aisle_of(t)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _declared_aisles(data: dict) -> set:

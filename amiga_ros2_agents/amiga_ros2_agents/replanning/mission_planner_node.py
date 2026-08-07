@@ -22,13 +22,14 @@ import re
 import textwrap
 from collections import deque
 from threading import Lock, Thread
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
+from lxml import etree
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from ..mission import mission_tasks, ontology, xsd
+from ..mission import mission_tasks, ontology, orchard, xsd
 from ..runtime import llm, prompts, spin
 from ..runtime.status import StatusPublisher
 
@@ -42,6 +43,10 @@ MAX_RETRIES = 20  # max planning attempts before giving up (= MAX_STEPS)
 MAX_REJECTION_RETRIES = 3  # max arbiter-rejection retries per single BT failure
 COMPRESS_AFTER = 3  # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3  # /world_state frames kept for prompt context
+
+# Same document, same topic, as the arbiter's own orchard subscription
+# (arbiter_node.py's ORCHARD_TOPIC) -- both sides answer from the same map.
+ORCHARD_TOPIC = "/orchard/tree_info_json"
 
 # A whole XML plan comes back in one reply, so this must NOT fall back to
 # llm.MAX_TOKENS (2048) — a truncated plan fails XSD validation every time.
@@ -79,6 +84,16 @@ class MissionPlannerNode(Node):
         self.log_buffer: List[Dict] = []
         self.memory: List[Dict] = []  # across-session history
         self.world_state_frames: deque = deque(maxlen=WORLD_STATE_FRAMES)
+        # The tree -> aisle map, once the orchard arrives. Same lifetime as the
+        # arbiter's own copy (arbiter_node.py's self.orchard): None until the
+        # first frame, latched after.
+        self.orchard: Optional[orchard.Orchard] = None
+        # Trees this robot has actually sampled this mission (SUCCESS half of
+        # /bt/status_change) and the fault reasons raised so far. Both latch
+        # for the node's lifetime -- same "first mission XML is the mission"
+        # assumption the arbiter's original_objectives already makes.
+        self.completed_trees: Set[str] = set()
+        self.fault_constraints: List[Dict] = []
         self._last_status: Dict = {
             "mission_xml_received": False,
             "sessions": 0,
@@ -112,6 +127,7 @@ class MissionPlannerNode(Node):
         self.create_subscription(String, "/mission/rejection", self._on_rejection, 10)
         self.create_subscription(String, "/mission/abort", self._on_abort, 10)
         self.create_subscription(String, "/world_state", self._on_world_state, 10)
+        self.create_subscription(String, ORCHARD_TOPIC, self._on_orchard, 10)
         self.create_subscription(
             String, "/mission/replan_request", self._on_replan_request, 10
         )
@@ -169,6 +185,19 @@ class MissionPlannerNode(Node):
         with self._lock:
             self.world_state_frames.append(frame)
 
+    def _on_orchard(self, msg: String):
+        """Latch the tree -> aisle map, same as the arbiter's own copy.
+
+        Not reset on a later frame vs. merged with it -- the document is a
+        full snapshot each time, so the newest one simply replaces the last.
+        """
+        parsed = orchard.parse(msg.data)
+        with self._lock:
+            first = self.orchard is None
+            self.orchard = parsed
+        if first and parsed:
+            self.get_logger().info(f"Orchard layout received — {len(parsed)} trees mapped")
+
     def _on_log(self, msg: Log):
         if "BTStatusPublisher" in msg.msg:
             return
@@ -202,6 +231,17 @@ class MissionPlannerNode(Node):
             )
             return
 
+        # No "status" key is the synthetic `make fleet-fault` shape, which has
+        # only ever meant FAILURE. A real event carries it explicitly, and now
+        # that FaultReporter reports a leaf reaching SUCCESS too (not just
+        # FAILURE), this is what keeps that from starting a replan session.
+        status = str(event.get("status") or "FAILURE").upper()
+        if status == "SUCCESS":
+            self._on_leaf_success(event)
+            return
+        if status != "FAILURE":
+            return
+
         failure_sec = event.get("timestamp_ms", 0) / 1000.0
         with self._lock:
             log_context = [
@@ -214,6 +254,35 @@ class MissionPlannerNode(Node):
 
         # Run planner in a background thread so the spin loop stays responsive
         Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
+
+    def _on_leaf_success(self, event: Dict):
+        """A leaf finished. If it was a SampleLeaf, remember which tree —
+        the executor rebuilds its tree from scratch on every redeploy, so
+        anything still in the plan gets re-ticked; this is what lets a later
+        replan leave a finished tree out instead of driving through it again.
+        """
+        name = event.get("node")
+        if not name or name == "<tree>":
+            return
+        with self._lock:
+            xml = self.current_mission_xml
+            orchard_map = self.orchard
+        if xml is None:
+            return
+        try:
+            doc = etree.fromstring(xml.encode("utf-8"))
+        except etree.XMLSyntaxError:
+            return
+        tree_id = ontology.sample_leaf_trees(doc, orchard_map).get(name)
+        if tree_id is None:
+            return
+        with self._lock:
+            newly = tree_id not in self.completed_trees
+            self.completed_trees.add(tree_id)
+        if newly:
+            self.get_logger().info(
+                f"Tree {tree_id} sampled — excluding it from future replans"
+            )
 
     def _on_replan_request(self, msg: String):
         """This robot's workload changed; the plan that made it is structural.
@@ -394,11 +463,69 @@ class MissionPlannerNode(Node):
 
         self.get_logger().info(_box(f"Mission Planner — session {sessions_done + 1}"))
 
-        # 1. World state — whatever the /world_state subscription has collected
+        # 1. Prune what's already done out of the XML the model sees. The
+        # executor has no resume point (a redeploy ticks from the root), so a
+        # tree left in the plan gets driven through again — this removes that
+        # possibility structurally instead of asking the model to notice it.
+        with self._lock:
+            completed = set(self.completed_trees)
+            orchard_map = self.orchard
+        try:
+            active_doc = etree.fromstring(xml.encode("utf-8"))
+        except etree.XMLSyntaxError:
+            active_doc = None
+        if active_doc is None:
+            pruned_xml = xml
+            pruned_tree_ids: List[str] = []
+        else:
+            pruned_doc = ontology.prune_completed(active_doc, completed, orchard_map)
+            if not any(True for _ in ontology.actions_in(pruned_doc)):
+                self.get_logger().warn(
+                    "Every objective in the active mission is already complete "
+                    "— nothing left to replan"
+                )
+                return
+            pruned_xml = etree.tostring(pruned_doc, encoding="unicode")
+            pruned_tree_ids = sorted(
+                {
+                    (el.get("id") or "").strip()
+                    for el in ontology.actions_in(pruned_doc)
+                    if el.tag == "MoveToTreeID" and el.get("id")
+                }
+            )
+
+        # 2. Orchard grounding, scoped to the trees still in play — the
+        # concrete fact that was missing when a fault reason like "approach
+        # tree 60 not via aisle 6" had nothing to contradict aisle 9 with.
+        if orchard_map:
+            orchard_facts = orchard.facts_for_trees(orchard_map, pruned_tree_ids)
+            known_aisles = sorted(orchard_map.aisles())
+        else:
+            orchard_facts = {}
+            known_aisles = []
+
+        # 3. Fault reasons from earlier this mission, so a constraint raised
+        # once (e.g. this soft-ground note) stays visible on every later
+        # replan, not just the session it arrived in.
+        with self._lock:
+            reason = str(event.get("reason") or "")
+            event_key = (event.get("node"), event.get("timestamp_ms"))
+            seen_keys = {(c["node"], c["timestamp_ms"]) for c in self.fault_constraints}
+            prior_fault_constraints = list(self.fault_constraints)
+            if reason and event_key not in seen_keys:
+                self.fault_constraints.append(
+                    {
+                        "node": event.get("node"),
+                        "reason": reason,
+                        "timestamp_ms": event.get("timestamp_ms"),
+                    }
+                )
+
+        # 4. World state — whatever the /world_state subscription has collected
         with self._lock:
             world_state = list(self.world_state_frames)
 
-        # 2. Compact memory relevant to this failure node
+        # 5. Compact memory relevant to this failure node
         failure_node = event.get("node", "unknown")
         relevant = [m for m in self.memory if m["event"].get("node") == failure_node]
         memory_summary = [
@@ -410,7 +537,7 @@ class MissionPlannerNode(Node):
             for i, m in enumerate(relevant[-COMPRESS_AFTER:])
         ]
 
-        # 3. Build prompt
+        # 6. Build prompt
         log_excerpt = json.dumps(log_context, indent=2)
         if len(log_excerpt) > RESULT_HISTORY_CHARS:
             log_excerpt = log_excerpt[:RESULT_HISTORY_CHARS] + "\n… [truncated]"
@@ -426,7 +553,7 @@ class MissionPlannerNode(Node):
             template,
             rejection_reason=rejection_note,
             event=json.dumps(event, indent=2),
-            mission_xml=xml,
+            mission_xml=pruned_xml,
             xsd_text=self.xsd_text,
             world_state=json.dumps(world_state, indent=2),
             world_state_count=len(world_state),
@@ -437,15 +564,20 @@ class MissionPlannerNode(Node):
             valid_leaves=self.valid_leaves,
             ontology_rules=ontology.RULES,
             max_edit_lines=MAX_EDIT_LINES,
+            orchard_facts=orchard_facts,
+            known_aisles=known_aisles,
+            completed_trees=sorted(completed),
+            prior_fault_constraints=prior_fault_constraints,
             **fields,
         )
 
         self.get_logger().info(
             f"  Calling model ({llm.MODEL}) — "
-            f"world_state={len(world_state)} frames, logs={len(log_context)} entries"
+            f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
+            f"completed_trees={sorted(completed)}, pruned={len(completed)}"
         )
 
-        # 4. Call LLM
+        # 7. Call LLM
         try:
             edited_xml = llm.complete(
                 self.system_prompt, prompt, max_tokens=PLANNER_MAX_TOKENS
@@ -456,7 +588,7 @@ class MissionPlannerNode(Node):
 
         edited_xml = llm.strip_code_fence(edited_xml)
 
-        # 5. Validate against the real BT.CPP XSD
+        # 8. Validate against the real BT.CPP XSD
         is_valid, xsd_error = xsd.validate(self.xsd_schema, edited_xml)
         if not is_valid:
             self.get_logger().error(
@@ -466,19 +598,21 @@ class MissionPlannerNode(Node):
             )
             return
 
-        # 6. Summarise what changed
-        edit_summary = _summarize_edit(xml, edited_xml)
+        # 9. Summarise what changed, against the pruned XML the model was
+        # actually shown — not the raw active mission, which may still
+        # contain trees the model never saw and could not have touched.
+        edit_summary = _summarize_edit(pruned_xml, edited_xml)
         self.get_logger().info(
             f"  Edit: {textwrap.shorten(edit_summary, 120, placeholder='…')}"
         )
 
-        # 7. Publish candidate to the Arbiter
+        # 10. Publish candidate to the Arbiter
         out_msg = String()
         out_msg.data = edited_xml
         self.mission_pub.publish(out_msg)
         self.get_logger().info("  Published candidate XML to /mission/candidate_xml")
 
-        # 8. Store in memory and update status
+        # 11. Store in memory and update status
         with self._lock:
             self.memory.append(
                 {
