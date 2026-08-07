@@ -605,9 +605,10 @@ def _objective_bindings(root, orchard=None):
     last_move_for: Dict[str, object] = {}
     out = []
     for element in actions_in(root):
-        if element.tag == "MoveToTreeID" and (
-            element.get("approach_tree") or ""
-        ).strip().lower() == "true":
+        if (
+            element.tag == "MoveToTreeID"
+            and (element.get("approach_tree") or "").strip().lower() == "true"
+        ):
             last_move_for[(element.get("id") or "").strip()] = element
         step, state = advance(state, element, orchard)
         if element.tag == "SampleLeaf":

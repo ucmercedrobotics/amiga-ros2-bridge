@@ -300,7 +300,9 @@ def test_a_completed_trees_own_aisle_head_goes_with_it(orchard_map):
         example("aisle_sample_10_60.xml"), {"10"}, orchard_map
     )
     aisle_ids = [
-        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToAisleHead"
+        el.get("id")
+        for el in ontology.actions_in(pruned)
+        if el.tag == "MoveToAisleHead"
     ]
     assert aisle_ids == ["6", "6"]
 
@@ -329,7 +331,9 @@ def test_a_shared_aisle_head_survives_for_the_tree_still_pending():
         el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
     }
     assert remaining_ids == {"60"}
-    aisle_heads = [el for el in ontology.actions_in(pruned) if el.tag == "MoveToAisleHead"]
+    aisle_heads = [
+        el for el in ontology.actions_in(pruned) if el.tag == "MoveToAisleHead"
+    ]
     assert len(aisle_heads) == 2, "aisle 6 is still needed for tree 60"
 
 

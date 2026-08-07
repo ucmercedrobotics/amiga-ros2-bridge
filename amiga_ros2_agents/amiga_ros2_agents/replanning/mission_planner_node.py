@@ -196,7 +196,9 @@ class MissionPlannerNode(Node):
             first = self.orchard is None
             self.orchard = parsed
         if first and parsed:
-            self.get_logger().info(f"Orchard layout received — {len(parsed)} trees mapped")
+            self.get_logger().info(
+                f"Orchard layout received — {len(parsed)} trees mapped"
+            )
 
     def _on_log(self, msg: Log):
         if "BTStatusPublisher" in msg.msg:
