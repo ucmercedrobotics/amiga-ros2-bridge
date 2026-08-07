@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   srv/GetTreeInfo.srv
   srv/GenerateLTL.srv
   srv/InterpretAnomaly.srv
+  srv/InterpretNote.srv
   srv/VerifyReplan.srv
 )
 

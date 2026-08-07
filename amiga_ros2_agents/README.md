@@ -42,12 +42,12 @@ agent.
 | `replanning/arbiter_node.py` | **Arbiter** — gates candidate edits; sole writer of `/mission/xml`. |
 | `replanning/world_state_node.py` | **World state** — aggregates action feedback into `/world_state`. |
 | `coordination/triage_node.py` | **Triage** — decides what happens to work the local loop could not recover. |
+| `coordination/note_node.py` | **Note** — reads a peer's note about work it is offering and says what it means for our bid. |
 | `coordination/mission_bridge_node.py` | **Mission bridge** — answers the coordinator's questions about the plan, read-only. |
 
 `world_state` sits under `replanning/` because the planner's context window is
 what it feeds; `mission_bridge` sits under `coordination/` because the only
 reason it exists is that the coordinator never parses XML.
-| `mission_bridge_node.py` | **Mission bridge** — not an agent, and no model. Summarises `/mission/xml` for the coordinator's mission port, so the coordinator never parses XML. |
 
 ## The replanning loop
 
@@ -87,6 +87,40 @@ radio, should this task be offered to the fleet, dropped, or replaced with
 different work? The answer is constrained to those three typed actions by the
 service definition, so a coordinator built and tested against a stub does not
 change when a real model sits behind it.
+
+### The other side of the trade: `note`
+
+Triage answers "what should happen to work *we* cannot finish". `note` answers
+the question the robots on the receiving end have: another robot has offered
+work and sent a sentence with it — does that sentence change what we bid?
+
+They are separate agents because they are separate judgements from separate
+evidence. Triage reasons from a fault it watched happen, over logs and world
+state it collected. `note` subscribes to nothing at all: everything the decision
+needs arrives in the request, because a note is *about* one specific
+announcement and context from any other moment would be context about something
+else.
+
+The response is closed at three values — `keep`, `revise` (by a signed cost
+delta), `withdraw` — and that closure is doing more work here than anywhere else
+in this package. This is the only place where text written by another robot
+reaches a decision, and the radio's `src` is self-asserted with no MAC, so the
+sentence in front of the model could have been written by anyone in range. The
+prompt does not defend against that and is not asked to. What defends against it
+is that all three answers only adjust a bid this robot was already going to
+make: a note cannot start an auction, take on work, drop work, or move the
+robot. The worst outcome from the worst possible sentence is one bad bid, or
+silence.
+
+Both ends are refused twice — `note_node._parse_revision` before it goes on the
+wire, and the coordinator's `note_client` after it arrives.
+
+The cost of a note falls on the reader, which is why triage's prompt tells it to
+send one rarely: reading a note makes the receiving auction deliberative, and a
+5 s announce window becomes 45 s while every bidder thinks. `note_timeout_sec`
+(15 s) has to stay under the note-stretched bid backoff (20 s at the defaults),
+or every answer lands after its own bid and is counted `notes_too_late`; the
+coordinator warns at startup when it does not.
 
 `ltl_gen` exposes the same translation over ROS — `/mission/generate_ltl` or the
 `/mission/text` topic — but the arbiter does not go through it. The gate needs a
@@ -130,13 +164,32 @@ works on aarch64). Without it, plans are accepted and recorded as
 | `world_state` | action feedback/status topics, `/mission_status` | `/world_state` (1 Hz JSON) | — |
 | `ltl_gen` | `/mission/text` | `/mission/ltl` | `/mission/generate_ltl` (`amiga_interfaces/srv/GenerateLTL`) |
 | `triage` | `/bt/status_change`, `/rosout`, `/world_state`, `/mission/xml`, `/mission/abort`, `/mission/planner_status` | `/coordination/infeasible` | `/coordination/interpret_anomaly` (`amiga_interfaces/srv/InterpretAnomaly`) |
+| `note` | — | — | `/coordination/interpret_note` (`amiga_interfaces/srv/InterpretNote`) |
 | `mission_bridge` | `mission/xml` | `mission/coordination_state` (latched JSON) | — |
 
 `mission_bridge` is the only node here whose topic names are *relative*, so a
-namespaced instance is per-robot. Everything else in this package hardcodes
-absolute names (`/mission/xml`, `/bt/status_change`, `/world_state`), which is
-fine for one agent stack and is what has to change before a fleet can run one
-stack per robot.
+namespaced instance is per-robot with no further help. Everything else in this
+package hardcodes absolute names, which is right for the real machine — one
+agent stack, sitting outside any namespace.
+
+### One stack per robot
+
+A simulated fleet needs several, and `robot_agents.launch.py` is how: it starts
+the same set under a namespace and remaps every absolute name above to its
+*relative* form, letting the node's own namespace place it.
+`ROBOT_INTERFACES` in that file is the list, and a name missing from it is
+visible rather than subtle — one subscription still on the fleet-wide topic
+shows up immediately as every robot reacting to one robot's fault.
+
+Making the source names relative is still the real fix; the remap table is what
+lets the fleet run before that lands, without editing five node files.
+
+**`/rosout` is deliberately not remapped.** There is one log stream per machine,
+not one per robot, and both the planner and triage read it for the explanation
+behind a fault — the fault event says a node failed, the node itself logged why.
+Remapping it to a topic nobody publishes would quietly empty their most useful
+context. The cost is that in a simulated fleet they also see each other's log
+lines, which is noise in a prompt and nothing worse.
 
 Every agent also publishes `/agents/<node_name>/status` as JSON. That topic is
 `TRANSIENT_LOCAL` depth 1, so a late subscriber still gets the last value — which
@@ -151,8 +204,12 @@ colcon build --packages-select amiga_interfaces amiga_ros2_agents
 source install/setup.bash
 
 ros2 launch amiga_ros2_agents replanning.launch.py   # planner + arbiter + world state
-ros2 launch amiga_ros2_agents agents.launch.py       # all four
+ros2 launch amiga_ros2_agents agents.launch.py       # every agent, unnamespaced
 ros2 run amiga_ros2_agents arbiter                   # one agent
+
+# One robot's stack inside a fleet. `make sim ROBOT_COUNT=3 AGENTS=true`
+# includes this per robot; see the remap note above.
+ros2 launch amiga_ros2_agents robot_agents.launch.py namespace:=amiga2
 ```
 
 There is no wrapper script. `setup.cfg` sets the console-script shebang to

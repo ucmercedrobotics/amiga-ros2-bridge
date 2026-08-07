@@ -35,10 +35,11 @@ bool   our_feasible
 # above meaningless rather than zero.
 bool   our_bid_unknown
 
-# This robot, now.
-uint8  battery_percent
-# Live peers as JSON: id, capabilities, load, last pose, last seen.
-string peers_json
+# There is deliberately no battery or peer list here, unlike InterpretAnomaly.
+# The note context the coordinator holds carries neither, and a field the
+# caller can only fill with a placeholder is a field the model reads as fact.
+# What the battery is worth to this decision is already inside our_cost, which
+# fitness computed from it.
 ---
 # Response
 # One of exactly three revisions, named by string because ROS IDL has no

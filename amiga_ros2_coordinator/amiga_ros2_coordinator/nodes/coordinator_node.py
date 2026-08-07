@@ -75,6 +75,7 @@ from ..vocabulary.capabilities import (
 )
 from ..engine.coordinator import CoordinatorParams, CoordinatorSession
 from ..vocabulary.model import Task, capability_names
+from ..adapters.note_client import optional_client as note_client
 from ..adapters.triage_client import optional_client
 
 
@@ -295,6 +296,33 @@ class CoordinatorNode(Node):
             if bool(self.get_parameter("use_triage_agent").value)
             else None
         )
+        self._note_agent = (
+            note_client(
+                self,
+                service_name=str(self.get_parameter("note_service").value),
+                timeout_sec=float(self.get_parameter("note_timeout_sec").value),
+                callback_group=self._blocking_group,
+            )
+            if bool(self.get_parameter("use_note_agent").value)
+            else None
+        )
+        # Warned rather than refused, because this is a relationship between a
+        # deadline and a budget rather than an incoherent mechanism: every
+        # answer would simply arrive too late to use, the bids would go out
+        # unrevised, and notes_too_late would count them. That is a working
+        # auction producing a misleading experiment, which is worth a line at
+        # startup and not worth refusing to run.
+        note_deadline = float(self.get_parameter("note_timeout_sec").value)
+        if (
+            self._note_agent is not None
+            and note_deadline >= params.note_bid_max_backoff_sec
+        ):
+            self.get_logger().warn(
+                f"note_timeout_sec={note_deadline}s is not shorter than the "
+                f"note-stretched bid backoff "
+                f"({params.note_bid_max_backoff_sec}s): every interpretation "
+                f"will land after its bid and be counted notes_too_late"
+            )
         self._default_capabilities = cap_mask(
             *(
                 ELEMENT_CAPABILITY[str(name).strip()]
@@ -571,6 +599,32 @@ class CoordinatorNode(Node):
             ),
         )
         self.declare_parameter(
+            "use_note_agent",
+            True,
+            _describe(
+                "Ask the note agent what another robot's note means for our "
+                "bid. False falls back to the injected interpreter, which "
+                "defaults to recording notes and revising nothing."
+            ),
+        )
+        self.declare_parameter(
+            "note_service",
+            "/coordination/interpret_note",
+            _describe("Service the note agent serves revisions on."),
+        )
+        self.declare_parameter(
+            "note_timeout_sec",
+            15.0,
+            _describe(
+                "How long to wait for a revision. This has to stay under the "
+                "note-stretched bid backoff -- bid_max_backoff_sec x "
+                "note_backoff_multiplier, 20 s at the defaults -- because an "
+                "answer that lands after the bid has gone out is counted "
+                "notes_too_late and changes nothing. Shorter than the triage "
+                "timeout for that reason, not because the model is faster."
+            ),
+        )
+        self.declare_parameter(
             "default_task_capabilities",
             [CAPABILITY_ELEMENT[Capability.MOVE_TO_TREE_ID]],
             _describe(
@@ -704,7 +758,12 @@ class CoordinatorNode(Node):
         requests = self.session.take_note_requests()
         if not requests:
             return
-        interpreter = self.session.note_interpreter()
+        # The agent when one is configured, the injected interpreter otherwise.
+        # Unlike the anomaly path there is no reason to refuse to proceed when
+        # the agent is unreachable: interpret_note raising already means "bid
+        # unrevised", so falling through to IgnoreNotes would reach the same
+        # bid by a quieter route. The agent is tried and its failure is logged.
+        interpreter = self._note_agent or self.session.note_interpreter()
         for context in requests:
             try:
                 revision = interpreter.interpret_note(context)

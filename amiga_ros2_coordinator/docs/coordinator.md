@@ -38,6 +38,21 @@ make sim ROBOT_COUNT=3          # three robots, one virtual radio, three coordin
 make fleet-scenario             # tell robot 2 it cannot finish task 42
 ```
 
+With a model endpoint available, the same fleet with reasoning in it:
+
+```bash
+export AGENT_MODEL=hosted_vllm/openai/gpt-oss-20b
+export AGENT_API_BASE=http://localhost:8000/v1
+make sim ROBOT_COUNT=3 AGENTS=true    # + a full agent stack per robot
+make fleet-fault FAULT_ROBOT=amiga2   # fail a leaf and let the loop earn the shed
+```
+
+`AGENTS=true` is what puts a model behind both reasoning points. It also
+switches `use_triage_agent` and `use_note_agent` on — left true with no agent
+running, every escalation waits out `triage_timeout_sec` (45 s) and then changes
+nothing, which is indistinguishable from a coordinator that ignored it. The two
+follow the same flag for that reason.
+
 `sim_bringup.launch.py` brings up the coordination layer alongside each robot
 when `launch_coordination` is true, which is the default: one `lora_sim` medium
 for the fleet, and per robot a `lora_bridge`, a `mission_bridge` and a
@@ -54,6 +69,14 @@ demo: it is the manual injection point for any bench run.
 ros2 run amiga_ros2_coordinator escalate --robot amiga2 --task 42 --tree 60 \
     --note "north end of row 7 is flooded; approach from the south"
 ```
+
+`fleet-fault` is the other injection point, and the honest one. It publishes a
+leaf failure on one robot's `bt/status_change`, which is what `bt_runner` itself
+publishes when a node fails — so the mission planner edits the plan, the arbiter
+reviews the edit, and only when that loop gives up does triage decide to shed.
+`fleet-scenario` skips all of that and hands the decision over ready-made. Both
+are worth having: one shows the decision being earned, the other reproduces an
+auction on demand.
 
 Two knobs make the fleet asymmetric, which is what makes an auction worth
 watching. `batteries:=100,20,100` gives robot 2 a flat battery, which enters the
@@ -241,13 +264,20 @@ acceptance suite pins this from the other side — the nav and mission fakes
 
 ## The two reasoning points
 
-Exactly two questions here need judgement rather than a decision procedure.
-Both are ports; one is now answered by a real agent, the other is still stubbed.
+Exactly two questions here need judgement rather than a decision procedure, and
+they sit on opposite sides of the same trade: what to do about work we cannot
+finish, and what to make of an offer somebody else sent. Both are ports, and
+both now have a real agent behind them.
 
 | point | answered by | in tests |
 | --- | --- | --- |
 | `interpret_anomaly(context) -> ActionSchema` | the **triage agent** (`amiga_ros2_agents/coordination/triage_node.py`) over the BT fault, the `/rosout` window around it, the world state and the live peer list | `ScriptedInterpreter` |
-| `replan_and_verify(delta) -> ReplanResult` | **not built** — the existing replan generation + LTL verification (SPIN/Spot, Z3 for the BT) | `AcceptEverything` |
+| `interpret_note(context) -> BidRevision` | the **note agent** (`amiga_ros2_agents/coordination/note_node.py`) over a peer's sentence, the offer it annotates and what our own fitness already concluded | `ScriptedNoteInterpreter`, `IgnoreNotes` |
+
+`replan_and_verify(delta) -> ReplanResult` is a third port but not a reasoning
+point: `VerifyingReplanner` hands the delta to the arbiter, which applies the
+edit and runs it through the same LTL gate a local replan gets. See
+[the wired ports](#the-wired-ports-coordinator_sim).
 
 The load-bearing constraint is the **closed union**: `interpret_anomaly`
 returns one of exactly three typed actions and never free text.
@@ -398,6 +428,9 @@ and duplicate every send.
 | `use_triage_agent` | `true` | ask the triage agent. `false` falls back to the local stub — a bench setting, not a policy |
 | `triage_service` | `/coordination/interpret_anomaly` | the agent's service |
 | `triage_timeout_sec` | `45.0` | on a timeout the anomaly goes unanswered and the task stays put |
+| `use_note_agent` | `true` | ask the note agent what a peer's note means for our bid. `false` falls back to the injected interpreter, which defaults to changing nothing |
+| `note_service` | `/coordination/interpret_note` | the agent's service |
+| `note_timeout_sec` | `15.0` | **must stay under `bid_max_backoff_sec` × `note_backoff_multiplier`** (20 s at the defaults). An answer after that lands once the bid has gone and is counted `notes_too_late`; the node warns at startup if the two are set so that every answer would be. Shorter than the triage timeout for that reason, not because the model is faster |
 | `default_task_capabilities` | `[MoveToTreeID]` | assumed for a task the escalation names without describing. Only reached when the triage agent could not resolve the failing node to a subtree — an ordinary escalation carries the real action set |
 
 `node_id` and the retransmit settings belong to the in-process reliability node
@@ -476,6 +509,21 @@ dropped**. The channel is a node that copies frames, so it can filter by
 decoded message type and remove exactly the `Freeform` frames and nothing else.
 A note improves a decision; it is never what makes one possible.
 
+[`test_note_client.py`](../test/test_note_client.py) guards the seam that note
+travels through in the other direction. It is the same kind of test as
+[`test_triage_client.py`](../test/test_triage_client.py) and matters more, for
+one reason: a note is text a peer broadcast over a radio whose source address is
+self-asserted and carries no MAC. The closed union is the entire defence, so
+what is pinned is that every valid revision maps to its member and everything
+else raises — including, explicitly, the three words from the *anomaly* schema,
+which a confused model might reach for and which must not be met halfway.
+
+Both fleet tests disable `use_triage_agent` and `use_note_agent`. Left on, the
+node builds service clients instead of using the injected stubs, and each one
+spends its `wait_for_service` timeout discovering nothing is there — which not
+only skips the scripted interpreters but perturbs the very bid timing the
+suppression test measures.
+
 ## Not done yet
 
 - **`replan_and_verify` — asynchrony.** Now `VerifyingReplanner`, which reaches
@@ -518,7 +566,12 @@ A note improves a decision; it is never what makes one possible.
   (`note_window_multiplier`), because a model call is orders of magnitude
   slower than a bid backoff.
 
-  Still deferred: a real `NoteInterpreter` behind the port (the default,
-  `IgnoreNotes`, records notes and changes nothing), and forward error
-  correction for the fragments — a note that loses one is dropped.
+  Both ends now have a model behind them. Triage authors the note as part of
+  the call it was already making to decide to shed (`InterpretAnomaly.srv`'s
+  `note` field), and the note agent reads it. `IgnoreNotes` remains the default
+  *port*, but `use_note_agent` defaults true, so a running node consults the
+  agent unless told not to.
+
+  Still deferred: forward error correction for the fragments — a note that
+  loses one is dropped, and the counter that says so is the experiment.
 - **Cross-vendor / wire-level A2A** (Paper B).

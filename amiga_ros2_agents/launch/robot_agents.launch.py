@@ -42,7 +42,7 @@ PACKAGE = "amiga_ros2_agents"
 # world_state first, so the planner's /world_state window has frames in it by
 # the time the first BT failure arrives. mission_bridge last: it is not an agent
 # and has no model, but it belongs to the same per-robot set.
-AGENTS = ["world_state", "arbiter", "mission_planner", "triage"]
+AGENTS = ["world_state", "arbiter", "mission_planner", "triage", "note"]
 
 #: Every absolute name any node in this package publishes, subscribes, serves or
 #: calls, except /rosout (see the module docstring). Grouped by who owns it so a
@@ -67,9 +67,10 @@ ROBOT_INTERFACES = [
     "/follow_tree_id_waypoint/_action/status",
     "/segment_leaves/_action/feedback",
     "/segment_leaves/_action/status",
-    # The coordinator's two doors.
+    # The coordinator's three doors.
     "/coordination/infeasible",
     "/coordination/interpret_anomaly",
+    "/coordination/interpret_note",
 ]
 
 #: StatusPublisher builds /agents/<node name>/status from the node's *name*,

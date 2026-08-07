@@ -1,4 +1,5 @@
-"""The mission layer: the tree runner, the TCP mission intake and the orchard.
+"""
+The mission layer: the tree runner, the TCP mission intake and the orchard.
 
     ros2 launch amiga_ros2_behavior_tree bt.launch.py
     ros2 launch amiga_ros2_behavior_tree bt.launch.py namespace:=amiga2 port:=12347

@@ -69,6 +69,7 @@ class Response:
         self.target_a = 0
         self.target_b = 0
         self.priority = 0
+        self.note = ""
         self.rationale = ""
         self.model = "test-model"
         for name, value in fields.items():

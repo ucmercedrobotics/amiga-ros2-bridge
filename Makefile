@@ -174,10 +174,16 @@ ROBOT_COUNT ?= 1
 LORA_SF ?= 7
 # Set COORDINATION=false to bring up the robots without the radio layer.
 COORDINATION ?= true
+# AGENTS=true adds a full LLM stack per robot (world state, arbiter, mission
+# planner, triage, note). Needs AGENT_MODEL/AGENT_API_BASE set -- see
+# amiga_ros2_agents/README.md. It also switches the coordinators over to asking
+# those agents instead of their local stubs.
+AGENTS ?= false
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
 		launch_coordination:=$(COORDINATION) \
+		launch_agents:=$(AGENTS) \
 		lora_spreading_factor:=$(LORA_SF)
 
 # Poke one robot into shedding a task, so the fleet has something to auction.
@@ -193,6 +199,20 @@ fleet-scenario:
 		--task $(SCENARIO_TASK) \
 		--tree $(SCENARIO_TREE) \
 		--note "$(SCENARIO_NOTE)"
+
+# The other injection point: fail a leaf in one robot's tree and let the real
+# loop run -- mission planner edits, arbiter reviews, and only if that gives up
+# does triage escalate. Slower and less certain than fleet-scenario, and the
+# only one of the two where the decision to shed is earned rather than handed
+# over. FAULT_NODE must name a leaf in that robot's own mission XML.
+FAULT_ROBOT ?= amiga2
+FAULT_NODE ?= Visit_Tree_60
+FAULT_REASON ?= navigation failed: no progress toward the tree for 90s
+# Robot 1 is unnamespaced, so an empty FAULT_ROBOT must not produce "//bt/...".
+FAULT_TOPIC = $(if $(FAULT_ROBOT),/$(FAULT_ROBOT)/bt/status_change,/bt/status_change)
+fleet-fault:
+	ros2 topic pub --once "$(FAULT_TOPIC)" std_msgs/msg/String \
+		"{data: '{\"node\":\"$(FAULT_NODE)\",\"reason\":\"$(FAULT_REASON)\",\"timestamp_ms\":0}'}"
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

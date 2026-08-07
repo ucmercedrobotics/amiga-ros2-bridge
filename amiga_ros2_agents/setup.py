@@ -47,6 +47,7 @@ setup(
             "arbiter = amiga_ros2_agents.replanning.arbiter_node:main",
             "world_state = amiga_ros2_agents.replanning.world_state_node:main",
             "triage = amiga_ros2_agents.coordination.triage_node:main",
+            "note = amiga_ros2_agents.coordination.note_node:main",
             "mission_bridge = amiga_ros2_agents.coordination.mission_bridge_node:main",
         ],
     },

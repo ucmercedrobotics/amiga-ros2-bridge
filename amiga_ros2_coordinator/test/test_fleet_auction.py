@@ -89,7 +89,13 @@ FAST_PARAMS = {
     "heartbeat_period_sec": 0.3,
     "tick_period_sec": 0.02,
     "stats_period_sec": 0.0,
+    # Both reasoning points are stubs here, injected by Robot below. Left
+    # enabled, the node builds service clients instead and each one spends its
+    # wait_for_service timeout discovering that no agent is running -- which
+    # not only skips the scripted interpreters but perturbs the very timing
+    # these tests measure, since that wait happens on the blocking group.
     "use_triage_agent": False,
+    "use_note_agent": False,
 }
 
 
