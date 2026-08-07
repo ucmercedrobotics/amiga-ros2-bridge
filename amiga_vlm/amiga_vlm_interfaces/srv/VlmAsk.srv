@@ -1,0 +1,5 @@
+string question
+---
+bool success
+string answer
+string error
