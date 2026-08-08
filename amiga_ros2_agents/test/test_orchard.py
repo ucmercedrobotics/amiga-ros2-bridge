@@ -1,6 +1,6 @@
 """Tree -> aisle, against the orchard the robots are actually given.
 
-The map comes out of ``examples/aisle_sample_10_60.bin`` -- the second frame of
+The map comes out of ``examples/sample_20_64.bin`` -- the second frame of
 the mission binary, which is the same document ``tcp_demux_node`` republishes on
 ``/orchard/tree_info_json``. Testing against a fixture shaped to pass would
 prove nothing: the claim is that ``aisle_of`` and the mission planner agree
@@ -23,7 +23,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 EXAMPLES = os.path.join(REPO, "amiga_ros2_behavior_tree", "examples")
 
 #: What the three planner-written plans say, read off their MoveToAisleHead ids.
-PLANNER_ANSWER = {10: 10, 60: 6, 12: 12, 62: 8, 14: 14, 64: 10}
+PLANNER_ANSWER = {20: 2, 64: 4, 22: 2, 66: 4, 24: 2, 68: 4}
 
 
 def frames(name: str):
@@ -40,7 +40,7 @@ def frames(name: str):
 
 @pytest.fixture(scope="module")
 def payload():
-    return frames("aisle_sample_10_60.bin")[1].decode()
+    return frames("sample_20_64.bin")[1].decode()
 
 
 @pytest.fixture(scope="module")
@@ -63,23 +63,26 @@ def test_the_map_agrees_with_the_mission_planner(orchard_map):
 
 def test_an_attribute_string_answers_the_same_as_an_int(orchard_map):
     """Every caller is holding an XML attribute, which is a string."""
-    assert orchard_map.aisle_of("60") == orchard_map.aisle_of(60) == 6
+    assert orchard_map.aisle_of("20") == orchard_map.aisle_of(20) == 2
 
 
 def test_the_outer_column_has_no_aisle_of_its_own(payload, orchard_map):
-    """18 columns, 17 aisles: the last column's index is not one.
+    """One more row/column than there are aisles: the last index is not one.
 
     Returning it anyway would look right and send a robot down a lane that does
     not exist. Unknown is a suggestion nobody makes; wrong is a robot in the
-    wrong place.
+    wrong place. The field that carries the aisle is whichever one
+    ``traversal_axis`` names -- this fixture travels by row, so it is ``row``,
+    not ``col``.
     """
     data = json.loads(payload)
-    columns = {tree["col"] for tree in data["trees"]}
+    field = orchard.AXIS_FIELD[data["traversal_axis"]]
+    positions = {tree[field] for tree in data["trees"]}
     aisles = {int(key) for key in data["aisle_to_entrance_indices"]}
-    outer = max(columns)
-    assert outer not in aisles, "the fixture no longer has an outer column"
+    outer = max(positions)
+    assert outer not in aisles, "the fixture no longer has an outer row/column"
 
-    stranded = [t["tree_index"] for t in data["trees"] if t["col"] == outer]
+    stranded = [t["tree_index"] for t in data["trees"] if t[field] == outer]
     assert stranded
     for tree in stranded:
         assert orchard_map.aisle_of(tree) is None
@@ -118,13 +121,13 @@ def test_an_unplaceable_tree_is_left_out_rather_than_defaulted(orchard_map):
 
 def test_aisles_are_the_ones_with_a_tree_in_them(orchard_map):
     """Every aisle a real objective could name, for reciting the valid set."""
-    assert {10, 6, 12, 8, 14} <= orchard_map.aisles()
+    assert {2, 4} <= orchard_map.aisles()
 
 
 def test_facts_for_trees_is_scoped_to_what_was_asked(orchard_map):
     """A replan prompt should pay for the trees it has, not the whole orchard."""
-    facts = orchard.facts_for_trees(orchard_map, ["10", "60"])
-    assert facts == {10: 10, 60: 6}
+    facts = orchard.facts_for_trees(orchard_map, ["20", "64"])
+    assert facts == {20: 2, 64: 4}
 
 
 def test_facts_for_trees_reports_unknown_rather_than_dropping_it(orchard_map):

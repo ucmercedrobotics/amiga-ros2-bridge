@@ -443,6 +443,15 @@ def _task_of_group(parent, leaves) -> Optional[MissionTask]:
     original, because what leaves here has to be a plan on its own: the winner
     grafts this XML into its mission, and a bare list of leaves is not
     something the schema accepts.
+
+    The name always comes from the group's own leaves, never from ``parent``'s
+    descriptive name -- even when this group happens to be the only one and so
+    spans everything ``parent`` has. Falling back to the parent's name there
+    used to make a task's id depend on how much of the mission was left
+    standing around it: shedding a sibling task could reduce a mission to this
+    group alone, which reads identically to a mission that only ever had one
+    unit, and the surviving task's id would jump to match. A unit's identity
+    has to survive its sibling being given away.
     """
     if not leaves:
         return None
@@ -450,8 +459,6 @@ def _task_of_group(parent, leaves) -> Optional[MissionTask]:
     for leaf in leaves:
         group.append(deepcopy(leaf))
     name = _name_of(group)
-    if parent.get("name") and len(leaves) == len(list(parent)):
-        name = parent.get("name")
     group.set("name", name or "task")
     return MissionTask(
         task_id=_task_id_of(group, name),

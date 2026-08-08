@@ -155,7 +155,7 @@ def test_a_rebuilt_task_carries_the_way_in(schema):
     assert not rebuilt.dropped
 
     aisle = etree.fromstring(rebuilt.xml.encode())[0]
-    assert aisle.get("id") == "6", "tree 60 is in column 6 of the real orchard"
+    assert aisle.get("id") == "4", "tree 60 is in aisle 4 of the real orchard"
     assert aisle.get("action_name") == "move_to_aisle_head"
 
 
@@ -267,7 +267,7 @@ def _orchard():
     """The real orchard, from the second frame of a real mission binary."""
     import struct
 
-    with open(os.path.join(EXAMPLES, "aisle_sample_10_60.bin"), "rb") as handle:
+    with open(os.path.join(EXAMPLES, "sample_20_64.bin"), "rb") as handle:
         data = handle.read()
     offset, frames = 0, []
     while offset + 4 <= len(data):

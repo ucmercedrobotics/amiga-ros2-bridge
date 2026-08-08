@@ -93,7 +93,7 @@ def replan_requests(node):
 
 def real_orchard():
     """The tree -> aisle map out of a real mission binary."""
-    with open(os.path.join(EXAMPLES, "aisle_sample_10_60.bin"), "rb") as handle:
+    with open(os.path.join(EXAMPLES, "sample_20_64.bin"), "rb") as handle:
         data = handle.read()
     offset, frames = 0, []
     while offset + 4 <= len(data):
@@ -375,13 +375,13 @@ def test_with_the_orchard_the_winner_builds_the_way_in_itself(arbiter):
 
     assert asked[0]["dropped"] == []
     document = etree.fromstring(arbiter.active_mission_xml.encode())
-    assert "6" in {el.get("id") for el in document.iter("MoveToAisleHead")}
+    assert "4" in {el.get("id") for el in document.iter("MoveToAisleHead")}
 
 
 def test_shedding_a_task_reports_what_it_left_behind():
     """The user's opening ask: after a task is given away, replan anyway.
 
-    Shedding is not a local edit. Tree 60 leaves and the drive back out of its
+    Shedding is not a local edit. Tree 64 leaves and the drive back out of its
     aisle stays -- a step that now establishes something nothing in the plan
     needs. That is invisible in the XML and obvious in the ontology's terms, so
     the planner is told in those terms rather than handed a diff and asked to
@@ -389,20 +389,20 @@ def test_shedding_a_task_reports_what_it_left_behind():
     """
     node = ArbiterNode()
     try:
-        with open(os.path.join(EXAMPLES, "aisle_sample_10_60.xml")) as handle:
+        with open(os.path.join(EXAMPLES, "sample_20_64.xml")) as handle:
             node.active_mission_xml = handle.read()
         node.orchard = real_orchard()
         node.ltl_verification = False  # the finding is the subject, not the gate
         asked = replan_requests(node)
 
-        task_id = _task_id_of(node.active_mission_xml, "move_to_tree60")
+        task_id = _task_id_of(node.active_mission_xml, "ApproachTree64")
         assert call(node, request_for(task_id=task_id, removing=True)).accepted
 
         assert asked[0]["cause"] == "task_transferred"
         findings = " ".join(asked[0]["findings"])
-        assert "exit_col_10" in findings
-        assert "in_aisle(10)" in findings
-        assert "enter_col_10" not in findings, "the way in to work we kept is not dead"
+        assert "ExitRow2" in findings
+        assert "in_aisle(2)" in findings
+        assert "EnterRow2" not in findings, "the way in to work we kept is not dead"
     finally:
         node.destroy_node()
 

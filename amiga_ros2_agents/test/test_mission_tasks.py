@@ -72,11 +72,13 @@ def test_a_sampling_mission_splits_into_one_task_per_tree():
 
 
 #: The three plans the upstream mission planner wrote for the three-robot run,
-#: and the tree each of their two units is about.
+#: and the tree each of their two units is about. These replaced the deleted
+#: aisle_sample_*.xml fixtures; the XML here is extracted straight out of the
+#: matching sample_*.bin, which is what the planner actually emits.
 PLANNER_PLANS = {
-    "aisle_sample_10_60.xml": [10, 60],
-    "aisle_sample_12_62.xml": [12, 62],
-    "aisle_sample_14_64.xml": [14, 64],
+    "sample_20_64.xml": [20, 64],
+    "sample_22_66.xml": [22, 66],
+    "sample_24_68.xml": [24, 68],
 }
 
 
