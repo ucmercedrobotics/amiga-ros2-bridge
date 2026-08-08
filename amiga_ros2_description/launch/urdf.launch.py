@@ -17,6 +17,16 @@ def qualify_ros(ns, topic):
 
 def launch_setup(context, *args, **kwargs):
     ns = LaunchConfiguration("namespace").perform(context)
+    # Prepended to every frame_id robot_state_publisher broadcasts. Without
+    # it, every namespaced robot's TF still says "base_link", "lidar_link",
+    # etc. — fine for this robot's own Nav2/EKF (they only ever look at their
+    # own /<ns>/tf topic), but ambiguous the moment something watches more
+    # than one robot's TF at once (Foxglove's 3D panel merges every robot's
+    # tf2_msgs/TFMessage into one tree keyed by frame_id). "map" is
+    # deliberately not part of this: every robot shares one physical GPS
+    # datum (see base_ekf.yaml), so "map" names the same real-world origin
+    # for the whole fleet and is left bare everywhere.
+    frame_prefix = f"{ns}/" if ns else ""
 
     return [
         Node(
@@ -49,7 +59,8 @@ def launch_setup(context, *args, **kwargs):
                             ]
                         ),
                         value_type=str,
-                    )
+                    ),
+                    "frame_prefix": frame_prefix,
                 }
             ],
             # tf2_ros hardcodes /tf, /tf_static as absolute regardless of

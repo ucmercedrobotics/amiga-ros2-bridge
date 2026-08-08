@@ -65,6 +65,23 @@ uint16 reason_code
 #   drop | hold | request_human
 string fallback
 
+# re_delegate only: what a robot taking this on should know, in free text,
+# broadcast alongside the announcement. Empty is the normal answer.
+#
+# It costs nothing to produce -- this call already has the whole context in
+# front of it, so the sentence comes out of a model call the system was making
+# anyway. What it costs is on the *receiving* side: a note makes the auction
+# deliberative, and at the coordinator's defaults that turns a 5 s announce
+# window into 45 s while every bidder reads it. So an empty note is not a
+# degraded version of a good one -- it is the right answer whenever the
+# structured fields above already say everything true about the task.
+#
+# Hard limit is 8 fragments of 41 bytes = 328 UTF-8 bytes at the default radio
+# payload budget. A longer note is not truncated: the coordinator logs it and
+# announces without it, because where to cut a sentence is a decision with
+# meaning and the radio is not in a position to make it.
+string note
+
 # drop_task only, same vocabulary.
 string disposition
 

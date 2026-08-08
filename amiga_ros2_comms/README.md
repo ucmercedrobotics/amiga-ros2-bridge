@@ -73,6 +73,31 @@ Overflow is a named policy, not an accident. `tx_overflow_policy` defaults to
 `drop_oldest`, because a stale coordination message is worthless; `drop_newest`
 is available where order beats freshness.
 
+### Transmit priority
+
+The outbound ring is priority-ordered; the inbound one is plain FIFO. Only the
+outbound one is a real bottleneck: while the modem is busy it stops draining the
+serial port, the write blocks, and frames pile up here. Whichever frame is at the
+head when the port frees up gets the channel — so on a half-duplex radio the
+order of this queue decides whether an ACK beats the sender's retransmit timer.
+
+Two classes, `urgent` and `bulk`. ACK and GRANT are urgent because they are the
+two messages that hold task ownership together; everything else is repeated by
+the coordinator on its own schedule or is cheap to lose. Which message gets which
+class is decided in
+[`reliability/priority.py`](amiga_ros2_comms/reliability/priority.py) and rides
+on the `LoRaFrame.priority` field, so the bridge orders its queue by sorting on
+an integer and still never reads a payload byte.
+
+FIFO holds *within* a class, so a retransmit never overtakes the original it
+repeats. Capacity is shared across classes, and **bulk can never displace
+urgent** — under either overflow policy the victim is chosen from the least
+urgent occupied band, or the newcomer is refused. `tx_dropped_urgent` and
+`tx_dropped_bulk` in the stats line say which traffic a busy queue shed.
+
+This is ordering only. Nothing here paces, budgets or rate-limits the link;
+frames go out as fast as the radio accepts them.
+
 ### Parameters
 
 | parameter | default | notes |
@@ -80,9 +105,9 @@ is available where order beats freshness.
 | `serial_port` | `/dev/ttyUSB0` | device path of the LoRa Arduino |
 | `baud` | `115200` | **assumed** - must match firmware `Serial.begin()` |
 | `max_payload_bytes` | `200` | **assumed** - see the dwell-time discussion in the contract |
-| `tx_queue_depth` | `32` | outbound ring capacity, in frames |
+| `tx_queue_depth` | `32` | outbound ring capacity, in frames; one budget shared across priority classes |
 | `rx_queue_depth` | `64` | inbound queue capacity, in frames |
-| `tx_overflow_policy` | `drop_oldest` | or `drop_newest` |
+| `tx_overflow_policy` | `drop_oldest` | or `drop_newest`; applies within a priority class |
 | `rx_overflow_policy` | `drop_oldest` | or `drop_newest` |
 | `rx_link_stats` | `none` | or `header`, once firmware reports RSSI/SNR |
 | `read_timeout_sec` | `0.1` | |
@@ -141,10 +166,12 @@ packet = encode(Heartbeat(
 msg = decode(packet)                # Heartbeat(...)
 ```
 
-Five built message types — HEARTBEAT, TASK_ANNOUNCE, BID, GRANT, ACK — each 7 to
-19 bytes, every one of which fits in a single LoRa payload with room to spare
-even at SF10. Tag `0x07` (FREEFORM) is reserved and cleanly refused in both
-directions; `0x06` is a retired gap where HAZARD used to be.
+Six built message types. Five of them — HEARTBEAT, TASK_ANNOUNCE, BID, GRANT,
+ACK — are 7 to 19 bytes, each fitting a single LoRa payload with room to spare
+even at SF10. The sixth, FREEFORM (`0x07`), carries free text about a task and
+is the one variable-length type: 9 bytes of header plus a slice of UTF-8, split
+across several packets by the reliability layer. `0x06` is a retired gap where
+HAZARD used to be.
 
 The vocabulary is not invented. A `Capability` is a **behaviour-tree action
 type** — the elements of `ActionGroup` in
@@ -216,11 +243,15 @@ exist would buy a serialization hop and a second failure mode.
 
 ### Scope
 
-**Message IDs, ACKs, retransmit timers, a dedup cache.** No bidding, no
-arbitration, no ownership decisions, no LLM — if a change involves *deciding*
-something it belongs in the coordinator. No fragmentation either: every built
-message is one packet by construction, and splitting arrives with FREEFORM or
-not at all.
+**Message IDs, ACKs, retransmit timers, a dedup cache, a transmit-ordering
+label, and the splitting and reassembly of notes.** No bidding, no arbitration,
+no ownership decisions, no LLM — if a change involves *deciding* something it
+belongs in the coordinator.
+
+Fragmentation applies to notes and nothing else; every other built message is
+one packet by construction. Notes are broadcast and therefore unACKed, so one
+that loses a fragment is dropped rather than repaired — acceptable only because
+the announcement a note accompanies carries the requirement by itself.
 
 ### Retransmit timing
 
@@ -293,5 +324,6 @@ the transport nothing but a decision about what to send.
 Its `coordinator` executable runs a `ReliabilityNode` in its own process, so do
 not launch `lora_reliability.launch.py` alongside it.
 
-Still deferred below it, deliberately: **fragmentation and reassembly**, built
-together with the reserved FREEFORM type or not at all.
+Still deferred below it, deliberately: **forward error correction for notes**.
+A note that loses a fragment is dropped, and the rate at which that happens is
+the measurement, not a defect to engineer around.

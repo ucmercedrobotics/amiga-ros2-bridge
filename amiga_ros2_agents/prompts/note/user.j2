@@ -1,0 +1,26 @@
+Robot {{ announcer_id }} is offering task {{ task_id }} and sent this note:
+
+{{ note_text }}
+
+The offer it annotates:
+
+{% if bid_known %}
+  actions needed : {{ required_actions }}
+  where          : {{ where }}
+  priority       : {{ priority }}
+{% else %}
+  The note reached us before the offer did, so we do not yet know what the
+  task needs or where it is. Judge the sentence on its own terms.
+{% endif %}
+
+What our own bid would be, before reading the note:
+
+{% if bid_known %}
+  cost     : {{ our_cost }} of {{ cost_max }}
+  eta      : {{ our_eta_s }} seconds
+  feasible : {{ "yes" if our_feasible else "no — we were not going to bid" }}
+{% else %}
+  Not assessed yet.
+{% endif %}
+
+Does the note change that bid?

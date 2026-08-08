@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import rclpy
-from amiga_ros2_agents.status import STATUS_QOS
+from amiga_ros2_agents.runtime.status import STATUS_QOS
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -37,8 +37,8 @@ from std_msgs.msg import String
 
 PYBIN = sys.executable
 
-PLANNER_CMD = [PYBIN, "-m", "amiga_ros2_agents.mission_planner_node"]
-ARBITER_CMD = [PYBIN, "-m", "amiga_ros2_agents.arbiter_node"]
+PLANNER_CMD = [PYBIN, "-m", "amiga_ros2_agents.replanning.mission_planner_node"]
+ARBITER_CMD = [PYBIN, "-m", "amiga_ros2_agents.replanning.arbiter_node"]
 
 # Readiness: each agent latches a startup snapshot on /agents/<name>/status
 # (TRANSIENT_LOCAL), so receiving one means the node is up with its callbacks wired.

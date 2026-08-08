@@ -67,14 +67,16 @@ does not check that it advances, and does not remember one.
 | `0x04` | GRANT | 7 | built |
 | `0x05` | ACK | 7 | built |
 | `0x06` | — | — | **retired, do not reuse** (was HAZARD) |
-| `0x07` | FREEFORM | — | **reserved, not implemented** |
+| `0x07` | FREEFORM | 9 + text | built — the one variable-length type |
 
 Tag values are frozen once shipped. Renumbering one silently breaks every peer,
 so `test_message_type_values_match_the_wire_contract` pins them.
 
-Every type is fixed-size, so the encoded length is a constant per tag rather
-than a range — which is why `MAX_MESSAGE_BYTES` (19) is an exact bound and not
-an estimate.
+Every type but FREEFORM is fixed-size, so the encoded length is a constant per
+tag rather than a range — which is why `MAX_MESSAGE_BYTES` (19) is an exact
+bound and not an estimate. FREEFORM is excluded from that number rather than
+folded in with an assumed tail length: for it there is no such constant, and
+`reliability/node.py` budgets a request-plus-ACK round trip against it.
 
 `0x06` carried HAZARD. It was removed because nothing in this system ever
 detected or published a hazard: the type described a capability the robot does
@@ -302,20 +304,46 @@ avoid, because nothing downstream can detect it.
 Both are fleet conventions. The codec packs whatever it is given and does not
 enforce them.
 
-## The reserved FREEFORM tag
+## FREEFORM: one fragment of a note
 
-`0x07` is **allocated but not implemented**, and encoding one is refused.
+`0x07` carries free text about a task somebody announced. It is the only type
+with a variable-length field and the only one where several packets make up one
+logical message.
 
-Free text cannot be bounded to a single packet, so FREEFORM needs
-fragmentation — which belongs to the reliability layer, which does not exist
-yet. Claiming the tag now stops anything else taking `0x07` in the meantime.
+| field | width | meaning |
+| --- | --- | --- |
+| `task_id` | `H` | the announced task this text is about — the join key |
+| `note_id` | `B` | which note, so two notes about one task cannot interleave |
+| `frag_index` | `B` | 0-based position; fragments may arrive in any order |
+| `frag_count` | `B` | carried in *every* fragment, not just the first |
+| `text` | tail | this fragment's slice of the UTF-8 encoding |
 
-Decoding a `0x07` frame raises `ReservedMessageType`, which is deliberately
-**not** the same as `UnknownMessageType` and is not a subclass of it in either
-direction. "We know exactly what this is and cannot handle it yet" and "we have
-never heard of this" call for different operator responses, so a caller must be
-able to tell them apart with `isinstance`. The reserved check happens before any
-length validation, so a truncated FREEFORM frame still reports as reserved.
+9 bytes of overhead including the common header, so at the 50-byte design
+budget a fragment carries **41 bytes of text**; under the FCC 400 ms dwell
+limit at SF10, where a whole payload is 24 bytes, it carries **15**.
+
+`frag_count` is in every fragment because on a lossy broadcast the one that
+would have told you the length is exactly as likely to be lost as any other.
+
+`text` is bytes rather than str because the cut is made on a byte budget, so a
+multi-byte character can straddle two fragments — only the reassembled whole is
+decodable. Splitting and reassembly are **not here**: they live in
+`reliability/notes.py`, and one call to `encode` still produces one packet.
+
+The tail is defined as "the rest of the buffer", so for this type alone extra
+bytes past the fixed fields are the message rather than a `TrailingBytes`
+error. An empty tail is a legal packet, which is what lets a note whose text
+divides evenly end with a fragment carrying nothing.
+
+### Reserved tags
+
+`RESERVED_TYPES` is now empty, but `ReservedMessageType` remains. It is the
+mechanism for a tag we allocate ahead of implementing, not a list with one
+entry in it: a peer running ahead of us should hear "not yet" rather than
+"never heard of it". It is deliberately **not** a subclass of
+`UnknownMessageType` in either direction, and the check happens before any
+length validation, so a reserved tag reports as reserved even in a malformed
+frame.
 
 ## Errors
 
@@ -326,7 +354,7 @@ the same arrangement `lora.framing.FrameError` uses.
 | exception | `kind` | raised when |
 | --- | --- | --- |
 | `UnknownMessageType` | `unknown_type` | tag is not allocated |
-| `ReservedMessageType` | `reserved_type` | tag is `0x07` FREEFORM |
+| `ReservedMessageType` | `reserved_type` | tag is allocated but unbuilt (none currently are) |
 | `TruncatedMessage` | `truncated` | buffer ends before the message does (includes empty) |
 | `TrailingBytes` | `trailing` | buffer holds a whole message and then more |
 | `PayloadTooLarge` | `oversize` | encoded size exceeds `max_payload_bytes` |
@@ -410,5 +438,10 @@ the [reliability layer](reliability_layer.md):
 - ~~Any *use* of `(src, seq)` — dedup, ACK tracking, retransmit.~~
 - ~~Wiring the codec to `/lora/tx` and `/lora/rx`. Nothing here imports ROS.~~
 - ~~Deciding **when** to send an ACK.~~
-- Fragmentation and reassembly, and therefore FREEFORM. Still deferred, and now
-  the only thing standing between the vocabulary and completeness.
+- ~~Fragmentation and reassembly, and therefore FREEFORM.~~ Built, in
+  `reliability/notes.py`. The vocabulary is complete; what is still deferred is
+  any *forward error correction* for it. A note that loses a fragment is
+  dropped rather than repaired, which is acceptable only because the
+  announcement a note accompanies carries the machine-readable requirement by
+  itself — so losing the text costs a bidder context and costs the auction
+  nothing.

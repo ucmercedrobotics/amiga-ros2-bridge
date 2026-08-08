@@ -42,12 +42,16 @@ from amiga_ros2_coordinator import (  # noqa: E402
     CoordinatorParams,
     CoordinatorSession,
     DropTask,
+    KeepBid,
     LocalDisposition,
     ReDelegate,
     RejectEverything,
+    ReviseBid,
     ScriptedInterpreter,
+    ScriptedNoteInterpreter,
     Task,
     TaskState,
+    WithdrawBid,
 )
 from fakes import (  # noqa: E402
     Clock,
@@ -170,6 +174,7 @@ def make_rig(
     replanner=None,
     nav=None,
     mission=None,
+    note_interpreter=None,
     **param_overrides,
 ):
     """Build a coordinator wired to fakes, with jitter and heartbeats off.
@@ -205,8 +210,10 @@ def make_rig(
         params=params,
         clock=clock,
         on_event=events,
+        note_interpreter=note_interpreter,
     )
     reliability.set_on_deliver(session.on_message)
+    reliability.set_on_note(session.on_note)
     return Rig(
         session,
         reliability,
@@ -255,17 +262,23 @@ def test_infeasible_task_is_announced_granted_to_the_best_bid_and_transferred():
     assert grant.msg.winner_id == PEER_B
     assert grant.msg.task_id == TASK_ID
 
-    # Sent, not delivered. The task is still ours.
+    # Sent, not delivered. The task is still ours -- but it left our own
+    # mission back when we announced it, because we had already reported we
+    # could not do it and sitting on it through the auction would have us
+    # waiting on work we cannot perform.
     assert rig.session.state_of(TASK_ID) is TaskState.GRANTED
     assert rig.mission.transferred == []
-    assert rig.replanner.calls == 0
+    assert rig.replanner.calls == 1
+    assert rig.replanner.deltas[0].removed == [task]
 
     grant.deliver()
 
     assert rig.session.state_of(TASK_ID) is TaskState.TRANSFERRED
     assert rig.mission.transferred == [task]
+    # Still one. The transfer confirms the removal was right; it is not a
+    # second change, and calling the verifier on a non-change is how a verifier
+    # learns to distrust its inputs.
     assert rig.replanner.calls == 1
-    assert rig.replanner.deltas[0].removed == [task]
     assert rig.session.owned_tasks == []
 
 
@@ -443,10 +456,14 @@ def test_an_announce_window_that_closes_with_no_bid_sends_no_grant():
 
     assert rig.rel.grants == [], "no viable bid means no GRANT"
     assert rig.session.stats()["auctions_no_bid"] == 1
-    # HOLD: still ours, unexecuted, and nothing was committed to verify.
+    # HOLD: still ours, unexecuted. The task left our mission when we
+    # announced it and comes back now that nobody took it -- two real changes,
+    # and the second is what stops the robot quietly losing the work.
     assert rig.session.state_of(TASK_ID) is TaskState.OURS
     assert rig.mission.released == []
-    assert rig.replanner.calls == 0
+    assert rig.replanner.calls == 2
+    assert rig.replanner.deltas[0].removed == [task]
+    assert rig.replanner.deltas[1].added == [task]
 
 
 def test_a_no_bid_window_with_a_drop_fallback_releases_the_task():
@@ -890,7 +907,10 @@ def test_a_transfer_raises_the_flag_and_interrupts_nothing():
     rig.session.report_infeasible(task)
     rig.bid_from(PEER_A, cost=40)
 
-    assert rig.preempt.requested is False, "announcing changes nothing we execute"
+    # Announcing already asked the tree to yield: we are no longer going to do
+    # this task, so continuing to execute it is the thing being interrupted.
+    assert rig.preempt.requested is True
+    assert str(TASK_ID) in rig.preempt.reason
 
     rig.rel.last_grant.deliver()
 
@@ -1094,3 +1114,327 @@ def test_settled_tasks_are_eventually_forgotten():
 
     rig.advance(101.0)
     assert rig.session.state_of(TASK_ID) is None
+
+
+# ==========================================================================
+# Group 10: notes
+#
+# Free text bound to a task_id. The load-bearing claim is the last test in the
+# group: strip every note away and the auction is what it always was.
+# ==========================================================================
+
+CAVEAT = "soft ground past the gate, the arm needs the long reach"
+
+
+def test_a_redelegation_with_a_note_broadcasts_the_note_before_the_announce():
+    # The ordering the whole design turns on. A bidder fixes its bid the
+    # instant an ANNOUNCE decodes, so text arriving afterwards has missed the
+    # only synchronous moment there is.
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter([ReDelegate(task=task, note=CAVEAT)])
+    )
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+
+    rig.session.report_infeasible(task)
+
+    assert rig.rel.notes == [(TASK_ID, CAVEAT)]
+    assert rig.session.stats()["notes_sent"] == 1
+    # Sent, and only then announced.
+    assert len(rig.rel.sent(TaskAnnounce)) == 1
+
+
+def test_an_announcement_with_a_note_runs_on_the_deliberative_clock():
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter([ReDelegate(task=task, note=CAVEAT)]),
+        announce_window_sec=5.0,
+        note_window_multiplier=9.0,
+    )
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+    rig.session.report_infeasible(task)
+
+    # The fast window would have closed and granted by now.
+    rig.advance(6.0)
+    assert rig.rel.reliable == []
+    assert rig.session.state_of(TASK_ID) is TaskState.ANNOUNCED
+
+    rig.bid_from(PEER_A, cost=40)
+    rig.advance(40.0)
+    assert len(rig.rel.reliable) == 1
+
+
+def test_an_announcement_without_a_note_keeps_the_fast_clock():
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter([ReDelegate(task=task)]),
+        announce_window_sec=5.0,
+        note_window_multiplier=9.0,
+    )
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+    rig.session.report_infeasible(task)
+    rig.bid_from(PEER_A, cost=40)
+
+    rig.advance(6.0)
+    assert len(rig.rel.reliable) == 1
+    assert rig.rel.notes == []
+
+
+def test_a_note_that_cannot_be_sent_leaves_an_ordinary_fast_auction():
+    # A note failing to go out is not an auction failing. The announcement
+    # carries the requirement by itself.
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter([ReDelegate(task=task, note=CAVEAT)]),
+        announce_window_sec=5.0,
+        note_window_multiplier=9.0,
+    )
+    rig.rel.refuse_note = True
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+    rig.session.report_infeasible(task)
+    rig.bid_from(PEER_A, cost=40)
+
+    assert rig.session.stats()["notes_sent"] == 0
+    rig.advance(6.0)
+    assert len(rig.rel.reliable) == 1
+
+
+# -- the bidder side -------------------------------------------------------
+
+
+def test_a_note_arriving_before_its_announce_is_queued_for_interpretation():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    task = a_task()
+
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, task)
+
+    requests = rig.session.take_note_requests()
+    assert len(requests) == 1
+    assert requests[0].text == CAVEAT
+    assert (requests[0].src, requests[0].task_id) == (PEER_A, TASK_ID)
+    # And it knows what our own fitness said, so the model adjusts a number
+    # rather than inventing one.
+    assert requests[0].cost is not None
+    assert rig.session.stats()["notes_before_announce"] == 1
+
+
+def test_a_note_lands_on_the_deliberative_backoff_so_an_answer_can_arrive():
+    # The backoff is linear in cost, so the absolute wait depends on fitness.
+    # What the note changes is the ceiling it is scaled against, which is why
+    # this compares the two clocks rather than asserting a number of seconds.
+    def bid_at(with_note):
+        rig = make_rig(
+            note_interpreter=ScriptedNoteInterpreter([KeepBid()]),
+            bid_max_backoff_sec=2.0,
+            note_backoff_multiplier=10.0,
+        )
+        if with_note:
+            rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+        rig.announce_from(PEER_A, a_task())
+        started = rig.clock.now
+        for _ in range(2000):
+            if rig.rel.sent(Bid):
+                return rig.clock.now - started
+            rig.advance(0.01)
+        raise AssertionError("the bid never went out")
+
+    fast, deliberative = bid_at(False), bid_at(True)
+    assert deliberative > fast
+    assert deliberative == pytest.approx(fast * 10, rel=0.25)
+
+
+def test_a_revision_raises_the_bid_and_pushes_it_later():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([ReviseBid(cost_delta=60)]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, a_task())
+
+    (context,) = rig.session.take_note_requests()
+    before = context.cost
+    rig.session.revise_bid(TASK_ID, ReviseBid(cost_delta=60, reason="muddy"))
+
+    rig.advance(60.0)
+    (bid,) = rig.rel.sent(Bid)
+    assert bid.cost == before + 60
+    assert rig.session.stats()["bids_revised_by_note"] == 1
+
+
+def test_a_revision_can_also_say_the_job_is_easier_than_it_looks():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, "the gate is already open, ignore the map")
+    rig.announce_from(PEER_A, a_task())
+
+    (context,) = rig.session.take_note_requests()
+    rig.session.revise_bid(TASK_ID, ReviseBid(cost_delta=-1000))
+
+    rig.advance(60.0)
+    (bid,) = rig.rel.sent(Bid)
+    assert bid.cost == 0  # clamped, never negative
+    assert context.cost > 0
+
+
+def test_a_withdrawal_means_we_never_bid_at_all():
+    # Distinct from a very bad bid: silence, rather than an answer that could
+    # win an auction nobody better entered.
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([WithdrawBid()]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, a_task())
+
+    rig.session.revise_bid(TASK_ID, WithdrawBid(reason="we cannot do that safely"))
+
+    rig.advance(60.0)
+    assert rig.rel.sent(Bid) == []
+    assert rig.session.stats()["bids_withdrawn_by_note"] == 1
+
+
+def test_keeping_the_bid_leaves_it_exactly_where_fitness_put_it():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, a_task())
+
+    (context,) = rig.session.take_note_requests()
+    rig.session.revise_bid(TASK_ID, KeepBid(reason="nothing that changes our cost"))
+
+    rig.advance(60.0)
+    (bid,) = rig.rel.sent(Bid)
+    assert bid.cost == context.cost
+    assert rig.session.stats()["bids_kept_after_note"] == 1
+
+
+def test_a_note_arriving_after_the_announce_can_still_revise_an_unsent_bid():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.announce_from(PEER_A, a_task())
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+
+    assert rig.session.stats()["notes_after_announce"] == 1
+    (context,) = rig.session.take_note_requests()
+    assert context.text == CAVEAT
+
+
+def test_a_note_arriving_after_the_bid_went_out_changes_nothing():
+    # A revision cannot be un-transmitted. Counted, logged, ignored.
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([WithdrawBid()]))
+    rig.announce_from(PEER_A, a_task())
+    rig.advance(10.0)
+    assert len(rig.rel.sent(Bid)) == 1
+
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+
+    assert rig.session.stats()["notes_too_late"] == 1
+    assert rig.session.take_note_requests() == []
+    assert len(rig.rel.sent(Bid)) == 1
+
+
+def test_a_revision_that_arrives_after_the_bid_is_refused():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, a_task())
+    rig.advance(60.0)
+    assert len(rig.rel.sent(Bid)) == 1
+
+    assert rig.session.revise_bid(TASK_ID, WithdrawBid()) is None
+    assert rig.session.stats()["notes_too_late"] >= 1
+
+
+def test_a_note_about_a_task_we_are_not_bidding_on_is_ignored():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.rel.note_arrives(PEER_A, 4242, CAVEAT)  # must not raise
+    assert rig.session.stats()["notes_orphaned"] == 1
+    assert rig.session.take_note_requests() == []
+
+
+def test_something_outside_the_revision_union_is_refused():
+    # The closed union is the guarantee, and it does not get to be skipped by
+    # taking a different door.
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+    rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+    rig.announce_from(PEER_A, a_task())
+
+    assert rig.session.revise_bid(TASK_ID, "raise the cost a bit") is None
+    assert rig.session.stats()["note_interpret_failed"] == 1
+
+    rig.advance(60.0)
+    assert len(rig.rel.sent(Bid)) == 1  # unrevised, but still bid
+
+
+def test_our_own_note_echoed_back_is_ignored():
+    rig = make_rig(note_interpreter=ScriptedNoteInterpreter([WithdrawBid()]))
+    rig.rel.note_arrives(US, TASK_ID, CAVEAT)
+    assert rig.session.take_note_requests() == []
+
+
+def test_the_auction_is_unchanged_when_every_note_fragment_is_lost():
+    # The property the whole design rests on. A note that never arrives costs a
+    # bidder context; it must not cost the auction its outcome.
+    def run(deliver_note):
+        rig = make_rig(note_interpreter=ScriptedNoteInterpreter([KeepBid()]))
+        if deliver_note:
+            rig.rel.note_arrives(PEER_A, TASK_ID, CAVEAT)
+        rig.announce_from(PEER_A, a_task())
+        rig.advance(60.0)
+        (bid,) = rig.rel.sent(Bid)
+        return bid.cost, bid.eta_s, bid.feasible
+
+    assert run(deliver_note=False) == run(deliver_note=True)
+
+
+# ==========================================================================
+# Group 11: the announcer does not sit on a task it has offered away
+# ==========================================================================
+
+
+def test_announcing_takes_the_task_out_of_our_own_mission():
+    # We reported it infeasible; holding it through the auction would have us
+    # waiting on work we already said we cannot do -- for a deliberative
+    # window, most of a minute.
+    task = a_task()
+    rig = make_rig(interpreter=ScriptedInterpreter([ReDelegate(task=task)]))
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+
+    rig.session.report_infeasible(task)
+
+    removals = [d for d in rig.replanner.deltas if d.removed]
+    assert len(removals) == 1
+    assert removals[0].removed == [task]
+    assert rig.preempt.requests
+
+
+def test_the_task_is_not_removed_twice_when_the_transfer_confirms():
+    # It left at announce time. Calling the verifier on a non-change is how a
+    # verifier learns to distrust its inputs.
+    task = a_task()
+    rig = make_rig(interpreter=ScriptedInterpreter([ReDelegate(task=task)]))
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+    rig.session.report_infeasible(task)
+    rig.bid_from(PEER_A, cost=40)
+    rig.rel.last_grant.deliver()
+
+    assert rig.session.state_of(TASK_ID) is TaskState.TRANSFERRED
+    assert len([d for d in rig.replanner.deltas if d.removed]) == 1
+
+
+def test_an_auction_that_finds_nobody_puts_the_task_back():
+    # The counterpart of announcing. Otherwise the robot has quietly lost the
+    # work it was holding.
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter(
+            [ReDelegate(task=task, fallback=LocalDisposition.HOLD)]
+        ),
+        announce_window_sec=5.0,
+    )
+    rig.session.own(task)
+    rig.heartbeat_from(PEER_A)
+    rig.session.report_infeasible(task)
+    rig.advance(6.0)
+
+    assert rig.session.state_of(TASK_ID) is TaskState.OURS
+    additions = [d for d in rig.replanner.deltas if d.added]
+    assert len(additions) == 1
+    assert additions[0].added == [task]

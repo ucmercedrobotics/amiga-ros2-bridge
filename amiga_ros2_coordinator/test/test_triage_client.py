@@ -25,15 +25,15 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     TargetKind,
     cap_mask,
 )
-from amiga_ros2_coordinator.model import Task  # noqa: E402
-from amiga_ros2_coordinator.schema import (  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.model import Task  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.schema import (  # noqa: E402
     AddTask,
     AnomalyContext,
     DropTask,
     LocalDisposition,
     ReDelegate,
 )
-from amiga_ros2_coordinator.triage_client import (  # noqa: E402
+from amiga_ros2_coordinator.adapters.triage_client import (  # noqa: E402
     TriageClient,
     TriageRefused,
     _peers_json,
@@ -69,6 +69,7 @@ class Response:
         self.target_a = 0
         self.target_b = 0
         self.priority = 0
+        self.note = ""
         self.rationale = ""
         self.model = "test-model"
         for name, value in fields.items():
@@ -234,7 +235,7 @@ def test_a_nonsense_disposition_falls_back_rather_than_crashing():
 
 
 def test_the_peer_list_carries_what_a_delegation_decision_needs():
-    from amiga_ros2_coordinator.model import PeerRecord
+    from amiga_ros2_coordinator.vocabulary.model import PeerRecord
 
     context = AnomalyContext(
         task=TASK,

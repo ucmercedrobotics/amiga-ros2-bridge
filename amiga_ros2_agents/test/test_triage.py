@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from amiga_ros2_agents import triage_node as tn
+from amiga_ros2_agents.coordination import triage_node as tn
 from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
 
 
@@ -244,6 +244,68 @@ def test_a_list_of_actions_is_refused(node):
             '[{"action": "re_delegate", "reason_code": "task_failed"}, '
             '{"action": "drop_task", "reason_code": "task_failed"}]'
         )
+
+
+# ==========================================================================
+# The note: free text that rides with an announcement
+# ==========================================================================
+
+
+def test_a_note_on_a_re_delegate_survives_the_parse(node):
+    decision = node._parse_decision(
+        reply(
+            action="re_delegate",
+            reason_code="task_failed",
+            fallback="hold",
+            note="north end of row 7 is flooded; approach from the south",
+        )
+    )
+    assert decision["note"].startswith("north end of row 7 is flooded")
+
+
+def test_a_note_on_anything_but_a_re_delegate_is_dropped(node):
+    # There is no announcement for it to ride on, so it would be text
+    # addressed to nobody -- and a drop_task that carried one would look, in
+    # the counters, like a note that was sent.
+    decision = node._parse_decision(
+        reply(
+            action="drop_task",
+            reason_code="task_failed",
+            disposition="drop",
+            note="the tree was felled last season",
+        )
+    )
+    assert decision["note"] == ""
+
+
+def test_an_absent_note_is_the_normal_case_and_parses_to_empty(node):
+    decision = node._parse_decision(
+        reply(action="re_delegate", reason_code="task_failed", fallback="hold")
+    )
+    assert decision["note"] == ""
+
+
+def test_a_note_too_long_for_the_radio_is_refused_rather_than_cut(node):
+    # Refusing fails the whole interpretation, and the coordinator then leaves
+    # the task alone. That is louder than an announcement that quietly lost
+    # half its context -- and where to cut a sentence is a decision with
+    # meaning that neither this parser nor the codec is able to make.
+    with pytest.raises(ValueError, match="Say less"):
+        node._parse_decision(
+            reply(
+                action="re_delegate",
+                reason_code="task_failed",
+                fallback="hold",
+                note="x" * (tn.NOTE_MAX_BYTES + 1),
+            )
+        )
+
+
+def test_the_note_budget_comes_from_the_radio_and_not_from_a_constant(node):
+    # 328 bytes at the 50-byte payload default: eight fragments of 41. If the
+    # payload budget moves, this moves with it -- the prompt is rendered from
+    # the same number, so the model is asked for what will actually fit.
+    assert tn.NOTE_MAX_BYTES == 8 * 41
 
 
 def test_add_task_does_not_inherit_the_failed_tasks_id(node, monkeypatch):

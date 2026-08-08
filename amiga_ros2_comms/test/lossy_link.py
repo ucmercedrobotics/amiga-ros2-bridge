@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from amiga_ros2_comms.codec import CodecError, Message, decode  # noqa: E402
 from amiga_ros2_comms.reliability import (  # noqa: E402
+    URGENT,
     ReliabilityParams,
     ReliabilitySession,
 )
@@ -60,6 +61,10 @@ class Frame:
     payload: bytes
     #: Decoded for the test's convenience. None if it will not decode.
     msg: Optional[Message]
+    #: The transmit class the session labelled it with. Recorded rather than
+    #: recomputed from ``msg``, so a test asserting on it is checking what the
+    #: session actually asked for and not what it should have asked for.
+    priority: int = URGENT
     dropped: bool = False
 
     @property
@@ -83,20 +88,26 @@ class Medium:
         self._nodes[session.node_id] = session
         return session
 
-    def sender_for(self, node_id: int) -> Callable[[bytes], None]:
+    def sender_for(self, node_id: int) -> Callable[[bytes, int], None]:
         """The ``send_frame`` callable a session at ``node_id`` should use."""
 
-        def send(payload: bytes) -> None:
-            self._transmit(node_id, payload)
+        def send(payload: bytes, priority: int = URGENT) -> None:
+            self._transmit(node_id, payload, priority)
 
         return send
 
-    def _transmit(self, node_id: int, payload: bytes) -> None:
+    def _transmit(self, node_id: int, payload: bytes, priority: int = URGENT) -> None:
         try:
             msg = decode(payload)
         except CodecError:
             msg = None
-        frame = Frame(index=len(self.frames), sender=node_id, payload=payload, msg=msg)
+        frame = Frame(
+            index=len(self.frames),
+            sender=node_id,
+            payload=payload,
+            msg=msg,
+            priority=int(priority),
+        )
         frame.dropped = bool(self.drop_rule(frame))
         self.frames.append(frame)
         if frame.dropped:
@@ -194,18 +205,25 @@ class Fleet:
         )
         self.sessions = {}
         self.inbox = {}
+        #: Completed notes each node was handed, in order. Separate from inbox
+        #: because a note is not a message: it arrives whole or not at all, and
+        #: it never reaches on_deliver.
+        self.notes = {}
         for node_id in node_ids:
             recorder = Recorder()
+            notes: list = []
             session = ReliabilitySession(
                 node_id=node_id,
                 send_frame=self.medium.sender_for(node_id),
                 params=self.params,
                 on_deliver=recorder,
                 clock=self.clock,
+                on_note=notes.append,
             )
             self.medium.attach(session)
             self.sessions[node_id] = session
             self.inbox[node_id] = recorder
+            self.notes[node_id] = notes
 
     def __getitem__(self, node_id: int) -> ReliabilitySession:
         return self.sessions[node_id]

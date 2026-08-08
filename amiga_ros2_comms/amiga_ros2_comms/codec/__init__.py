@@ -3,7 +3,8 @@
 
 A pure serialization library: ``encode(msg) -> bytes``, ``decode(bytes) -> msg``.
 It sits above the LoRa bridge's opaque framing and below the reliability layer
-that will eventually own IDs, ACKs, dedup, retransmit and fragmentation.
+that owns IDs, ACKs, dedup, retransmit, and the splitting and reassembly of the
+one type here that spans several packets.
 
     firmware -> serial bridge -> codec -> reliability -> coordinator
 
@@ -15,6 +16,7 @@ The wire format is specified in ``docs/codec_message_vocabulary.md``.
 from .codec import (
     MAX_MESSAGE_BYTES,
     MESSAGE_SIZES,
+    NOTE_HEADER_BYTES,
     CodecError,
     FieldRangeError,
     PayloadTooLarge,
@@ -35,9 +37,12 @@ from .definitions import (
     DEFAULT_MAX_PAYLOAD_BYTES,
     ETA_MAX_S,
     ETA_RESOLUTION_S,
+    FRAG_MAX,
     GPS_SCALE,
     HEADER_BYTES,
     INDEX_MAX,
+    MAX_NOTE_FRAGMENTS,
+    NOTE_ID_MAX,
     PRIORITY_MAX,
     RESERVED_TYPES,
     ROBOT_ID_NONE,
@@ -62,6 +67,7 @@ from .messages import (
     BUILT_MESSAGES,
     Ack,
     Bid,
+    Freeform,
     Grant,
     Heartbeat,
     Message,
@@ -79,6 +85,7 @@ __all__ = [
     "Bid",
     "Grant",
     "Ack",
+    "Freeform",
     "BUILT_MESSAGES",
     # Vocabulary
     "MessageType",
@@ -122,6 +129,13 @@ __all__ = [
     "TASK_ID_MAX",
     "PRIORITY_MAX",
     "COST_MAX",
+    # Notes. NOTE_HEADER_BYTES is what a splitter subtracts from a payload
+    # budget to get text bytes per fragment; MAX_NOTE_FRAGMENTS is how many
+    # fragments it may produce.
+    "NOTE_HEADER_BYTES",
+    "MAX_NOTE_FRAGMENTS",
+    "NOTE_ID_MAX",
+    "FRAG_MAX",
     # Errors
     "CodecError",
     "UnknownMessageType",

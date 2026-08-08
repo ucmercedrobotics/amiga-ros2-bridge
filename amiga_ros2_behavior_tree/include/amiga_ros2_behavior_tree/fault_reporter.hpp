@@ -8,15 +8,23 @@
 //
 // What is reported, and what is not:
 //
-//   * Only transitions *to* FAILURE. RUNNING and SUCCESS are the tree working.
-//   * Only leaves (ACTION, CONDITION). A failing leaf makes its ancestors fail
-//     too, and reporting each of them would fire the planner once per level
-//     for a single fault.
-//   * One event per node per `min_interval_sec`. A ReactiveSequence re-ticks a
-//     failing condition at the tick rate; without this, one stuck condition is
-//     a fault storm.
-//   * Separately, the whole tree returning FAILURE, which is the mission-level
-//     fact and is not a leaf event at all.
+//   * Transitions *to* FAILURE, on leaves (ACTION, CONDITION). A failing leaf
+//     makes its ancestors fail too, and reporting each of them would fire the
+//     planner once per level for a single fault.
+//   * Transitions *to* SUCCESS, on ACTION leaves only -- not CONDITION, which
+//     succeeds on nearly every tick and would flood this topic for no
+//     consumer that needs it. This is the only place in the stack that ever
+//     sees an individual leaf finish, so it is also the only source a
+//     replanner has for "this objective is already done" -- see
+//     MissionPlannerNode's completed-objectives ledger.
+//   * One event per node per `min_interval_sec`, tracked separately for
+//     FAILURE and SUCCESS: a ReactiveSequence re-ticks a failing condition at
+//     the tick rate, so without throttling one stuck condition is a fault
+//     storm -- but a leaf that fails and is retried into SUCCESS within the
+//     same window must still report both, or the ledger never learns it
+//     finished.
+//   * Separately, the whole tree returning FAILURE or SUCCESS, which is the
+//     mission-level fact and is not a leaf event at all.
 //
 // The payload deliberately does not try to say *why* the node failed. This
 // callback is handed a status transition and nothing else -- the actual reason
@@ -70,8 +78,11 @@ private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_;
   double min_interval_sec_;
-  // UID -> seconds (node clock) of that node's last reported fault.
-  std::unordered_map<uint16_t, double> last_reported_;
+  // UID -> seconds (node clock) of that node's last reported event, kept
+  // separately per status so a FAILURE does not throttle the SUCCESS that
+  // follows it (or vice versa) within the same window.
+  std::unordered_map<uint16_t, double> last_failure_reported_;
+  std::unordered_map<uint16_t, double> last_success_reported_;
 };
 
 // One publisher for the life of the process. TRANSIENT_LOCAL, so an agent that

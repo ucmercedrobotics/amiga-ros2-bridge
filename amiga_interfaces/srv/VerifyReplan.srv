@@ -1,0 +1,66 @@
+# Request
+# The coordinator telling the arbiter that this robot's workload changed, and
+# asking for the resulting mission to be gated.
+#
+# The task is described in the coordinator's flat vocabulary -- the same fields
+# TASK_ANNOUNCE carries -- and NOT as mission XML. The coordinator never parses
+# a mission: it learns about tasks over the radio, and the agents own the plan.
+# So the arbiter applies the edit to the plan it already holds, which also means
+# there is no window in which the coordinator is editing a copy the arbiter has
+# since replaced.
+#
+# A service and not a topic because the coordinator needs a verdict it can
+# correlate with the request it sent, and /mission/candidate_xml carries no
+# request id.
+
+# True when the task is leaving (transferred away, or dropped); false when it
+# is arriving (won at auction, or discovered locally).
+bool removing
+
+# The task, in the coordinator's terms. Bit indices for required_capabilities
+# are amiga_ros2_comms codec.Capability; target_kind is codec.TargetKind:
+#   0 NONE   nowhere of its own      1 TREE   target_a is a tree index
+#   2 AISLE  target_a is an aisle    3 GPS    target_a/b are lat/lon x 1e7
+uint16 task_id
+uint16 required_capabilities
+uint8 target_kind
+int32 target_a
+int32 target_b
+uint8 priority
+
+# The task's subtree, when this robot has it -- a task shed by our own planner
+# carries its XML. Empty when the task was won from a peer, which is the normal
+# case: TASK_ANNOUNCE has no room for a subtree, so the arbiter rebuilds one
+# from the fields above.
+string task_xml
+
+# What the robot that raised this task said about doing it -- the deliberative
+# note that preceded the announcement, if one arrived before we bid.
+#
+# The only field here that no amount of structure could derive. Everything else
+# says what the work is; this says something about the world that only the peer
+# knows, and it is what the winner's planner is given when it elaborates the
+# rebuilt task. Empty is the normal case: most announcements carry no note.
+#
+# Captured at bid time, not fetched here. A note expires (session.note_ttl_sec)
+# well inside the window a note-bearing announcement stays open, so asking for
+# it again at GRANT would usually find nothing.
+string note
+
+---
+# Response
+
+# Whether the edit was committed. False means the coordinator hands the task
+# back: release it and re-raise it as an anomaly.
+bool accepted
+
+# Whether a formal check actually ran. Distinct from `accepted` on purpose -- a
+# plan accepted because no formula could be generated, or because SPIN is not
+# installed, has not been verified, and a mission that completes having never
+# been checked must not be indistinguishable from one that passed.
+bool verified
+
+# Why. On rejection this is the SPIN counterexample, or the name of the
+# proposition the plan failed to establish, which is what makes the rejection
+# something the next attempt can act on.
+string reason

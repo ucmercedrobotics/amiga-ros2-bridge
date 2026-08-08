@@ -1,0 +1,73 @@
+# Request
+# Another robot broadcast a sentence about work it is offering. This asks what
+# that sentence means for the bid we were about to make.
+#
+# This is the one place in the system where text written by a peer reaches a
+# decision. The src below is self-asserted and carries no MAC, so the sentence
+# could have been written by anyone within radio range. That is survivable only
+# because of how narrow the response is: the worst a hostile or confused note
+# can do is make this robot bid worse, or not bid. It cannot start an auction,
+# take on work, drop work, or move the robot.
+
+# The note, reassembled, as the sender wrote it. Prompt material, never parsed.
+string note_text
+# Who says they sent it.
+uint8  announcer_id
+# The announced task the text is about. The join key: there is no such thing
+# here as text about nothing in particular.
+uint16 task_id
+
+# The offer itself, as it arrived -- so the model can tell a note that adds
+# something from a note that restates the fields. Zeroed if the note beat the
+# announcement here, which is the intended ordering.
+uint16 required_capabilities
+uint8  target_kind
+int32  target_a
+int32  target_b
+uint8  priority
+
+# What our own fitness already decided, before reading this. The model is asked
+# to adjust a number rather than invent one.
+uint16 our_cost
+uint16 our_eta_s
+bool   our_feasible
+# True when we have not assessed the task yet, which makes the three fields
+# above meaningless rather than zero.
+bool   our_bid_unknown
+
+# There is deliberately no battery or peer list here, unlike InterpretAnomaly.
+# The note context the coordinator holds carries neither, and a field the
+# caller can only fill with a placeholder is a field the model reads as fact.
+# What the battery is worth to this decision is already inside our_cost, which
+# fitness computed from it.
+---
+# Response
+# One of exactly three revisions, named by string because ROS IDL has no
+# unions. amiga_ros2_coordinator/vocabulary/schema.py is the authority on what
+# they mean, and its client refuses anything that is not one of them.
+#
+#   keep      the note changes nothing; bid as fitness decided
+#   revise    the work is harder (or easier) than the offer implied; bid, but
+#             adjusted by cost_delta
+#   withdraw  do not bid on this at all
+#
+# withdraw is not a very large revise. A withdrawn bid is silence; a bad bid is
+# still an answer that can win an auction nobody better entered.
+bool   ok
+# Why not, when ok is false. The coordinator treats a failed interpretation as
+# "no interpretation available" and bids exactly as fitness decided -- the safe
+# direction, and the behaviour the auction had before notes existed.
+string error
+string revision
+
+# revise only. Relative on purpose: the note is read before, or alongside, the
+# announcement it annotates, so an absolute cost would be one the model
+# invented. Negative is allowed -- a note can say the job is easier than it
+# looks. The coordinator clamps the result into 0..COST_MAX.
+int32  cost_delta
+
+# The agent's own account of why. Logged, never parsed.
+string reason
+string rationale
+# The model that produced the revision.
+string model

@@ -34,10 +34,19 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     Message,
     TaskAnnounce,
 )
-from amiga_ros2_comms.reliability import Outcome  # noqa: E402
+from amiga_ros2_comms.reliability import (  # noqa: E402
+    CompletedNote,
+    Outcome,
+    text_bytes_per_fragment,
+)
+
+#: What one note fragment carries at the default payload budget. Taken from the
+#: real splitter rather than restated, so the fake's fragment count stays the
+#: number the radio would actually produce.
+NOTE_TEXT_BYTES = text_bytes_per_fragment()
 
 from amiga_ros2_comms.codec import Target  # noqa: E402
-from amiga_ros2_coordinator.model import Task  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.model import Task  # noqa: E402
 
 
 class Clock:
@@ -91,8 +100,16 @@ class FakeReliability:
         self.broadcasts: "List[Message]" = []
         self.reliable: "List[SentReliable]" = []
         self._on_deliver: Optional[Callable[[Message], None]] = None
+        self._on_note: Optional[Callable[[object], None]] = None
         #: Set to make the next send_reliable raise, for the refused-send path.
         self.refuse_reliable = False
+        #: (task_id, text) per send_note, in order.
+        self.notes: "List[tuple]" = []
+        #: Completed inbound notes, as the real reassembler would hold them,
+        #: keyed (src, task_id). Tests fill this with ``note_arrives``.
+        self.inbound_notes: dict = {}
+        #: Set to make the next send_note raise, for the note-failed path.
+        self.refuse_note = False
 
     # -- the three-item contract the real layer offers -------------------
 
@@ -113,8 +130,22 @@ class FakeReliability:
         self.reliable.append(SentReliable(dst=int(dst), msg=msg, future=future))
         return future
 
+    def send_note(self, task_id: int, text: str) -> int:
+        if self.refuse_note:
+            raise RuntimeError("fake reliability refused the note")
+        self.notes.append((int(task_id), text))
+        # The real splitter's arithmetic, so a test can assert a note went out
+        # as more than one packet without reaching into the codec.
+        return max(1, -(-len(text.encode("utf-8")) // NOTE_TEXT_BYTES))
+
+    def completed_note(self, src: int, task_id: int):
+        return self.inbound_notes.get((int(src), int(task_id)))
+
     def set_on_deliver(self, callback) -> None:
         self._on_deliver = callback
+
+    def set_on_note(self, callback) -> None:
+        self._on_note = callback
 
     # -- test-side helpers ----------------------------------------------
 
@@ -122,6 +153,26 @@ class FakeReliability:
         """Feed one inbound message up, as the real layer would after dedup."""
         if self._on_deliver is not None:
             self._on_deliver(msg)
+
+    def note_arrives(self, src: int, task_id: int, text: str, at: float = 0.0):
+        """A note from ``src`` about ``task_id`` arrived whole.
+
+        Does both halves of what the real layer does: puts it in the lookup the
+        announce path consults, and calls the completed-note callback. A test
+        controls the *order* of this against the announcement, which is the
+        thing the whole design turns on.
+        """
+        note = CompletedNote(
+            src=int(src),
+            task_id=int(task_id),
+            note_id=1,
+            text=text,
+            completed_at=at,
+        )
+        self.inbound_notes[(int(src), int(task_id))] = note
+        if self._on_note is not None:
+            self._on_note(note)
+        return note
 
     def sent(self, message_type) -> "List[Message]":
         """Every broadcast of a given type, in order."""

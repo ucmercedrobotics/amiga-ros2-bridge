@@ -61,6 +61,17 @@ if [[ "${SKIP_ROSDEP:-0}" != "1" ]]; then
         rosdep update --rosdistro "$ROS_DISTRO"
     fi
     rosdep install --from-paths "$SRC" --ignore-src -y --rosdistro "$ROS_DISTRO"
+    # Upstream regression, as of the 2026-07-24 humble build of
+    # ros-humble-behaviortree-cpp: it installs to the multiarch lib dir
+    # (lib/x86_64-linux-gnu) but its own ament export's find_library() call has
+    # no LIBRARY_DIRS and only searches the flat lib/, so any find_package()
+    # for it fails downstream. Safe once upstream fixes this -- the glob
+    # matches nothing and the symlink step is a no-op.
+    arch_lib="/opt/ros/${ROS_DISTRO}/lib/$(uname -m)-linux-gnu"
+    if compgen -G "$arch_lib"/libbehaviortree_cpp*.so* > /dev/null; then
+        ln -sf "$arch_lib"/libbehaviortree_cpp*.so* "/opt/ros/${ROS_DISTRO}/lib/"
+    fi
+
 fi
 
 if [[ -f "$STAMP" ]] && [[ "$(cat "$STAMP")" == "$BTCPP_ROS2_REF" ]]; then

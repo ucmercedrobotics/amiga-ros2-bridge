@@ -168,9 +168,60 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 1
+ROBOT_COUNT ?= 5
+# Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
+# so this is the dial on how much coordination traffic the fleet can sustain.
+LORA_SF ?= 7
+# Set COORDINATION=false to bring up the robots without the radio layer.
+COORDINATION ?= true
+# AGENTS=true adds a full LLM stack per robot (world state, arbiter, mission
+# planner, triage, note). Needs AGENT_MODEL/AGENT_API_BASE set -- see
+# amiga_ros2_agents/README.md. It also switches the coordinators over to asking
+# those agents instead of their local stubs.
+AGENTS ?= false
+# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
+# they will RUN -- well-formed XML, the XSD, and the ontology's required
+# preconditions -- but not for whether they still satisfy the mission: no
+# formula, no SPIN, no viability budget, no edit-size or rate limit. For
+# bringing the coordination loop up end to end, where the question is whether a
+# task crosses robots and comes back as executable XML. Every accept is then
+# reported unverified, in the service response and in the arbiter's status.
+LTL ?= true
 sim:
-	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=$(ROBOT_COUNT)
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
+		robot_count:=$(ROBOT_COUNT) \
+		launch_coordination:=$(COORDINATION) \
+		launch_agents:=$(AGENTS) \
+		ltl_verification:=$(LTL) \
+		lora_spreading_factor:=$(LORA_SF)
+
+# Poke one robot into shedding a task, so the fleet has something to auction.
+# Run it against a `make sim ROBOT_COUNT=3` that is already up. SCENARIO_ROBOT
+# is a namespace: robot 1 is unnamespaced, so leave it empty to target robot 1.
+SCENARIO_ROBOT ?= amiga2
+SCENARIO_TASK ?= 42
+SCENARIO_TREE ?= 60
+SCENARIO_NOTE ?= north end of row 7 is flooded; approach from the south, expect 4 min extra
+fleet-scenario:
+	ros2 run amiga_ros2_coordinator escalate \
+		--robot "$(SCENARIO_ROBOT)" \
+		--task $(SCENARIO_TASK) \
+		--tree $(SCENARIO_TREE) \
+		--note "$(SCENARIO_NOTE)"
+
+# The other injection point: fail a leaf in one robot's tree and let the real
+# loop run -- mission planner edits, arbiter reviews, and only if that gives up
+# does triage escalate. Slower and less certain than fleet-scenario, and the
+# only one of the two where the decision to shed is earned rather than handed
+# over. FAULT_NODE must name a leaf in that robot's own mission XML.
+FAULT_ROBOT ?= amiga2
+FAULT_NODE ?= Visit_Tree_60
+FAULT_REASON ?= navigation failed: no progress toward the tree for 90s
+# Robot 1 is unnamespaced, so an empty FAULT_ROBOT must not produce "//bt/...".
+FAULT_TOPIC = $(if $(FAULT_ROBOT),/$(FAULT_ROBOT)/bt/status_change,/bt/status_change)
+fleet-fault:
+	ros2 topic pub --once "$(FAULT_TOPIC)" std_msgs/msg/String \
+		"{data: '{\"node\":\"$(FAULT_NODE)\",\"reason\":\"$(FAULT_REASON)\",\"timestamp_ms\":0}'}"
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

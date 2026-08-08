@@ -45,22 +45,22 @@ Specified in ``docs/coordinator.md``.
 
 from amiga_ros2_comms.codec import Capability, Target, TargetKind
 
-from .auction import Auction, ReceivedBid
-from .bidding import PendingBid, backoff_for, default_fitness, quantized_eta
-from .coordinator import CoordinatorParams, CoordinatorSession, OwnedTask
-from .interfaces import (
+from .engine.auction import Auction, ReceivedBid
+from .engine.bidding import PendingBid, backoff_for, default_fitness, quantized_eta
+from .engine.coordinator import CoordinatorParams, CoordinatorSession, OwnedTask
+from .ports.interfaces import (
     MissionInterface,
     NavInterface,
     NullPreemption,
     PreemptionSignal,
 )
-from .capabilities import (
+from .vocabulary.capabilities import (
     SchemaError,
     capabilities_from_xsd,
     default_schema_path,
     mask_from_xsd,
 )
-from .model import (
+from .vocabulary.model import (
     Fitness,
     MissionDelta,
     PeerRecord,
@@ -69,25 +69,35 @@ from .model import (
     capability_name,
     capability_names,
 )
-from .reasoning import (
+from .ports.reasoning import (
     AcceptEverything,
     AlwaysReDelegate,
     AnomalyInterpreter,
+    IgnoreNotes,
     MissionReplanner,
+    NoteInterpreter,
     RejectEverything,
     ReplanResult,
     ScriptedInterpreter,
+    ScriptedNoteInterpreter,
 )
-from .registry import PeerRegistry
-from .schema import (
+from .engine.registry import PeerRegistry
+from .vocabulary.schema import (
     ACTION_TYPES,
+    REVISION_TYPES,
     ActionSchema,
     AddTask,
     AnomalyContext,
+    BidRevision,
     DropTask,
+    KeepBid,
     LocalDisposition,
+    NoteContext,
     ReDelegate,
+    ReviseBid,
+    WithdrawBid,
     validate_action,
+    validate_revision,
 )
 
 __all__ = [
@@ -130,17 +140,28 @@ __all__ = [
     "LocalDisposition",
     "AnomalyContext",
     "validate_action",
+    # Bid revision: what reading another robot's note may do, and no more
+    "BidRevision",
+    "REVISION_TYPES",
+    "KeepBid",
+    "ReviseBid",
+    "WithdrawBid",
+    "NoteContext",
+    "validate_revision",
     # Ports
     "NavInterface",
     "MissionInterface",
     "PreemptionSignal",
     "NullPreemption",
-    # The two reasoning points, and the stubs standing in for them
+    # The reasoning points, and the stubs standing in for them
     "AnomalyInterpreter",
+    "NoteInterpreter",
     "MissionReplanner",
     "ReplanResult",
     "AlwaysReDelegate",
     "ScriptedInterpreter",
+    "IgnoreNotes",
+    "ScriptedNoteInterpreter",
     "AcceptEverything",
     "RejectEverything",
 ]
