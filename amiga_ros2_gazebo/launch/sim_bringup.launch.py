@@ -347,6 +347,19 @@ def launch_setup(context, *args, **kwargs):
                     "navigation.launch.py",
                     use_sim_time="True",
                     namespace=ns,
+                    # The Gazebo model is slightly larger than the real Amiga,
+                    # so the real robot's footprint/collision polygons are too
+                    # tight here and Nav2 racks up phantom-looking collisions
+                    # that don't happen on hardware. This sim-only copy (see
+                    # amiga_navigation/config/nav2_params_sim.yaml) enlarges
+                    # just those bounding boxes; the real bringup path
+                    # (amiga_navigation/navigation.launch.py's own default)
+                    # is untouched.
+                    params_file=os.path.join(
+                        get_package_share_directory("amiga_navigation"),
+                        "config",
+                        "nav2_params_sim.yaml",
+                    ),
                 )
             )
 

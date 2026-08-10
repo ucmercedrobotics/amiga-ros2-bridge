@@ -405,12 +405,8 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "robot_spacing_y",
-                default_value="6.0",
-                description="Y offset (meters) added per robot index beyond "
-                "robot1 (robot i spawns at robot1_y + (i-1)*robot_spacing_y). "
-                "Default matches today's robot1/robot2 gap exactly at "
-                "robot_count=2. May need tuning for large robot_count "
-                "depending on world layout.",
+                default_value="10.0",
+                description="Y offset (meters) added per robot index ",
             ),
             DeclareLaunchArgument(
                 "robot_spawn_stagger",
