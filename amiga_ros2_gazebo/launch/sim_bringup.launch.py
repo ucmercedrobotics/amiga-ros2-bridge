@@ -1,56 +1,3 @@
-"""Single entry point for the Amiga + Kinova simulation.
-
-    ros2 launch amiga_ros2_gazebo sim_bringup.launch.py
-
-Swaps ONLY the hardware layer (farm-ng bridge, depthai, kortex hardware) for
-Gazebo + shims; everything above it — URDF/robot_state_publisher, wheel
-odometry, EKFs, Nav2, behavior trees, kortex arm control — is included from
-the SAME launch files the real robot uses (see scripts/bringup_amiga_tmux.sh),
-with use_sim_time forced true for the whole tree.
-
-The real-robot bringup path is untouched.
-
-`robot_count` (default 1) identical robots are brought up, each with its own
-base, arm, localization (wheel odom + dual EKF + navsat), Nav2 (own
-`/<name>/navigate_to_pose` action server), and mission/behavior-tree layer
-(amiga_ros2_behavior_tree: bt_runner, waypoint_follower/linear_velo/
-lidar_object_navigator helpers, orchard_management) — all under its own
-namespace, EXCEPT when robot_count==1, where that single robot stays
-completely unnamespaced (identical to the original single-robot topic/node
-layout, see gazebo.launch.py's module docstring for why). Once robot_count>1,
-robot1 is namespaced exactly like every other robot. Only one robot ever
-gets kortex_move's `moveto` node (see sim_arm.launch.py) — that's robot1
-regardless of whether it happens to be namespaced. See
-amiga_localization/bringup.launch.py and
-amiga_navigation/navigation.launch.py (amiga-ros2-nav submodule) and
-amiga_ros2_behavior_tree/launch/bt.launch.py for how each of those was made
-namespace-safe — `amiga_navigation`'s three helper nodes are constructed
-directly below since they have no launch file of their own upstream of this
-one. `make sim ROBOT_COUNT=<n>` sets `robot_count:=<n>`.
-
-`launch_coordination` (default true) adds the robot-to-robot layer on top:
-one virtual LoRa medium for the whole fleet (amiga_ros2_comms/lora_sim), and
-per robot a lora_bridge plus the coordinator (which runs its own reliability
-layer in-process). That is what makes the robots able to announce, bid on and
-hand each other work — see amiga_ros2_coordinator/docs/coordinator.md.
-
-Two process-level (not just namespace) per-robot resources, both of which two
-instances would share *without failing to start*, which is the dangerous kind:
-
-  * amiga_ros2_behavior_tree's tcp_demux_node TCP port — each robot's
-    `bt.launch.py` gets `port=mission_port_base + (i-1)`, since SO_REUSEPORT
-    means two instances would silently load-balance/misroute mission
-    connections between robots rather than error.
-  * the coordinator's `node_id` — robot i gets i. It is the fleet-unique radio
-    address, and two robots sharing one dedup each other's traffic away as
-    duplicates, silently.
-
-The virtual radio's device names (`<symlink_dir>/amiga<i>`) are deliberately
-independent of the ROS namespaces: robot1's namespace is "" and cannot name a
-device. lora_sim.launch.py's `bridges:=false` exists for exactly this — the
-medium creates the ptys, and each robot's own bringup points its bridge at one.
-"""
-
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -363,12 +310,6 @@ def launch_setup(context, *args, **kwargs):
                 )
             )
 
-        # ── Arm (MoveIt) — robot1 also carries kortex_move's `moveto`,
-        # everyone else just their own move_group (see sim_arm.launch.py).
-        # `primary` (not `ns`) picks that robot: kortex_move's moveto
-        # hardcodes /move_to, /gripper_control absolute, so only one
-        # instance may ever run regardless of whether robot1 happens to be
-        # namespaced (robot_count>1).
         if launch_arm:
             actions.append(
                 _include(
@@ -376,7 +317,6 @@ def launch_setup(context, *args, **kwargs):
                     "sim_arm.launch.py",
                     launch_rviz=launch_rviz,
                     robot_name=ns,
-                    primary="true" if i == 1 else "false",
                 )
             )
 
