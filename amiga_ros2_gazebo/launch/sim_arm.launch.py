@@ -4,7 +4,12 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    OpaqueFunction,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -138,6 +143,32 @@ def launch_setup(context, *args, **kwargs):
             parameters=[use_sim_time],
             remappings=kinova_remappings,
             condition=IfCondition(launch_moveto),
+        )
+    )
+
+    home_topic = qualify_ros(ns, "joint_trajectory_controller/joint_trajectory")
+    home_goal = (
+        "{joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], "
+        "points: [{positions: [0.0, -0.785398, -2.0, 0.0, -0.436332, 1.5708], "
+        "time_from_start: {sec: 3}}]}"
+    )
+    actions.append(
+        TimerAction(
+            period=10.0,
+            actions=[
+                ExecuteProcess(
+                    cmd=[
+                        "ros2",
+                        "topic",
+                        "pub",
+                        "--once",
+                        home_topic,
+                        "trajectory_msgs/msg/JointTrajectory",
+                        home_goal,
+                    ],
+                    output="screen",
+                )
+            ],
         )
     )
 
