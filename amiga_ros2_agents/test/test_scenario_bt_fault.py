@@ -18,6 +18,7 @@ Skipped when the workspace is not built, because there is nothing to run.
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -26,7 +27,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from amiga_ros2_agents import mission_tasks  # noqa: E402
+from amiga_ros2_agents.mission import mission_tasks  # noqa: E402
 from amiga_ros2_comms.codec import (  # noqa: E402
     Capability,
     Target,
@@ -187,3 +188,81 @@ def test_the_fault_resolves_to_work_the_fleet_could_take_on(fault_events):
     assert payload["task_id"] > 0
     assert payload["target_kind"] == int(Target.tree(10).kind)
     assert payload["target_a"] == 10
+
+
+# ---------------------------------------------------------------------------
+# The demo's injected fault
+#
+# Pure data: the mission payloads the demo feeds and what they imply. It runs
+# no tree and launches nothing, so it costs milliseconds rather than the
+# module-scoped run above. (It still inherits this module's skipmark, which
+# wants a sourced workspace -- the imports below need one.)
+# ---------------------------------------------------------------------------
+
+EXAMPLES = os.path.join(REPO, "amiga_ros2_behavior_tree", "examples")
+DEMO_SOURCE = os.path.join(EXAMPLES, "sample_20_64.bin")
+DEMO_PEERS = [
+    os.path.join(EXAMPLES, name) for name in ("sample_22_66.bin", "sample_24_68.bin")
+]
+DEMO_HIDDEN_TREE = 64
+BUILDER = os.path.join(REPO, "scripts", "build_broken_mission.py")
+
+
+def _frames(path):
+    """The two length-prefixed frames of a mission payload: (xml, orchard)."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    (xml_len,) = struct.unpack(">I", data[0:4])
+    xml = data[4 : 4 + xml_len]
+    (json_len,) = struct.unpack(">I", data[4 + xml_len : 8 + xml_len])
+    return xml, data[8 + xml_len : 8 + xml_len + json_len]
+
+
+@pytest.mark.skipif(not os.path.exists(BUILDER), reason="no demo builder script")
+def test_the_demo_fault_sheds_work_some_other_robot_could_actually_do(tmp_path):
+    """The property the demo's whole point rests on, and the one it lacked.
+
+    An injected fault is easy; an injected fault that produces a *biddable*
+    task is the thing. The first version of this pointed one MoveToTreeID at
+    tree 9999, which fails for real -- and yields a task every peer resolves
+    against its own orchard, finds nothing for, and bids infeasible on. The
+    auction then runs correctly to the conclusion that nobody can help, and
+    the demo shows an auction with no winner while every log line looks fine.
+
+    So: the failing robot must not be able to reach the work, and at least one
+    healthy robot must. Both halves are asserted, because a scenario that
+    satisfies only the first is the bug that was there.
+    """
+    broken = tmp_path / "broken.bin"
+    assert (
+        subprocess.run(
+            [sys.executable, BUILDER, DEMO_SOURCE, str(DEMO_HIDDEN_TREE), str(broken)],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+    plan, crippled_orchard = _frames(str(broken))
+    original_plan, _ = _frames(DEMO_SOURCE)
+    assert plan == original_plan, "the plan must be untouched; only the map differs"
+
+    from amiga_ros2_coordinator.adapters.nav_ports import parse_orchard
+
+    mine, _ = parse_orchard(crippled_orchard.decode())
+    assert DEMO_HIDDEN_TREE not in mine, "the failing robot can still get there"
+    # It is one objective it cannot reach, not a crippled robot: the rest of
+    # its mission has to keep running, or it sheds everything at once and
+    # there is no healthy fleet left to bid.
+    assert len(mine) > 1
+
+    task = mission_tasks.task_for_node(plan.decode(), f"ApproachTree{DEMO_HIDDEN_TREE}")
+    assert task is not None and task.delegable
+    assert task.target == Target.tree(DEMO_HIDDEN_TREE)
+
+    for peer_bin in DEMO_PEERS:
+        _, peer_orchard = _frames(peer_bin)
+        theirs, _ = parse_orchard(peer_orchard.decode())
+        assert int(task.target.a) in theirs, (
+            f"{os.path.basename(peer_bin)} cannot resolve the shed task's target, "
+            f"so its bid would be infeasible and the auction would have no winner"
+        )

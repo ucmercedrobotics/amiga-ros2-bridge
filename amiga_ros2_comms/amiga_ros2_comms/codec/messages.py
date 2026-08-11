@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Typed coordination messages -- the five built wire types.
+"""Typed coordination messages -- the six built wire types.
 
 One dataclass per tag. These are plain value objects: they hold fields, they
 compare by value (which is what makes the round-trip tests meaningful), and they
@@ -148,6 +148,47 @@ class Ack(Message):
     ack_seq: int
 
 
+@dataclass
+class Freeform(Message):
+    """One fragment of a note: free text about a task somebody announced.
+
+    A note never *replaces* a structured message. It annotates one, and the
+    TASK_ANNOUNCE it accompanies still carries the whole machine-readable
+    requirement -- capabilities, place, priority. That is the point: lose every
+    fragment of a note and the auction is bit-for-bit what it would have been,
+    so partial delivery costs a decision some context rather than costing the
+    fleet a task. Text that could invalidate an auction by going missing would
+    be a worse design than not carrying text at all.
+
+    The only variable-length type, and the only one where several packets make
+    up one logical message. Both facts are confined to this type: splitting and
+    reassembly live in reliability/notes.py, and every other message in the
+    vocabulary is still exactly one packet with a size known from its class.
+    """
+
+    TAG: ClassVar[MessageType] = MessageType.FREEFORM
+
+    #: The announced task this text is about. The join key, and the reason a
+    #: note is an annotation rather than a message in its own right -- there is
+    #: no such thing here as text about nothing in particular.
+    task_id: int
+    #: Which note this is, so two notes about one task from one sender cannot
+    #: interleave their fragments into a sentence neither of them said.
+    note_id: int
+    #: 0-based position in the note. Fragments may arrive in any order.
+    frag_index: int
+    #: How many fragments the whole note is. Carried in *every* fragment so a
+    #: receiver knows what it is waiting for without having to have seen the
+    #: first one -- on a lossy broadcast link, "the one that tells you the
+    #: length" is exactly as likely to be lost as any other.
+    frag_count: int
+    #: This fragment's slice of the UTF-8 encoding of the note. Bytes, not str:
+    #: a split lands wherever the byte budget lands, which is frequently in the
+    #: middle of a multi-byte character, so only the reassembled whole is
+    #: decodable text.
+    text: bytes = b""
+
+
 #: Every built (non-reserved) message class. codec.py builds its tag table from
 #: this, so adding a type here is the only edit a new type needs.
-BUILT_MESSAGES = (Heartbeat, TaskAnnounce, Bid, Grant, Ack)
+BUILT_MESSAGES = (Heartbeat, TaskAnnounce, Bid, Grant, Ack, Freeform)

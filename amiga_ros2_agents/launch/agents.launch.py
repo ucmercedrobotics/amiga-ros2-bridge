@@ -16,7 +16,7 @@ PACKAGE = "amiga_ros2_agents"
 
 # world_state first, so the planner's /world_state window has frames in it by the
 # time the first BT failure arrives.
-AGENTS = ["world_state", "arbiter", "mission_planner", "triage"]
+AGENTS = ["world_state", "arbiter", "mission_planner", "triage", "note"]
 
 
 def generate_launch_description() -> LaunchDescription:

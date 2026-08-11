@@ -19,6 +19,15 @@ threads around two bounded queues:
 
 The subscription callback only enqueues, so a behaviour-tree tick that publishes
 returns instantly whether or not the radio is mid-transmit.
+
+The outbound ring is priority-ordered and the inbound one is not, because only
+the outbound one is a real bottleneck: while the modem is busy it stops draining
+the serial port, the write blocks, and frames pile up here. Whichever frame is
+at the head when the port frees up is the one that gets the channel, so the
+order of this queue decides whether an ACK beats the sender's retransmit timer.
+The priority is a number the publisher set on the LoRaFrame -- this node sorts
+on it and still never reads a payload byte, so it is exactly as opaque as it
+was. Ordering only: nothing here paces or rate-limits the link.
 """
 
 import threading
@@ -32,7 +41,12 @@ from rclpy.node import Node
 
 from amiga_interfaces.msg import LoRaFrame
 
-from ..ring_queue import DROP_OLDEST, POLICIES, BoundedRingQueue
+from ..ring_queue import (
+    DROP_OLDEST,
+    POLICIES,
+    BoundedPriorityRingQueue,
+    BoundedRingQueue,
+)
 from ..serial_link import SerialLink
 from .framing import (
     LINK_STATS_BYTES,
@@ -48,6 +62,12 @@ _READ_CHUNK = 512
 
 # How long consumer threads block on their queue before rechecking the run flag.
 _QUEUE_POLL_SEC = 0.2
+
+# Names of the outbound priority bands, most urgent first. Display only: they
+# key the stats line and nothing branches on them. Which *messages* land in
+# which band is decided in reliability/priority.py, which is the authority; a
+# rename there costs a stale log key here and nothing more.
+TX_BAND_NAMES = ("urgent", "bulk")
 
 # Link-stats modes, i.e. what the attached firmware prepends to inbound frames.
 # Presence cannot be sniffed (see docs/lora_frame_contract.md), so it is stated.
@@ -80,7 +100,9 @@ class LoRaBridge(Node):
         rx_depth = int(self.get_parameter("rx_queue_depth").value)
         self._link_stats = self._validated_link_stats()
 
-        self._tx_queue = BoundedRingQueue(tx_depth, tx_policy)
+        self._tx_queue = BoundedPriorityRingQueue(
+            tx_depth, tx_policy, levels=len(TX_BAND_NAMES)
+        )
         self._rx_queue = BoundedRingQueue(rx_depth, rx_policy)
         self._parser = FrameParser(
             max_payload_bytes=self._max_payload,
@@ -134,7 +156,8 @@ class LoRaBridge(Node):
         self.get_logger().info(
             f"lora_bridge on {port} @ {baud} baud, "
             f"max_payload_bytes={self._max_payload}, "
-            f"tx={tx_depth}/{tx_policy}, rx={rx_depth}/{rx_policy}, "
+            f"tx={tx_depth}/{tx_policy} ({'>'.join(TX_BAND_NAMES)}), "
+            f"rx={rx_depth}/{rx_policy}, "
             f"link_stats={self._link_stats}"
         )
 
@@ -167,7 +190,14 @@ class LoRaBridge(Node):
             ),
         )
         self.declare_parameter(
-            "tx_queue_depth", 32, _describe("Outbound ring buffer capacity, in frames.")
+            "tx_queue_depth",
+            32,
+            _describe(
+                "Outbound ring buffer capacity, in frames. One budget shared "
+                "across the priority bands, not one each, so bulk traffic may "
+                "use the whole queue when the channel is quiet and gives it "
+                "back when urgent traffic needs it."
+            ),
         )
         self.declare_parameter(
             "rx_queue_depth", 64, _describe("Inbound queue capacity, in frames.")
@@ -177,7 +207,10 @@ class LoRaBridge(Node):
             DROP_OLDEST,
             _describe(
                 f"What a full outbound queue does: one of {POLICIES}. Default "
-                "drop_oldest, because a stale coordination message is worthless."
+                "drop_oldest, because a stale coordination message is worthless. "
+                "Applies within a priority band -- the victim is always chosen "
+                "from the least urgent band holding anything, so bulk traffic "
+                "can never displace urgent traffic under either policy."
             ),
         )
         self.declare_parameter(
@@ -263,11 +296,24 @@ class LoRaBridge(Node):
                 f"max_payload_bytes={self._max_payload} (no fragmentation here)"
             )
             return
-        if not self._tx_queue.put(payload):
+        # msg.priority is whatever the publisher set, unvalidated on purpose:
+        # the queue clamps an unrecognised band toward the least urgent end, and
+        # a subscription callback is the last place that should be able to raise.
+        if not self._tx_queue.put(payload, msg.priority):
             # Expected under load, so throttled rather than silent or spammy.
+            # The per-band split is the number that matters: shedding bulk is
+            # the queue working as intended, shedding urgent means it is too
+            # shallow for the traffic.
+            by_band = ", ".join(
+                f"{name}={count}"
+                for name, count in zip(
+                    TX_BAND_NAMES, self._tx_queue.dropped_by_priority
+                )
+            )
             self.get_logger().warn(
                 f"tx queue full (depth {self._tx_queue.capacity}, "
-                f"{self._tx_queue.policy}); {self._tx_queue.dropped} dropped total",
+                f"{self._tx_queue.policy}); {self._tx_queue.dropped} dropped total "
+                f"({by_band})",
                 throttle_duration_sec=5.0,
             )
 
@@ -378,10 +424,14 @@ class LoRaBridge(Node):
             rx_dropped_queue=self._rx_queue.dropped,
             port_open=self._link.is_open,
         )
+        # Broken out per band as well as in total, so a run can say which
+        # traffic the queue shed rather than only how much.
+        for name, count in zip(TX_BAND_NAMES, self._tx_queue.dropped_by_priority):
+            counters[f"tx_dropped_{name}"] = count
         return counters
 
     def _log_stats(self) -> None:
-        self.get_logger().info(
+        self.get_logger().debug(
             " ".join(f"{k}={v}" for k, v in sorted(self.stats().items()))
         )
 

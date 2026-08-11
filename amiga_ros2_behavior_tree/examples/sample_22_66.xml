@@ -1,0 +1,25 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>sample trees 22 and 66</Mission>
+  <BehaviorTree ID="SampleTrees22And66">
+    <Sequence name="SampleTreesMission">
+      <MoveToAisleHead name="EnterRow2" action_name="move_to_aisle_head" id="2"/>
+      <RetryUntilSuccessful name="SampleTree22Retry" num_attempts="3">
+        <Sequence name="SampleTree22">
+          <MoveToTreeID name="ApproachTree22" action_name="follow_tree_id_waypoint" id="22" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree22" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitRow2" action_name="move_to_aisle_head" id="2"/>
+      <MoveToAisleHead name="EnterRow4" action_name="move_to_aisle_head" id="4"/>
+      <MoveToTreeID name="TransitToTree60" action_name="follow_tree_id_waypoint" id="60" approach_tree="false"/>
+      <RetryUntilSuccessful name="SampleTree66Retry" num_attempts="3">
+        <Sequence name="SampleTree66">
+          <MoveToTreeID name="ApproachTree66" action_name="follow_tree_id_waypoint" id="66" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree66" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToTreeID name="ReturnViaTree60" action_name="follow_tree_id_waypoint" id="60" approach_tree="false"/>
+      <MoveToAisleHead name="ExitRow4" action_name="move_to_aisle_head" id="4"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

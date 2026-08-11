@@ -16,6 +16,23 @@ The formula must be valid Promela/SPIN LTL — it has to parse with `spin -f`.
 ## Atomic propositions
 - Must be plain Promela identifiers: lowercase letters, digits and underscores only.
 - No spaces, no arguments, no dots. Write `visit_tree_3`, never `visit(tree 3)` or `visit tree 3`.
+
+### Naming (required)
+The plan is checked against your formula by matching these names exactly, so use
+the following forms and no others. A name outside this scheme cannot be matched
+and the mission will be rejected.
+
+- `at_tree_<id>` — the robot is at tree `<id>`. True only while it is there.
+- `sampled_tree_<id>` — leaves have been sampled at tree `<id>`. Once true, stays true.
+- `<action>_done` — a non-navigation action has been performed, lowercased with
+  underscores: `follow_person_done`, `move_arm_to_position_done`. Once true, stays true.
+
+Take `<id>` from the mission text. "sample trees 10 and 60" gives
+`sampled_tree_10` and `sampled_tree_60` — never renumber them 1, 2, 3.
+
+Because `sampled_tree_<id>` stays true once achieved, write ordering with the
+position propositions: `<>(at_tree_1 && <>at_tree_2)`, not
+`<>(sampled_tree_1 && <>sampled_tree_2)`, which any order satisfies.
 {% if ap_vocabulary %}
 - Use ONLY these atomic propositions, exactly as written:
 {% for ap in ap_vocabulary %}

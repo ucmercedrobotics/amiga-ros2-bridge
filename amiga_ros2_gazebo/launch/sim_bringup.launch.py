@@ -1,41 +1,3 @@
-"""Single entry point for the Amiga + Kinova simulation.
-
-    ros2 launch amiga_ros2_gazebo sim_bringup.launch.py
-
-Swaps ONLY the hardware layer (farm-ng bridge, depthai, kortex hardware) for
-Gazebo + shims; everything above it — URDF/robot_state_publisher, wheel
-odometry, EKFs, Nav2, behavior trees, kortex arm control — is included from
-the SAME launch files the real robot uses (see scripts/bringup_amiga_tmux.sh),
-with use_sim_time forced true for the whole tree.
-
-The real-robot bringup path is untouched.
-
-`robot_count` (default 1) identical robots are brought up, each with its own
-base, arm, localization (wheel odom + dual EKF + navsat), Nav2 (own
-`/<name>/navigate_to_pose` action server), and mission/behavior-tree layer
-(amiga_ros2_behavior_tree: bt_runner, waypoint_follower/linear_velo/
-lidar_object_navigator helpers, orchard_management) — all under its own
-namespace, EXCEPT when robot_count==1, where that single robot stays
-completely unnamespaced (identical to the original single-robot topic/node
-layout, see gazebo.launch.py's module docstring for why). Once robot_count>1,
-robot1 is namespaced exactly like every other robot. Only one robot ever
-gets kortex_move's `moveto` node (see sim_arm.launch.py) — that's robot1
-regardless of whether it happens to be namespaced. See
-amiga_localization/bringup.launch.py and
-amiga_navigation/navigation.launch.py (amiga-ros2-nav submodule) and
-amiga_ros2_behavior_tree/launch/bt.launch.py for how each of those was made
-namespace-safe — `amiga_navigation`'s three helper nodes are constructed
-directly below since they have no launch file of their own upstream of this
-one. `make sim-dual` sets `robot_count:=2`; `make sim-multi
-ROBOT_COUNT=<n>` sets `robot_count:=<n>`.
-
-The one process-level (not just namespace) per-robot resource is
-amiga_ros2_behavior_tree's tcp_demux_node TCP port: each robot's `bt.launch.py`
-gets `port=mission_port_base + (i-1)`, since two instances sharing a port
-wouldn't fail to start (SO_REUSEPORT) — they'd silently load-balance/misroute
-mission connections between robots instead.
-"""
-
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -65,6 +27,115 @@ def qualify_ros(ns, topic):
     return f"/{ns}/{topic}" if ns else f"/{topic}"
 
 
+# Everything the behaviour-tree schema permits. Passed explicitly rather than
+# letting each coordinator read the schema itself, because in a simulated fleet
+# the interesting scenarios are the asymmetric ones -- one robot with no arm
+# stays silent on a sampling task instead of bidding and losing. Override per
+# robot by editing this list; the coordinator refuses an unknown name.
+ALL_CAPABILITIES = [
+    "MoveToTreeID",
+    "MoveToAisleHead",
+    "MoveToGPSLocation",
+    "ApproachGPSWaypoint",
+    "MoveToRelativeLocation",
+    "OrientRobotHeading",
+    "FollowPerson",
+    "SampleLeaf",
+    "MoveArmToPosition",
+]
+
+
+def coordination_nodes(
+    ns, node_id, device, spreading_factor, battery_percent=100, use_agents=False
+):
+    """This robot's radio bridge, its mission bridge and its coordinator.
+
+    All namespaced, which is the whole of what multi-robot needs from them:
+    ReliabilityNode already publishes and subscribes the *relative* `lora/tx`
+    and `lora/rx`, so a namespaced instance lands on its own bridge with no
+    remapping. The coordinator executable runs three nodes in one process and
+    launch's `namespace=` covers all of them.
+
+    What has to be qualified by hand is every parameter whose default is
+    absolute -- `/coordination/infeasible`, the two service names, the orchard
+    topic. Those defaults are right for one robot, where the agent stack sits
+    outside any namespace; on one machine they mean a single escalation makes
+    the whole fleet shed the same task, and every robot resolving trees against
+    whichever orchard was published last.
+    """
+    return [
+        Node(
+            package="amiga_ros2_comms",
+            executable="lora_bridge",
+            name="lora_bridge",
+            namespace=ns,
+            output="screen",
+            parameters=[{"use_sim_time": True, "serial_port": device}],
+        ),
+        # Answers the coordinator's mission questions off /mission/xml, and
+        # turns a won task into a candidate for the arbiter. Without it the
+        # coordinator's mission port never hears anything and this robot never
+        # bids -- which is the deliberate safe default, not a failure.
+        Node(
+            package="amiga_ros2_agents",
+            executable="mission_bridge",
+            name="mission_bridge",
+            namespace=ns,
+            output="screen",
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    # Both relative, so this robot's namespace places them: the
+                    # plan it reads is the one its own bt_runner executes and
+                    # its own arbiter writes (see robot_agents.launch.py).
+                    "mission_topic": "mission/xml",
+                    "state_topic": qualify_ros(ns, "mission/coordination_state"),
+                    "battery_percent": battery_percent,
+                }
+            ],
+        ),
+        # Deliberately no `name=`: this executable runs the coordinator, its
+        # in-process reliability layer and the node holding its port
+        # subscriptions, and a name remapping would rename all of them to the
+        # same thing. Same reasoning as coordinator.launch.py.
+        #
+        # coordinator_sim rather than coordinator: the plain executable wires
+        # ports that decline every question, so a fleet of those would announce
+        # and never bid. See sim_node.py.
+        Node(
+            package="amiga_ros2_coordinator",
+            executable="coordinator_sim",
+            namespace=ns,
+            output="screen",
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    "node_id": node_id,
+                    "spreading_factor": spreading_factor,
+                    "capabilities": ALL_CAPABILITIES,
+                    "infeasible_topic": qualify_ros(ns, "coordination/infeasible"),
+                    "triage_service": qualify_ros(ns, "coordination/interpret_anomaly"),
+                    "note_service": qualify_ros(ns, "coordination/interpret_note"),
+                    "mission_state_topic": qualify_ros(
+                        ns, "mission/coordination_state"
+                    ),
+                    "gps_topic": qualify_ros(ns, "gps/pvt"),
+                    # Published by this robot's own tcp_demux, so per-robot even
+                    # though every robot is sent the same orchard.
+                    "orchard_topic": qualify_ros(ns, "orchard/tree_info_json"),
+                    "verify_replan_service": qualify_ros(ns, "mission/verify_replan"),
+                    # Both reasoning points follow the agent stack. Left true
+                    # with no agent running, every escalation waits out
+                    # triage_timeout_sec (45 s) and then changes nothing, which
+                    # looks exactly like a coordinator that ignored it.
+                    "use_triage_agent": use_agents,
+                    "use_note_agent": use_agents,
+                }
+            ],
+        ),
+    ]
+
+
 # tf2_ros hardcodes /tf, /tf_static as absolute regardless of node namespace
 # — every node here that might touch TF gets this remap, same as everywhere
 # else in this repo's sim launch files.
@@ -92,6 +163,28 @@ def launch_setup(context, *args, **kwargs):
         LaunchConfiguration("launch_helpers").perform(context).lower() == "true"
     )
     launch_bt = LaunchConfiguration("launch_bt").perform(context).lower() == "true"
+    launch_coordination = (
+        LaunchConfiguration("launch_coordination").perform(context).lower() == "true"
+    )
+    ltl_verification = LaunchConfiguration("ltl_verification").perform(context).lower()
+    objective_gating = LaunchConfiguration("objective_gating").perform(context).lower()
+    launch_agents = (
+        LaunchConfiguration("launch_agents").perform(context).lower() == "true"
+    )
+    symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
+    spreading_factor = int(
+        LaunchConfiguration("lora_spreading_factor").perform(context)
+    )
+    # One entry per robot, short list padded with 100. Batteries are the
+    # cheapest way to make a fleet asymmetric: they enter default_fitness as a
+    # penalty below 50%, so `batteries:=100,20,100` makes robot 2 bid badly on
+    # everything without changing where any robot is.
+    batteries = [
+        int(value)
+        for value in LaunchConfiguration("batteries").perform(context).split(",")
+        if value.strip()
+    ]
+    batteries += [100] * max(0, robot_count - len(batteries))
 
     actions = [
         # Force sim clock on every node started below (includes too).
@@ -114,12 +207,33 @@ def launch_setup(context, *args, **kwargs):
         ),
     ]
 
+    # ── One virtual radio medium for the whole fleet ──────────────────────
+    # Started once, not per robot: it *is* the shared channel, and modelling
+    # contention between robots is most of its point. bridges:=false because
+    # each robot's bridge is started below, in that robot's own namespace.
+    if launch_coordination:
+        actions.append(
+            _include(
+                "amiga_ros2_comms",
+                "lora_sim.launch.py",
+                robots=",".join(f"{name_prefix}{i}" for i in range(1, robot_count + 1)),
+                symlink_dir=symlink_dir,
+                spreading_factor=str(spreading_factor),
+                bridges="false",
+            )
+        )
+
     for i in range(1, robot_count + 1):
         # robot1 is unnamespaced only when it's the sole robot — see module
         # docstring. Namespace only, not spawn name (that's gazebo.launch.py's
         # own robot1_name arg, not threaded through here, same as before this
         # file generalized to N robots).
         ns = "" if (i == 1 and robot_count == 1) else f"{name_prefix}{i}"
+        # Matches the frame_prefix given to robot_state_publisher in
+        # urdf.launch.py — needed anywhere a node's frame-name parameter
+        # would otherwise default to a bare "base_link"/"lidar_link" that no
+        # longer exists once this robot's own TF is prefixed.
+        frame_prefix = f"{ns}/" if ns else ""
 
         # ── Base description/TF (identical-to-hardware stack) ─────────────
         # publish_joints:=false because the joint_state_broadcaster is the
@@ -181,15 +295,22 @@ def launch_setup(context, *args, **kwargs):
                     "navigation.launch.py",
                     use_sim_time="True",
                     namespace=ns,
+                    # The Gazebo model is slightly larger than the real Amiga,
+                    # so the real robot's footprint/collision polygons are too
+                    # tight here and Nav2 racks up phantom-looking collisions
+                    # that don't happen on hardware. This sim-only copy (see
+                    # amiga_navigation/config/nav2_params_sim.yaml) enlarges
+                    # just those bounding boxes; the real bringup path
+                    # (amiga_navigation/navigation.launch.py's own default)
+                    # is untouched.
+                    params_file=os.path.join(
+                        get_package_share_directory("amiga_navigation"),
+                        "config",
+                        "nav2_params_sim.yaml",
+                    ),
                 )
             )
 
-        # ── Arm (MoveIt) — robot1 also carries kortex_move's `moveto`,
-        # everyone else just their own move_group (see sim_arm.launch.py).
-        # `primary` (not `ns`) picks that robot: kortex_move's moveto
-        # hardcodes /move_to, /gripper_control absolute, so only one
-        # instance may ever run regardless of whether robot1 happens to be
-        # namespaced (robot_count>1).
         if launch_arm:
             actions.append(
                 _include(
@@ -197,7 +318,6 @@ def launch_setup(context, *args, **kwargs):
                     "sim_arm.launch.py",
                     launch_rviz=launch_rviz,
                     robot_name=ns,
-                    primary="true" if i == 1 else "false",
                 )
             )
 
@@ -269,13 +389,16 @@ def launch_setup(context, *args, **kwargs):
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
                             "max_object_distance": 5.0,
+                            # base_frame/lidar_link default to bare
+                            # "base_link"/"lidar_link" in the node itself,
+                            # which stopped existing on this robot's own
+                            # /<ns>/tf the moment robot_state_publisher got a
+                            # frame_prefix (see urdf.launch.py) — every TF
+                            # lookup here would fail without this.
+                            "base_frame": f"{frame_prefix}base_link",
+                            "lidar_link": f"{frame_prefix}lidar_link",
                         }
                     ],
-                    # base_frame/lidar_link stay bare ("base_link"/
-                    # "lidar_link") — each robot's TF lives on its own
-                    # namespaced tf topic (see tf_remaps below), not on a
-                    # prefixed frame_id string, matching every other
-                    # TF-consuming node in this repo.
                     remappings=tf_remaps(ns),
                 ),
             ]
@@ -288,6 +411,43 @@ def launch_setup(context, *args, **kwargs):
                     "bt.launch.py",
                     namespace=ns,
                     port=str(mission_port_base + i - 1),
+                )
+            )
+
+        # ── Robot-to-robot coordination ────────────────────────────────────
+        # The device name is always amiga<i>, independent of ns -- robot1's
+        # namespace is "" and cannot name a pty. node_id is i, and it is the
+        # one value here with no safe default.
+        if launch_coordination:
+            actions += coordination_nodes(
+                ns=ns,
+                node_id=i,
+                device=f"{symlink_dir}/{name_prefix}{i}",
+                spreading_factor=spreading_factor,
+                battery_percent=batteries[i - 1],
+                use_agents=launch_agents,
+            )
+
+        # ── This robot's own LLM agents ────────────────────────────────────
+        # A stack per robot, not one for the fleet: the whole point of the
+        # scenario is that robot A's diagnosis and robot B's decision to take
+        # the work on are different judgements made by different agents from
+        # different context. Sharing one stack would make them the same call.
+        #
+        # mission_bridge is excluded because coordination_nodes above starts
+        # one -- it has no model and the coordinator is inert without it, so it
+        # belongs to the coordination layer here rather than to the agents.
+        if launch_agents:
+            actions.append(
+                _include(
+                    "amiga_ros2_agents",
+                    "robot_agents.launch.py",
+                    namespace=ns,
+                    use_sim_time="true",
+                    launch_mission_bridge="false",
+                    battery_percent=str(batteries[i - 1]),
+                    ltl_verification=ltl_verification,
+                    objective_gating=objective_gating,
                 )
             )
 
@@ -330,6 +490,68 @@ def generate_launch_description():
                 description="Start waypoint_follower + linear_velo (as in tmux bringup)",
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
+            DeclareLaunchArgument(
+                "launch_coordination",
+                default_value="true",
+                description="Start the robot-to-robot layer: one virtual LoRa "
+                "medium for the fleet, plus a bridge and a coordinator per "
+                "robot. With robot_count:=1 this is a fleet of one -- it comes "
+                "up, heartbeats into an empty channel and has nobody to trade "
+                "with, which is harmless and shows the stack is wired.",
+            ),
+            DeclareLaunchArgument(
+                "launch_agents",
+                default_value="false",
+                description="Start a full LLM agent stack per robot (world "
+                "state, arbiter, mission planner, triage). Off by default "
+                "because every one of them needs a model endpoint -- set "
+                "AGENT_MODEL/AGENT_API_BASE first, see amiga_ros2_agents. It "
+                "also switches the coordinators' use_triage_agent, so with this "
+                "false they fall back to the local stub interpreter rather than "
+                "waiting 45 s on a service nobody serves.",
+            ),
+            DeclareLaunchArgument(
+                "lora_symlink_dir",
+                default_value="/tmp/amiga_lora_sim",
+                description="Where the virtual radio's per-robot ptys are "
+                "symlinked. Robot i's bridge opens <dir>/<prefix><i>.",
+            ),
+            DeclareLaunchArgument(
+                "batteries",
+                default_value="",
+                description="Comma-separated battery percent per robot, e.g. "
+                "'100,20,100'. Short lists are padded with 100. Below 50% "
+                "enters the bid as a cost penalty, so this is the cheapest way "
+                "to make a fleet bid asymmetrically without moving anyone.",
+            ),
+            DeclareLaunchArgument(
+                "ltl_verification",
+                default_value="true",
+                description="False drops the arbiter's formal gate: no formula "
+                "is generated and SPIN never runs. Plans are still checked for "
+                "whether they RUN (XSD + the ontology's required "
+                "preconditions) and for whether they still contain the "
+                "mission's work (see objective_gating). For bringing the "
+                "coordination loop up end to end; every accept is then "
+                "reported unverified.",
+            ),
+            DeclareLaunchArgument(
+                "objective_gating",
+                default_value="true",
+                description="The arbiter's objective-preservation and "
+                "viability checks, and with them its ability to ABORT. "
+                "/mission/abort is what ends the local repair loop and hands "
+                "the fault to the coordinator, so a fleet run needs this on "
+                "regardless of ltl_verification. False makes the local loop "
+                "endless and nothing is ever auctioned.",
+            ),
+            DeclareLaunchArgument(
+                "lora_spreading_factor",
+                default_value="7",
+                description="LoRa spreading factor, 6..12. Time on air doubles "
+                "per step, so this is the main dial on how much coordination "
+                "traffic the simulated fleet can actually sustain.",
+            ),
             DeclareLaunchArgument(
                 "mission_port_base",
                 default_value="12346",

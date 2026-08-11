@@ -22,6 +22,7 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     Ack,
     Bid,
     Capability,
+    Freeform,
     Grant,
     Heartbeat,
     MessageType,
@@ -34,8 +35,11 @@ from amiga_ros2_comms.codec import (  # noqa: E402
 )
 from amiga_ros2_comms.reliability import (  # noqa: E402
     BROADCAST,
+    BULK,
     UNICAST,
+    URGENT,
     DedupCache,
+    NoteTooLong,
     Outcome,
     ReliabilityError,
     ReliabilityParams,
@@ -43,6 +47,8 @@ from amiga_ros2_comms.reliability import (  # noqa: E402
     addressee_of,
     addressing_of,
     is_reliable,
+    priority_of,
+    urgent_types,
 )
 from lossy_link import Fleet, Medium  # noqa: E402
 
@@ -317,7 +323,7 @@ def test_the_backoff_ceiling_bounds_the_interval():
         max_retransmit_timeout_sec=5.0,
     )
     session = ReliabilitySession(
-        node_id=GRANTOR, send_frame=lambda payload: None, params=params
+        node_id=GRANTOR, send_frame=lambda payload, priority: None, params=params
     )
     intervals = [session._interval(n) for n in range(1, 9)]
     assert intervals[0] == 3.0
@@ -582,7 +588,9 @@ def test_every_sender_numbers_independently():
 
 
 def test_seq_wraps_at_sixteen_bits_without_repeating_early():
-    session = ReliabilitySession(node_id=GRANTOR, send_frame=lambda payload: None)
+    session = ReliabilitySession(
+        node_id=GRANTOR, send_frame=lambda payload, priority: None
+    )
     session._next_seq = SEQ_MAX - 1
 
     assert session.next_seq() == SEQ_MAX - 1
@@ -628,7 +636,10 @@ def test_send_overwrites_caller_supplied_identity():
         (bytes([MessageType.HEARTBEAT, 1, 0, 1]), "rx_malformed"),
         (bytes([MessageType.HEARTBEAT, 1, 0, 1]) + b"\x00" * 20, "rx_malformed"),
         (bytes([0x7F, 1, 0, 1, 2, 3]), "rx_unknown_type"),
-        (bytes([MessageType.FREEFORM, 1, 0, 1, 2, 3]), "rx_reserved_type"),
+        # A FREEFORM shorter than its own fixed fields. Now that the tag is
+        # built this is a truncated message rather than a reserved one, and it
+        # is still counted and dropped rather than raised.
+        (bytes([MessageType.FREEFORM, 1, 0, 1, 2, 3]), "rx_malformed"),
     ],
 )
 def test_garbage_on_the_air_is_counted_and_dropped_not_raised(payload, counter):
@@ -682,7 +693,7 @@ def test_a_raising_deliver_callback_does_not_break_the_session():
 
 
 def test_a_link_that_throws_is_reported_not_propagated():
-    def broken(payload):
+    def broken(payload, priority):
         raise OSError("radio unplugged")
 
     session = ReliabilitySession(node_id=GRANTOR, send_frame=broken)
@@ -729,12 +740,14 @@ def test_a_done_callback_on_the_future_runs_when_delivery_resolves():
 @pytest.mark.parametrize("node_id", [0, -1, 256])
 def test_a_node_id_outside_the_fleet_address_space_is_refused(node_id):
     with pytest.raises(ValueError, match="node_id"):
-        ReliabilitySession(node_id=node_id, send_frame=lambda payload: None)
+        ReliabilitySession(node_id=node_id, send_frame=lambda payload, priority: None)
 
 
 @pytest.mark.parametrize("dst", [0, 256])
 def test_an_unaddressable_destination_is_refused(dst):
-    session = ReliabilitySession(node_id=GRANTOR, send_frame=lambda payload: None)
+    session = ReliabilitySession(
+        node_id=GRANTOR, send_frame=lambda payload, priority: None
+    )
     with pytest.raises(ReliabilityError, match="dst"):
         session.send_reliable(dst, a_grant(winner=dst if 0 < dst < 256 else WINNER))
 
@@ -773,3 +786,194 @@ def test_stats_are_flat_scalars_for_the_log_line():
     assert stats["tx_reliable"] == 1
     assert stats["tx_delivered"] == 1
     assert "dedup_size" in stats
+
+
+# ==========================================================================
+# Transmit priority
+#
+# The layer does not act on the class it assigns -- it labels a frame and hands
+# it down, and the bridge's outbound queue is what orders them. So what is
+# testable here is exactly the labelling, and the property worth pinning is that
+# the two messages holding task ownership together are the two that get to jump
+# the queue.
+# ==========================================================================
+
+
+def test_ack_and_grant_are_the_urgent_types():
+    assert set(urgent_types()) == {Ack, Grant}
+
+
+@pytest.mark.parametrize(
+    "factory, expected",
+    [
+        (a_grant, URGENT),
+        (a_heartbeat, BULK),
+        (an_announce, BULK),
+    ],
+    ids=lambda value: getattr(value, "__name__", value),
+)
+def test_priority_of_each_built_type(factory, expected):
+    assert priority_of(factory()) == expected
+
+
+def test_a_grant_goes_out_urgent():
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_reliable(WINNER, a_grant())
+
+    grants = fleet.medium.sent("Grant")
+    assert [frame.priority for frame in grants] == [URGENT]
+
+
+@pytest.mark.parametrize("factory", BROADCAST_FACTORIES, ids=lambda f: f.__name__)
+def test_broadcasts_go_out_bulk(factory):
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_broadcast(factory())
+
+    sent = fleet.medium.sent(type(factory()).__name__)
+    assert [frame.priority for frame in sent] == [BULK]
+
+
+def test_an_ack_goes_out_urgent():
+    """The frame whose whole value is its timing.
+
+    The sender is sitting on a retransmit timer while this is queued; an ACK
+    that arrives after the timer has given up is a duplicate of a send already
+    recorded as failed.
+    """
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_reliable(WINNER, a_grant())
+    fleet.medium.pump()
+
+    acks = fleet.medium.sent("Ack")
+    assert acks, "the winner should have acknowledged"
+    assert all(frame.priority == URGENT for frame in acks)
+
+
+def test_a_retransmit_keeps_the_class_of_the_message_it_repeats():
+    """A GRANT that already fell behind is if anything more urgent, not less."""
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet.medium.drop_rule = Medium.drop_kind("Grant", count=2)
+    fleet[GRANTOR].send_reliable(WINNER, a_grant())
+    fleet.advance(6.0)
+
+    grants = fleet.medium.sent("Grant")
+    assert len(grants) > 1, "expected at least one retransmit"
+    assert all(frame.priority == URGENT for frame in grants)
+
+
+# ==========================================================================
+# Notes: the one thing here that spans several packets
+#
+# Fragments are broadcast, therefore unACKed, therefore a note with a hole in
+# it is dropped rather than repaired. That is only acceptable because the
+# announcement a note accompanies carries the requirement by itself -- so the
+# tests that matter most here are the ones about loss.
+# ==========================================================================
+
+CAVEAT = "soft ground past the gate, the row is muddy and the arm needs the long reach"
+
+
+def test_a_note_goes_out_as_several_broadcast_fragments():
+    fleet = Fleet(GRANTOR, WINNER)
+    count = fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+
+    assert count > 1
+    fragments = [f for f in fleet.medium.frames if isinstance(f.msg, Freeform)]
+    assert len(fragments) == count
+    # Distinct sequence numbers, so dedup collapses repeats of a fragment
+    # rather than collapsing the fragments into one another.
+    assert len({f.msg.seq for f in fragments}) == count
+    assert {f.msg.task_id for f in fragments} == {77}
+
+
+def test_every_note_fragment_is_bulk():
+    # ACKs and GRANTs must overtake a note train, or a robot part-way through
+    # one cannot confirm a handoff.
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+
+    fragments = [f for f in fleet.medium.frames if isinstance(f.msg, Freeform)]
+    assert {f.priority for f in fragments} == {BULK}
+
+
+def test_a_note_arrives_whole_and_never_as_a_message():
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()
+
+    (note,) = fleet.notes[WINNER]
+    assert note.text == CAVEAT
+    assert (note.src, note.task_id) == (GRANTOR, 77)
+    # A fragment is not traffic for the coordinator.
+    assert fleet.inbox[WINNER].messages == []
+    assert fleet[WINNER].stats()["rx_delivered"] == 0
+
+
+def test_a_note_missing_a_fragment_is_never_delivered():
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet.medium.drop_rule = lambda frame: (
+        isinstance(frame.msg, Freeform) and frame.msg.frag_index == 1
+    )
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()
+
+    assert fleet.notes[WINNER] == []
+    assert fleet[WINNER].completed_note(GRANTOR, 77) is None
+
+
+def test_an_incomplete_note_is_eventually_abandoned_and_counted():
+    fleet = Fleet(GRANTOR, WINNER, params=ReliabilityParams(note_ttl_sec=10.0))
+    fleet.medium.drop_rule = lambda frame: (
+        isinstance(frame.msg, Freeform) and frame.msg.frag_index == 0
+    )
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()
+
+    fleet.advance(20.0)
+    assert fleet[WINNER].stats()["notes_abandoned"] == 1
+    assert fleet[WINNER].stats()["notes_complete"] == 0
+
+
+def test_a_completed_note_is_there_for_the_announcement_that_follows():
+    # The lookup that justifies sending notes before their announcement.
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()
+
+    assert fleet[WINNER].completed_note(GRANTOR, 77).text == CAVEAT
+    assert fleet[WINNER].completed_note(GRANTOR, 4242) is None
+    assert fleet[WINNER].completed_note(99, 77) is None
+
+
+def test_a_note_is_delivered_once_however_often_its_fragments_repeat():
+    fleet = Fleet(GRANTOR, WINNER)
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()
+    # Replay every fragment, as a repeater would.
+    for frame in list(fleet.medium.frames):
+        if isinstance(frame.msg, Freeform):
+            fleet[WINNER].on_frame(frame.payload)
+
+    assert len(fleet.notes[WINNER]) == 1
+    assert fleet[WINNER].stats()["rx_duplicates"] > 0
+
+
+def test_a_note_too_long_for_the_cap_is_refused_by_the_session():
+    fleet = Fleet(GRANTOR, WINNER)
+    with pytest.raises(NoteTooLong):
+        fleet[GRANTOR].send_note(task_id=77, text="x" * 4000)
+    assert [f for f in fleet.medium.frames if isinstance(f.msg, Freeform)] == []
+
+
+def test_a_callback_that_raises_on_a_note_does_not_take_the_session_down():
+    fleet = Fleet(GRANTOR, WINNER)
+
+    def explode(note):
+        raise RuntimeError("the coordinator's problem, not ours")
+
+    fleet[WINNER].set_on_note(explode)
+    fleet[GRANTOR].send_note(task_id=77, text=CAVEAT)
+    fleet.medium.pump()  # must not raise
+
+    # And the note is still in the lookup, so the announce path still finds it.
+    assert fleet[WINNER].completed_note(GRANTOR, 77).text == CAVEAT

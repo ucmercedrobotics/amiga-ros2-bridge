@@ -36,16 +36,18 @@ from amiga_ros2_comms.codec import (  # noqa: E402
     cap_mask,
     capabilities_in,
 )
-from amiga_ros2_coordinator.capabilities import capabilities_from_xsd  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.capabilities import (
+    capabilities_from_xsd,
+)  # noqa: E402
 from amiga_ros2_comms.reliability.node import ReliabilityNode  # noqa: E402
 
-from amiga_ros2_coordinator.model import Task, TaskState  # noqa: E402
-from amiga_ros2_coordinator.node import CoordinatorNode  # noqa: E402
-from amiga_ros2_coordinator.reasoning import (  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.model import Task, TaskState  # noqa: E402
+from amiga_ros2_coordinator.nodes.coordinator_node import CoordinatorNode  # noqa: E402
+from amiga_ros2_coordinator.ports.reasoning import (  # noqa: E402
     AcceptEverything,
     ScriptedInterpreter,
 )
-from amiga_ros2_coordinator.schema import ReDelegate  # noqa: E402
+from amiga_ros2_coordinator.vocabulary.schema import ReDelegate  # noqa: E402
 from fakes import FakeMission, FakeNav  # noqa: E402
 
 TASK_ID = 21

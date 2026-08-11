@@ -35,6 +35,12 @@ def qualify_ros(ns, topic):
 
 def build_shims(ns, imu_topic, imu_frame):
     use_sim_time = {"use_sim_time": True}
+    # Matches the frame_prefix given to robot_state_publisher (see
+    # urdf.launch.py). Every shim below stamps a frame_id straight from a
+    # parameter with nothing else to rewrite it later, so it has to carry
+    # this robot's prefix itself or its messages claim a frame name another
+    # robot's TF just as validly claims.
+    prefix = f"{ns}/" if ns else ""
 
     return [
         Node(
@@ -78,6 +84,9 @@ def build_shims(ns, imu_topic, imu_frame):
                 {
                     "input_topic": qualify_ros(ns, "/navsat"),
                     "output_topic": qualify_ros(ns, "/gps/pvt"),
+                    # Matches urdf.launch.py's sim gps_link_name override
+                    # (see sim_bringup.launch.py).
+                    "frame_id": f"{prefix}gps_antenna",
                 },
             ],
         ),
@@ -92,7 +101,7 @@ def build_shims(ns, imu_topic, imu_frame):
                 {
                     "input_topic": qualify_ros(ns, "/chassis/imu"),
                     "output_topic": qualify_ros(ns, imu_topic),
-                    "frame_id": imu_frame,
+                    "frame_id": f"{prefix}{imu_frame}",
                 },
             ],
         ),
@@ -115,7 +124,7 @@ def build_shims(ns, imu_topic, imu_frame):
                     "depth_info_out": qualify_ros(ns, "/oak0/stereo/camera_info"),
                     "points_in": qualify_ros(ns, "/oak_camera_front/points"),
                     "points_out": qualify_ros(ns, "/oak0/points"),
-                    "rgb_frame_id": "oak0_rgb_camera_frame",
+                    "rgb_frame_id": f"{prefix}oak0_rgb_camera_frame",
                     "depth_to_mm": True,
                 },
             ],
@@ -139,7 +148,7 @@ def build_shims(ns, imu_topic, imu_frame):
                     "depth_info_out": qualify_ros(ns, "/oak1/stereo/camera_info"),
                     "points_in": qualify_ros(ns, "/oak_camera_back/points"),
                     "points_out": qualify_ros(ns, "/oak1/points"),
-                    "rgb_frame_id": "oak1_rgb_camera_frame",
+                    "rgb_frame_id": f"{prefix}oak1_rgb_camera_frame",
                     "depth_to_mm": True,
                 },
             ],
@@ -161,6 +170,16 @@ def build_shims(ns, imu_topic, imu_frame):
                     "info_in": qualify_ros(ns, "/realsense/camera_info"),
                     "rgb_info_out": qualify_ros(ns, "/camera/color/camera_info"),
                     "depth_info_out": qualify_ros(ns, "/camera/depth/camera_info"),
+                    # Deliberately NOT prefixed, unlike every other frame_id
+                    # in this file: the Kinova arm/wrist-camera TF comes from
+                    # sim_arm.launch.py's own "kinova_robot_state_publisher",
+                    # a MoveIt-managed robot_description this file has no
+                    # matching frame_prefix for yet. Prefixing only here would
+                    # make this shim's messages claim a frame that RSP never
+                    # publishes. So the wrist camera still collides across
+                    # robots in a multi-robot Foxglove view — the arm's TF
+                    # needs the same treatment as urdf.launch.py's before this
+                    # can be prefixed too.
                     "rgb_frame_id": "camera_color_frame",
                     "depth_frame_id": "camera_depth_frame",
                     "depth_to_mm": True,

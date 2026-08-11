@@ -95,15 +95,32 @@ def qualify_gz(ns: str, topic: str) -> str:
 
 
 def namespace_model_sdf(content: str, ns: str) -> str:
-    """Prefix per-instance sensor topics and namespace the ign_ros2_control
-    plugin so a namespaced robot never collides with robot1 or another
-    namespaced robot. No-op when ns is empty (robot1)."""
+    """Prefix per-instance sensor topics, TF frame ids and namespace the
+    ign_ros2_control plugin so a namespaced robot never collides with robot1
+    or another namespaced robot. No-op when ns is empty (robot1).
+
+    `<gz_frame_id>` (chassis_imu, the lidar) is the frame_id Gazebo stamps
+    directly on the bridged message, with nothing downstream to rewrite it —
+    unlike the camera/GPS/IMU shims, which take their own frame_id parameter.
+    Left bare, every robot's lidar claims frame "lidar_link", and a viewer
+    that watches more than one robot's /tf at once (Foxglove's 3D panel does,
+    merging every tf2_msgs/TFMessage topic into one tree keyed by frame_id)
+    resolves that name to whichever robot last published it — every robot's
+    point cloud renders through one robot's transform. robot_state_publisher
+    gets the matching `frame_prefix` in urdf.launch.py, so both sides agree
+    on "<ns>/lidar_link".
+    """
     if not ns:
         return content
     for topic in SENSOR_TOPICS:
         content = content.replace(
             f"<topic>{topic}</topic>", f"<topic>{qualify_gz(ns, topic)}</topic>"
         )
+    content = re.sub(
+        r"<gz_frame_id>([^<]+)</gz_frame_id>",
+        rf"<gz_frame_id>{ns}/\1</gz_frame_id>",
+        content,
+    )
     content = content.replace(
         IGN_ROS2_CONTROL_PLUGIN_OPEN,
         IGN_ROS2_CONTROL_PLUGIN_OPEN
@@ -388,12 +405,8 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "robot_spacing_y",
-                default_value="6.0",
-                description="Y offset (meters) added per robot index beyond "
-                "robot1 (robot i spawns at robot1_y + (i-1)*robot_spacing_y). "
-                "Default matches today's robot1/robot2 gap exactly at "
-                "robot_count=2. May need tuning for large robot_count "
-                "depending on world layout.",
+                default_value="10.0",
+                description="Y offset (meters) added per robot index ",
             ),
             DeclareLaunchArgument(
                 "robot_spawn_stagger",

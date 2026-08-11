@@ -1,0 +1,39 @@
+{% if rejection_reason %}
+## IMPORTANT: your previous candidate was REJECTED by the arbiter
+Reason: {{ rejection_reason }}
+Produce a DIFFERENT edit that fixes this specific problem.
+
+{% endif %}
+## Why you are being called: this robot's workload changed
+No behavior-tree node failed. A task crossed between robots at auction and the arbiter has ALREADY committed the structural edit — the active XML below includes it. What it committed is the floor: the objective and the prerequisite steps the ontology knows about, in the order they have to happen, appended to the end of the plan. Nothing in it says where the work belongs in the run, or reflects anything the other robot knew about doing it.
+
+{{ request_json }}
+
+Read that as follows:
+- `cause` — `task_absorbed` means this robot won the task and now owes the work; `task_transferred` means it gave the task away and no longer owes it.
+- `target` — the tree (or place) the task is about.
+- `capabilities` — the actions the task was announced as needing.
+- `dropped` — steps the announcement asked for that could not be rebuilt from 7 bytes of radio message. If this is non-empty, YOU are the only thing that can put them back. An entry of `MoveToAisleHead` means the aisle for that tree could not be resolved and you should add the aisle move yourself.
+- `findings` — what the edit left inconsistent. A step that establishes something nothing later needs is now dead weight; a step whose expected prerequisite is gone will run badly.
+- `note` — free text from the robot that had this task, sent over a very narrow radio link. If it is non-empty it is the most valuable thing in this message: it is a fact about the world that this robot has no other way of knowing, and it usually constrains HOW the work has to be done rather than whether. Act on it. If it names a route, a hazard, or an ordering, your plan should reflect that and not merely append the task.
+
+## What a good edit does here
+- Absorbed work: place it where it costs least given what else the plan visits, and make sure its prerequisite chain is intact (enter the aisle, approach the tree, then sample). If the note says something about how to reach it, honour that.
+- Transferred work: remove what the findings say is now pointless, and repair anything that lost a prerequisite it needed.
+- Do not re-add work this robot no longer owns, and do not drop work it still does.
+- Do not change the <Mission> text.
+
+## Active mission XML (the arbiter's edit is already in here)
+{{ mission_xml }}
+
+## Mission XML Schema (XSD) — the edit MUST validate against this
+{{ xsd_text }}
+
+## World state (last {{ world_state_count }} updates)
+{{ world_state }}
+
+## Prior attempts for '{{ failure_node }}' (do not repeat)
+{{ memory_summary }}
+
+Return ONLY the corrected XML. Do not use code fences or markdown. The edited XML MUST NOT start with ``` and MUST NOT end with ```
+The ONLY valid leaf elements are {% for leaf in valid_leaves %}<{{ leaf.tag }}>{% if not loop.last %}, {% endif %}{% endfor %} — never <Action>, <Task>, or any other tag name.

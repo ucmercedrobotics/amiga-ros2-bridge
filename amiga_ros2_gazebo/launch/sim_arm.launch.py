@@ -1,49 +1,15 @@
-"""Kinova arm stack for simulation — mirrors kortex_move/launch/robot.launch.py.
-
-Identical to the hardware launch except:
-  * NO ros2_control_node — the ign_ros2_control plugin inside Gazebo already
-    provides a per-robot /<robot_name>/controller_manager, and the
-    controllers (joint_trajectory_controller, robotiq_gripper_controller)
-    are spawned by gazebo.launch.py with the same names as on the real robot.
-    * NO fault_controller / twist_controller (kortex hardware only). The
-        KinovaCommandVelocity action is therefore unavailable in simulation;
-        MoveTo (move_group / pilz) and the gripper action work unchanged.
-    * A sim-only joint-state filter republishes /<robot_name>/kinova/joint_states
-        from the Gazebo joint-state stream, so MoveIt never sees the Amiga
-        wheel joints.
-
-Everything in this file (move_group, kinova robot_state_publisher,
-joint_state_filter, rviz, moveto) is namespaced under the `robot_name`
-launch argument (empty = unnamespaced, e.g. the single-robot layout when
-robot_count==1), so it can be instantiated once per robot (see
-sim_bringup.launch.py). The `moveto` convenience action server is the one
-exception: kortex_move (a separate git submodule, out of scope for this
-phase) hardcodes its action/service names (`/move_to`, `/gripper_control`)
-as absolute, so two instances would collide regardless of node namespace —
-it is only launched when `primary:=true` (robot1, whether or not it happens
-to be namespaced). moveto still needs its OWN namespace set to match
-move_group's (see the comment above its Node() below) so its
-MoveGroupInterface and robot_description_semantic subscription find the
-right instance; the two absolute action servers above are unaffected by
-that namespace, so moveto's own public API (/move_to, /gripper_control)
-never moves. One residual gap: moveto's downstream gripper action client
-(`/robotiq_gripper_controller/gripper_cmd`, kortex_move/src/moveto.cpp) is
-ALSO hardcoded absolute, so once robot1 is namespaced (robot_count>1) it
-can no longer reach robot1's own (now namespaced) gripper controller —
-`/move_to` arm motion still works, but moveto's `/gripper_control` action
-will fail to actuate the gripper in that case. Fixing that requires a
-kortex_move code change, out of scope here. A non-primary robot's arm is
-still fully controllable via its own move_group (MoveGroupInterface / RViz
-MotionPlanning panel), just not through this repo's `moveto` wrapper.
-"""
-
 import os
 
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    OpaqueFunction,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -60,7 +26,6 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     launch_moveto = LaunchConfiguration("launch_moveto")
     ns = LaunchConfiguration("robot_name").perform(context)
-    primary = LaunchConfiguration("primary").perform(context).lower() == "true"
     use_sim_time = {"use_sim_time": True}
 
     # Relative "from" patterns (not "/joint_states") so the remap matches
@@ -70,9 +35,22 @@ def launch_setup(context, *args, **kwargs):
     # /<ns>/joint_states BEFORE remapping, so an absolute "from" pattern
     # would silently never match and these nodes would read the raw,
     # unfiltered base+arm stream instead of the kinova-filtered one.
+    #
+    # The two TF entries below are the opposite case, and that is why their
+    # "from" patterns are absolute: tf2_ros hardcodes /tf and /tf_static
+    # regardless of a node's namespace, so a relative pattern would never
+    # match. Without them every robot's arm broadcasts its links to the one
+    # global /tf under identical bare names — this URDF comes from the Kinova
+    # config and names its links base_link, shoulder_link, tool_frame with no
+    # per-robot prefix — and each robot's move_group then plans against
+    # whichever robot's arm pose happened to arrive last. The frames stay
+    # bare; putting each robot's copy on its own topic is what disambiguates
+    # them, exactly as it does for the mobile base.
     kinova_remappings = [
         ("joint_states", qualify_ros(ns, "kinova/joint_states")),
         ("robot_description", qualify_ros(ns, "kinova/robot_description")),
+        ("/tf", qualify_ros(ns, "tf")),
+        ("/tf_static", qualify_ros(ns, "tf_static")),
     ]
 
     # Same description/mappings as kortex_move robot.launch.py, but with fake
@@ -168,27 +146,44 @@ def launch_setup(context, *args, **kwargs):
 
     actions = [robot_state_publisher, joint_state_filter, move_group_node, rviz_node]
 
-    # kortex_move's moveto hardcodes /move_to, /gripper_control absolute —
-    # only safe to run once, on the primary (robot1) instance. It still
-    # needs namespace=ns (even though those two action *servers* stay
-    # absolute regardless): moveto's MoveGroupInterface and its
-    # robot_description_semantic subscription use RELATIVE names, which
-    # must resolve under the same namespace as move_group_node's or moveto
-    # times out waiting for the SRDF and crashes (only ever visible once
-    # robot1 itself is namespaced, i.e. robot_count>1).
-    if primary:
-        actions.append(
-            Node(
-                package="kortex_move",
-                executable="moveto",
-                name="moveto",
-                namespace=ns,
-                output="screen",
-                parameters=[use_sim_time],
-                remappings=kinova_remappings,
-                condition=IfCondition(launch_moveto),
-            )
+    actions.append(
+        Node(
+            package="kortex_move",
+            executable="moveto",
+            name="moveto",
+            namespace=ns,
+            output="screen",
+            parameters=[use_sim_time],
+            remappings=kinova_remappings,
+            condition=IfCondition(launch_moveto),
         )
+    )
+
+    home_topic = qualify_ros(ns, "joint_trajectory_controller/joint_trajectory")
+    home_goal = (
+        "{joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], "
+        "points: [{positions: [0.0, -0.785398, -2.0, 0.0, -0.436332, 1.5708], "
+        "time_from_start: {sec: 3}}]}"
+    )
+    actions.append(
+        TimerAction(
+            period=10.0,
+            actions=[
+                ExecuteProcess(
+                    cmd=[
+                        "ros2",
+                        "topic",
+                        "pub",
+                        "--once",
+                        home_topic,
+                        "trajectory_msgs/msg/JointTrajectory",
+                        home_goal,
+                    ],
+                    output="screen",
+                )
+            ],
+        )
+    )
 
     return actions
 
@@ -206,15 +201,7 @@ def generate_launch_description():
                 "robot_name",
                 default_value="",
                 description="Namespace for this robot's arm stack (move_group, "
-                "kinova RSP, joint_state_filter). Empty = unnamespaced.",
-            ),
-            DeclareLaunchArgument(
-                "primary",
-                default_value="true",
-                description="Whether this is robot1 — the only instance that "
-                "gets the kortex_move `moveto` node (see module docstring). "
-                "Independent of `robot_name`: robot1 may or may not be "
-                "namespaced depending on robot_count.",
+                "kinova RSP, joint_state_filter, moveto). Empty = unnamespaced.",
             ),
             OpaqueFunction(function=launch_setup),
         ]

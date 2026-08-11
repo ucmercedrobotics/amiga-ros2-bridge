@@ -11,6 +11,11 @@ next -- both functions are pure. Every message it produces fits in a single LoRa
 payload by construction, which is what makes fragmentation someone else's
 problem rather than an omission.
 
+That stays true now that FREEFORM is built. A Freeform is one *fragment* of a
+note, and one call still produces one packet; deciding where a note is cut and
+putting the pieces back together belong to reliability/notes.py. All this file
+gained is a field whose length is "the rest of the buffer".
+
 Layout is declared once, in ``_LAYOUTS``, and both directions are driven from
 it. That is deliberate: an encoder and a decoder written out by hand twice is an
 invitation for the two to disagree about a field width in a way no round-trip
@@ -32,8 +37,10 @@ from .definitions import (
     DEFAULT_MAX_PAYLOAD_BYTES,
     ETA_MAX_S,
     ETA_RESOLUTION_S,
+    FRAG_MAX,
     HEADER_BYTES,
     HEADER_FORMAT,
+    NOTE_ID_MAX,
     PRIORITY_MAX,
     RESERVED_TYPES,
     SEQ_MAX,
@@ -50,6 +57,7 @@ from .messages import (
     BUILT_MESSAGES,
     Ack,
     Bid,
+    Freeform,
     Grant,
     Heartbeat,
     Message,
@@ -156,6 +164,21 @@ class _Field:
     is_bool: bool = False
 
 
+@dataclass(frozen=True)
+class _Tail:
+    """A trailing bytes field that runs to the end of the packet.
+
+    Exactly one type has one (Freeform), and the restriction is structural
+    rather than stylistic: a tail has no length of its own, so it can only be
+    the last field, and only one field can be last. Everything before it is
+    still the ordinary fixed table, which is why ``_PAYLOAD_FORMAT`` and
+    ``_PAYLOAD_SIZE`` keep meaning what they meant -- for a tail-bearing type
+    they describe its fixed part, and the packet is that plus whatever remains.
+    """
+
+    name: str
+
+
 _HEADER_FIELDS: Tuple[_Field, ...] = (
     _Field("src", "B", SRC_MAX),
     _Field("seq", "H", SEQ_MAX),
@@ -205,9 +228,25 @@ _LAYOUTS = {
         _Field("ack_src", "B", SRC_MAX),
         _Field("ack_seq", "H", SEQ_MAX),
     ),
+    Freeform: (
+        _Field("task_id", "H", TASK_ID_MAX),
+        _Field("note_id", "B", NOTE_ID_MAX),
+        # Bounded to the byte, not to MAX_NOTE_FRAGMENTS. How long a note this
+        # fleet is willing to *send* is a policy the splitter enforces; a peer
+        # configured to send longer ones is telling us something true, and
+        # failing the decode would lose the fragments we did receive along with
+        # our ability to say why. The reassembler refuses the note instead,
+        # where the count can be reported.
+        _Field("frag_index", "B", FRAG_MAX),
+        _Field("frag_count", "B", FRAG_MAX),
+    ),
 }
 
+#: The variable-length tail of each type that has one. Only Freeform does.
+_TAILS = {Freeform: _Tail("text")}
+
 assert set(_LAYOUTS) == set(BUILT_MESSAGES), "layout table and message list disagree"
+assert set(_TAILS) <= set(_LAYOUTS), "a tail was declared for a type with no layout"
 
 
 def _payload_format(fields: Tuple[_Field, ...]) -> str:
@@ -231,12 +270,26 @@ _TARGETED = frozenset(
 
 assert len(_BY_TAG) == len(_LAYOUTS), "two message classes share a tag"
 
-#: Encoded size of each built type, header included.
+#: Encoded size of each built type, header included. For a tail-bearing type
+#: this is the size with an empty tail -- a floor rather than the size.
 MESSAGE_SIZES = {cls: HEADER_BYTES + size for cls, size in _PAYLOAD_SIZE.items()}
 
-#: Largest message this codec can produce. The whole vocabulary is fixed-size
-#: per type, so this is an exact bound, not an estimate.
-MAX_MESSAGE_BYTES = max(MESSAGE_SIZES.values())
+#: Largest message this codec can produce *from a type whose size its class
+#: determines*. Freeform is excluded, because for it there is no such number:
+#: the answer is whatever max_payload_bytes the caller passed to encode.
+#:
+#: Excluded rather than folded in with some assumed tail length, because this
+#: is what reliability/node.py budgets a request-plus-ACK round trip against.
+#: A round-trip budget built on a guess about how long somebody's note was
+#: would be a worse number than the exact one it replaced.
+MAX_MESSAGE_BYTES = max(
+    size for cls, size in MESSAGE_SIZES.items() if cls not in _TAILS
+)
+
+#: Header cost of a note fragment: the common header plus Freeform's fixed
+#: fields. Subtract from a payload budget to get the text bytes per fragment --
+#: which is what reliability/notes.py does, and the only reason this is public.
+NOTE_HEADER_BYTES = MESSAGE_SIZES[Freeform]
 
 
 # --------------------------------------------------------------------------
@@ -351,10 +404,14 @@ def target_fields(target: Target) -> dict:
 def encode(msg: Message, max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES) -> bytes:
     """Pack one typed message into one packet.
 
-    Raises ReservedMessageType for FREEFORM, UnknownMessageType for anything
-    that is not one of the six built types, FieldRangeError for a value that
-    does not fit its field, and PayloadTooLarge if the result would exceed
-    ``max_payload_bytes``.
+    Raises UnknownMessageType for anything that is not one of the six built
+    types, ReservedMessageType for a tag allocated but not yet built (none
+    currently are), FieldRangeError for a value that does not fit its field,
+    and PayloadTooLarge if the result would exceed ``max_payload_bytes``.
+
+    A Freeform is one *fragment*, and PayloadTooLarge on one means the caller
+    sized its fragments against a different budget than it is encoding with --
+    still a design error and still never repaired by splitting here.
     """
     tag = getattr(type(msg), "TAG", None)
     if tag is None:
@@ -362,12 +419,12 @@ def encode(msg: Message, max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES) -> 
             f"{type(msg).__name__} is not a codec message (no TAG)", "value"
         )
 
-    # Before the layout lookup, so FREEFORM reports as reserved rather than as
-    # an unknown type that merely happens to have no layout.
+    # Before the layout lookup, so a reserved tag reports as reserved rather
+    # than as an unknown type that merely happens to have no layout.
     if tag in RESERVED_TYPES:
         raise ReservedMessageType(
-            f"{MessageType(tag).name} (0x{int(tag):02x}) is reserved and not "
-            f"implemented: it needs fragmentation from the reliability layer"
+            f"{MessageType(tag).name} (0x{int(tag):02x}) is allocated but not "
+            f"implemented"
         )
 
     fields = _LAYOUTS.get(type(msg))
@@ -385,6 +442,20 @@ def encode(msg: Message, max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES) -> 
         *(_to_raw(f, getattr(msg, f.name), where) for f in fields),
     )
 
+    tail = _TAILS.get(type(msg))
+    if tail is not None:
+        value = getattr(msg, tail.name)
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            # str is refused rather than encoded here. Where a note is split is
+            # decided by a byte budget, so the caller that did the splitting is
+            # the one holding bytes; a str arriving at this point means someone
+            # skipped the splitter and is about to send a fragment that is not
+            # a fragment of anything.
+            raise FieldRangeError(
+                f"{where}.{tail.name}: expected bytes, got " f"{type(value).__name__}"
+            )
+        payload += bytes(value)
+
     packet = header + payload
     if len(packet) > max_payload_bytes:
         # Never split. Fragmentation is the reliability layer's job, and a
@@ -401,10 +472,13 @@ def decode(data: bytes) -> Message:
 
     Never reads past the end of ``data`` and never raises anything but
     CodecError for bad input. Distinguishes, by exception type: an unallocated
-    tag (UnknownMessageType), the reserved FREEFORM tag (ReservedMessageType),
+    tag (UnknownMessageType), a tag allocated but unbuilt (ReservedMessageType),
     a buffer that ends early (TruncatedMessage), a buffer with extra bytes on
     the end (TrailingBytes), and a value that cannot mean what it says
     (FieldRangeError).
+
+    "Extra bytes on the end" is only an error for the fixed-size types. For
+    Freeform the extra bytes are the message.
     """
     # Checked by type rather than by trying bytes(): bytes(5) does not fail, it
     # quietly hands back five zero bytes, which would decode as a plausible
@@ -423,23 +497,27 @@ def decode(data: bytes) -> Message:
 
     tag, src, seq = struct.unpack_from(HEADER_FORMAT, data, 0)
 
-    # Reserved is checked first so 0x07 can never be reported as unknown.
+    # Reserved is checked before the tag table and before any length
+    # validation, so an allocated-but-unbuilt tag reports as reserved even when
+    # the frame is also malformed. "We know what this is and cannot handle it"
+    # and "we have never heard of this" call for different operator responses.
     if tag in RESERVED_TYPES:
         raise ReservedMessageType(
-            f"{MessageType(tag).name} (0x{tag:02x}) is reserved and not "
-            f"implemented: it needs fragmentation from the reliability layer"
+            f"{MessageType(tag).name} (0x{tag:02x}) is allocated but not "
+            f"implemented"
         )
 
     cls: Optional[Type[Message]] = _BY_TAG.get(tag)
     if cls is None:
         raise UnknownMessageType(f"tag 0x{tag:02x} is not an allocated message type")
 
+    tail = _TAILS.get(cls)
     expected = HEADER_BYTES + _PAYLOAD_SIZE[cls]
     if len(data) < expected:
         raise TruncatedMessage(
             f"{cls.__name__} needs {expected} bytes, buffer has {len(data)}"
         )
-    if len(data) > expected:
+    if len(data) > expected and tail is None:
         raise TrailingBytes(
             f"{cls.__name__} is {expected} bytes, buffer has {len(data)} "
             f"({len(data) - expected} trailing)"
@@ -448,6 +526,12 @@ def decode(data: bytes) -> Message:
     fields = _LAYOUTS[cls]
     raw = struct.unpack_from(_PAYLOAD_FORMAT[cls], data, HEADER_BYTES)
     values = {f.name: _from_raw(f, r, cls.__name__) for f, r in zip(fields, raw)}
+    if tail is not None:
+        # Whatever is left, including nothing. An empty tail is a legal packet
+        # rather than a truncated one: a note whose text divides evenly can end
+        # with a fragment carrying no bytes, and refusing that here would make
+        # the splitter's arithmetic a special case instead of a division.
+        values[tail.name] = data[expected:]
 
     if cls in _TARGETED:
         # Each target word is in range on its own, but the three together still

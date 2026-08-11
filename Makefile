@@ -169,8 +169,47 @@ amiga:
 	./scripts/bringup_amiga_tmux.sh
 
 ROBOT_COUNT ?= 1
+# Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
+# so this is the dial on how much coordination traffic the fleet can sustain.
+LORA_SF ?= 7
+# Set COORDINATION=false to bring up the robots without the radio layer.
+COORDINATION ?= true
+# AGENTS=true adds a full LLM stack per robot (world state, arbiter, mission
+# planner, triage, note). Needs AGENT_MODEL/AGENT_API_BASE set -- see
+# amiga_ros2_agents/README.md. It also switches the coordinators over to asking
+# those agents instead of their local stubs.
+AGENTS ?= false
+# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
+# they will RUN -- well-formed XML, the XSD, and the ontology's required
+# preconditions -- but not for whether they still satisfy the mission: no
+# formula, no SPIN, no viability budget, no edit-size or rate limit. For
+# bringing the coordination loop up end to end, where the question is whether a
+# task crosses robots and comes back as executable XML. Every accept is then
+# reported unverified, in the service response and in the arbiter's status.
+LTL ?= true
 sim:
-	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=$(ROBOT_COUNT)
+	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
+		robot_count:=$(ROBOT_COUNT) \
+		launch_coordination:=$(COORDINATION) \
+		launch_agents:=$(AGENTS) \
+		ltl_verification:=$(LTL) \
+		lora_spreading_factor:=$(LORA_SF)
+
+# One command, one working demo: a simulated fleet, a real LLM behind both
+# reasoning points, and a real BT failure -- every robot runs a real mission
+# with real GPS/orchard data (the checked-in examples/*.bin payloads), except
+# one robot that is missing a single tree from its own copy of the orchard.
+# Its plan still asks for that tree, so that one MoveToTreeID aborts for real
+# -- and because the tree itself is real and every other robot still has it,
+# the work that gets shed is work a peer can actually take. That drives the
+# actual pipeline: local LLM repair, arbiter rejection, budget exhausted,
+# triage escalation, a real auction among the still-healthy robots, and the
+# winner's LLM splicing the absorbed task into its own plan.
+# Nothing is hand-injected on a topic or service; see scripts/demo_llm_auction.sh
+# for the full explanation and the tmux layout.
+# Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
+llm-demo:
+	./scripts/demo_llm_auction.sh
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

@@ -29,7 +29,9 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "coordinator = amiga_ros2_coordinator.node:main",
+            "coordinator = amiga_ros2_coordinator.nodes.coordinator_node:main",
+            "coordinator_sim = amiga_ros2_coordinator.nodes.sim_node:main",
+            "escalate = amiga_ros2_coordinator.nodes.escalate:main",
         ],
     },
 )

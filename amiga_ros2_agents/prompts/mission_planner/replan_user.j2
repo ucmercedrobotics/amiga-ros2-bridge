@@ -7,6 +7,39 @@ Produce a DIFFERENT edit that fixes this specific problem.
 ## Failure event
 {{ event }}
 
+## Orchard layout (ground truth — the plan below must respect this)
+{% if orchard_facts %}
+{% for tree_id, aisle_id in orchard_facts.items() %}
+- tree {{ tree_id }} is reached from aisle {{ aisle_id if aisle_id is not none else "UNKNOWN" }}
+{% endfor %}
+Known aisles in this orchard: {{ known_aisles | join(", ") }}
+A <MoveToAisleHead> whose id is not one of these, or is not the tree's own
+aisle above, does not reach that tree — aisles run between rows of trees and
+cannot be crossed on foot or by rover to reach a different aisle's trees.
+{% else %}
+No orchard layout has been received yet — do not invent an aisle id for any
+tree; only change what the failure event and world state actually justify.
+{% endif %}
+
+{% if completed_trees %}
+## Already completed this mission — do NOT re-add these
+Trees {{ completed_trees | join(", ") }} have already been sampled
+successfully and are deliberately absent from the "Active mission XML" below.
+The robot has no way to resume mid-plan — it re-runs the whole XML from the
+top on every redeploy — so re-adding a finished tree drives the robot through
+it again. If none of the remaining objectives are worth attempting, say so by
+leaving the plan empty of them rather than restoring a finished one.
+
+{% endif %}
+{% if prior_fault_constraints %}
+## Active constraints from earlier faults this mission
+{% for c in prior_fault_constraints %}
+- {{ c.node }}: {{ c.reason }}
+{% endfor %}
+These reasons came from earlier failures in this same mission and still
+apply — do not write a plan that repeats what one of them ruled out.
+
+{% endif %}
 ## Active mission XML
 {{ mission_xml }}
 
