@@ -9,6 +9,10 @@ ROS2 mission planner that:
 - Publishes the edit as a CANDIDATE to /mission/candidate_xml (the Arbiter gates it)
 - On arbiter rejection: retries with the reason as feedback (bounded)
 - On arbiter abort: halts replanning for the rest of the mission
+- On running out of either budget: publishes a terminal give-up to
+  /mission/planner_status, which is what triage escalates on. Every path that
+  stops replanning has to report itself, or the robot stalls holding work it
+  will never do and nothing outside this node can tell.
 - Keeps a compact memory of prior attempts
 
 Edits are validated against the real BT.CPP XSD (amiga_ros2_behavior_tree's
@@ -147,6 +151,10 @@ class MissionPlannerNode(Node):
         # (template, extra) of the session in flight, so a rejection retries the
         # same question rather than the default one.
         self._last_planner_call = ("mission_planner/replan_user.j2", {})
+        # (cause, node) pairs already reported as a give-up. Every later BT
+        # failure re-enters _run_planner and would re-announce an exhausted
+        # budget on each one, which downstream reads as a fresh escalation.
+        self._gave_up: Set[tuple] = set()
 
         self.status = StatusPublisher(self)
         self.status.publish(self.get_status())
@@ -359,20 +367,7 @@ class MissionPlannerNode(Node):
                     f"Arbiter rejected {MAX_REJECTION_RETRIES} candidates for "
                     f"node '{event.get('node')}' — giving up on this failure"
                 )
-                self._last_status["last_edit_summary"] = (
-                    f"gave up after {MAX_REJECTION_RETRIES} rejections: {reason}"
-                )
                 gave_up_node = event.get("node")
-                status = String()
-                status.data = json.dumps(
-                    {
-                        "outcome": "gave_up",
-                        "cause": "rejection_retries_exhausted",
-                        "node": gave_up_node,
-                        "last_reason": reason,
-                    }
-                )
-                self.status_pub.publish(status)
                 gave_up = True
             else:
                 self._rejection_retries += 1
@@ -382,7 +377,13 @@ class MissionPlannerNode(Node):
                 gave_up = False
 
         if gave_up:
-            self.status.publish(self.get_status())
+            # Published outside the lock: _report_gave_up takes it, and this is
+            # a plain Lock rather than an RLock.
+            self._report_gave_up(
+                cause="rejection_retries_exhausted",
+                node=gave_up_node,
+                reason=f"gave up after {MAX_REJECTION_RETRIES} rejections: {reason}",
+            )
             return
 
         self.get_logger().warn(
@@ -394,6 +395,56 @@ class MissionPlannerNode(Node):
             kwargs={"template": template, "extra": extra},
             daemon=True,
         ).start()
+
+    def _report_gave_up(self, cause: str, node, reason: str) -> None:
+        """Announce that local repair is over, on /mission/planner_status.
+
+        This is the *only* thing that tells triage the planner has finished
+        trying, and therefore the only route from a fault this robot cannot fix
+        to /coordination/infeasible and the fleet. A give-up that stops at a log
+        line — which is what reaching MAX_RETRIES used to do — is a silent stall:
+        the robot holds work it will never do and nobody outside this node ever
+        finds out.
+
+        The payload keys are the contract triage reads. `outcome` names the
+        terminal state, `cause` says which budget ran out, and `last_reason`
+        carries the arbiter's own words so the escalation says something more
+        useful than "gave up".
+
+        Deduplicated, because _run_planner is re-entered on every later BT
+        failure and an exhausted budget stays exhausted -- without this, one
+        give-up would be re-announced for the rest of the mission.
+
+        What the key is depends on which budget ran out, and getting that wrong
+        escalates twice. Rejection retries are counted per node, so two nodes
+        exhausting their retries are two separate give-ups. MAX_RETRIES counts
+        planning *sessions* for the whole mission, so it is one give-up no
+        matter which node's failure happened to be the last one in: a leaf
+        failure is always followed by the tree's own FAILURE event, so keying
+        that on the node reliably fires once for the leaf and again for
+        "<tree>", and triage escalates both.
+        """
+        key = (cause,) if cause == "max_retries_exhausted" else (cause, node)
+        with self._lock:
+            if key in self._gave_up:
+                return
+            self._gave_up.add(key)
+            self._last_status["last_edit_summary"] = reason
+
+        self.status_pub.publish(
+            String(
+                data=json.dumps(
+                    {
+                        "outcome": "gave_up",
+                        "cause": cause,
+                        "node": node,
+                        "last_reason": reason,
+                    }
+                )
+            )
+        )
+        self.status.publish(self.get_status())
+        self.get_logger().error(f"Local replanning gave up ({cause}): {reason}")
 
     def _on_abort(self, msg: String):
         """Arbiter declared the mission non-viable — stop replanning entirely.
@@ -447,6 +498,17 @@ class MissionPlannerNode(Node):
         if sessions_done >= MAX_RETRIES:
             self.get_logger().warn(
                 f"Reached MAX_RETRIES ({MAX_RETRIES}) — no more replanning"
+            )
+            # A terminal outcome like any other. This used to return here and
+            # say nothing, so a robot that exhausted its planning budget looked
+            # from the outside exactly like one that had stopped failing.
+            self._report_gave_up(
+                cause="max_retries_exhausted",
+                node=event.get("node"),
+                reason=(
+                    f"reached MAX_RETRIES ({MAX_RETRIES}) planning sessions "
+                    f"without a plan that runs"
+                ),
             )
             return
 

@@ -461,6 +461,94 @@ def test_an_unverified_accept_never_claims_to_have_been_verified():
         node.destroy_node()
 
 
+def without_trees(*trees: str) -> str:
+    """ACTIVE with those trees no longer objectives. Structurally a fine plan.
+
+    Which is the point: nothing in checks 1-3 has any objection to it. Dropping
+    the work is only visible to the check that knows what the mission asked for.
+    """
+    plan = ACTIVE
+    for tree in trees:
+        plan = plan.replace(
+            f'      <MoveToTreeID name="Visit_Tree_{tree}" '
+            f'action_name="follow_tree_id_waypoint" id="{tree}" '
+            f'approach_tree="true"/>\n',
+            "",
+        ).replace(
+            f'      <SampleLeaf name="Sample_Leaves_Tree_{tree}" '
+            f'action_name="segment_leaves"/>\n',
+            "",
+        )
+    assert plan != ACTIVE, f"nothing was removed for {trees}"
+    return plan
+
+
+def test_verification_off_still_refuses_a_plan_that_abandons_the_mission():
+    """The check that ends the local loop does not ride with the formal gate.
+
+    This is the split. Turning SPIN off is a statement about how strong a claim
+    the arbiter is making; it is not permission for the planner to make a
+    failing plan pass by deleting the work. Before the flags were separated
+    this candidate was accepted, the planner never exhausted anything, and the
+    fault it was papering over never reached the coordinator.
+    """
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None  # would raise if the formal gate were consulted
+        node.original_objectives = {"10", "60"}
+        node.max_droppable = 2
+
+        accepted, reason, abort = node._evaluate(without_trees("60"))
+        assert not accepted
+        assert not abort, "one unjustified drop is fixable — retry, do not abort"
+        assert "unjustified drop" in reason
+        assert "60" in reason
+    finally:
+        node.destroy_node()
+
+
+def test_verification_off_still_aborts_when_too_little_of_the_mission_survives():
+    """And the abort survives too, which is the signal triage escalates on.
+
+    ``/mission/abort`` is the one message that ends local recovery. With the
+    two flags fused, a run with SPIN off had no way to produce it at all, so
+    nothing was ever handed to the fleet.
+    """
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None
+        node.original_objectives = {"10", "60"}
+        node.justified_drops = {"10"}  # already conceded earlier this mission
+        node.max_droppable = 1
+        node._last_failure_reason = "tree removed from the orchard"  # permits 1 new
+
+        # Gate 1 passes: only tree 60 is newly dropped, and a permanent failure
+        # allows one. Gate 2 does not: that makes two gone in total, against a
+        # budget of one.
+        accepted, reason, abort = node._evaluate(without_trees("10", "60"))
+        assert not accepted
+        assert abort, "2 drops against a budget of 1 is not something to retry"
+        assert "no longer viable" in reason
+    finally:
+        node.destroy_node()
+
+
+def test_objective_gating_off_is_the_only_way_to_skip_the_objective_check():
+    """The escape hatch still exists — it is just its own flag now."""
+    node = unverified_arbiter()
+    try:
+        node._ltl_gate = None
+        node.objective_gating = False
+        node.original_objectives = {"10", "60"}
+        node.max_droppable = 0
+
+        accepted, reason, abort = node._evaluate(without_trees("10", "60"))
+        assert accepted, reason
+        assert not abort
+    finally:
+        node.destroy_node()
+
+
 def test_verification_off_still_refuses_a_plan_that_cannot_run():
     """The three checks that survive are the ones about running, not meaning.
 

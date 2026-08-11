@@ -28,12 +28,30 @@ The viability budget is obtained once, up front, via a single LLM call when the
 pristine mission is first seen.
 
 Parameters:
+    objective_gating (bool, default True)
+        Check 4. Whether the plan still contains the work the mission asked
+        for, and whether enough of it survives to be worth running. This is
+        the *only* check that can ABORT, so it is also the only thing that
+        ends the local repair loop — with it off, a plan that quietly drops
+        every objective is accepted, the planner never gives up, and nothing
+        is ever escalated to the fleet. Off is for testing check 5 in
+        isolation, never for a run that has to reach a coordinator.
+
     ltl_verification (bool, default True)
-        False runs checks 1-3 only. Those decide whether a plan will run; 4-7
-        decide whether it is still the mission that was asked for, which is the
-        claim verification makes. Off, every accept is reported unverified —
-        `verified` in the service response, `ltl_unverified` in the status —
-        so a run with the gate down can never be mistaken for one without.
+        Checks 5-7. The formal claim (a formula, and SPIN agreeing the plan
+        satisfies it) plus the two churn policies that ride with it. Off,
+        every accept is reported unverified — `verified` in the service
+        response, `ltl_unverified` in the status — so a run with the gate down
+        can never be mistaken for one without.
+
+The two are independent on purpose. They used to be one flag, and because
+check 4 sat on the LTL side of it, turning SPIN off to bring the coordination
+loop up also turned off the abort that the coordination loop is triggered by:
+no viability budget, no /mission/abort, no escalation, no auction. Checks 6-7
+are policy about plan churn rather than about meaning and do not really belong
+under `ltl_verification` either; they are left there for now because moving
+them changes when a candidate is rejected, and that is a separate decision from
+this one.
 """
 
 import json
@@ -80,11 +98,11 @@ class ArbiterNode(Node):
         super().__init__("arbiter")
         self._lock = Lock()
 
-        #: With verification off, checks 4-7 do not run: no LTL formula, no SPIN,
-        #: no viability budget, no edit-size or rate limit. What survives is the
-        #: part that decides whether a plan will *run* -- well-formed XML, the
-        #: XSD, and the ontology's required preconditions -- and not the part
-        #: that decides whether it is still the mission that was asked for.
+        #: With verification off, checks 5-7 do not run: no LTL formula, no SPIN,
+        #: no edit-size or rate limit. What survives is the part that decides
+        #: whether a plan will *run* -- well-formed XML, the XSD, and the
+        #: ontology's required preconditions -- plus check 4, which decides
+        #: whether the plan still contains the mission's work.
         #:
         #: For bringing the coordination loop up end to end, where the question
         #: is whether a task crosses robots and comes back as executable XML,
@@ -95,6 +113,18 @@ class ArbiterNode(Node):
         self.declare_parameter("ltl_verification", True)
         self.ltl_verification = bool(
             self.get_parameter("ltl_verification").get_parameter_value().bool_value
+        )
+
+        #: Check 4, and separate from the flag above because it answers a
+        #: different question and has a different consequence. LTL verification
+        #: is a claim *about* an accepted plan; this is the only check that can
+        #: declare the mission dead, and /mission/abort is what tells triage the
+        #: local loop is finished. A robot whose arbiter cannot abort has no way
+        #: to reach its own coordinator, so this defaults on even in the runs
+        #: that switch the formal gate off.
+        self.declare_parameter("objective_gating", True)
+        self.objective_gating = bool(
+            self.get_parameter("objective_gating").get_parameter_value().bool_value
         )
 
         self.active_mission_xml: Optional[str] = None
@@ -170,8 +200,17 @@ class ArbiterNode(Node):
         if not self.ltl_verification:
             self.get_logger().warn(
                 "ltl_verification=false — plans are checked for whether they RUN "
-                "(XSD + preconditions), not for whether they still satisfy the "
-                "mission. Every accept will be reported unverified."
+                "(XSD + preconditions) and for whether they still contain the "
+                "mission's work (objective_gating), but no formula is generated "
+                "and SPIN never runs. Every accept will be reported unverified."
+            )
+        if not self.objective_gating:
+            self.get_logger().warn(
+                "objective_gating=false — a candidate may drop any or all of the "
+                "mission's objectives and still be accepted, and this arbiter "
+                "can no longer ABORT. Nothing will publish /mission/abort, so "
+                "the local repair loop has no terminal state and no fault will "
+                "ever be escalated to the coordinator."
             )
 
     # ------------------------------------------------------------------
@@ -205,25 +244,26 @@ class ArbiterNode(Node):
                 self.get_logger().info(
                     f"Captured original mission objectives: trees {trees}"
                 )
-                if not self.ltl_verification:
-                    # Both threads below exist only to have an answer ready for
-                    # checks 4 and 5, which are not going to run.
-                    return
-                Thread(
-                    target=self._compute_viability_budget,
-                    args=(mission_text, trees),
-                    daemon=True,
-                ).start()
-                # Translate the mission to LTL now, while nothing is waiting on
-                # it. The gate needs a formula for every candidate, and the
-                # model call is the slow part of it; done here, a replan pays
-                # only for SPIN. Also surfaces an unusable mission statement at
-                # mission start rather than at the first fault.
-                Thread(
-                    target=self._ltl_gate.warm,
-                    args=(mission_text,),
-                    daemon=True,
-                ).start()
+                # One thread per check, started independently: the budget is
+                # check 4's input and the formula is check 5's, and the two
+                # checks are switched separately.
+                if self.objective_gating:
+                    Thread(
+                        target=self._compute_viability_budget,
+                        args=(mission_text, trees),
+                        daemon=True,
+                    ).start()
+                if self.ltl_verification:
+                    # Translate the mission to LTL now, while nothing is waiting
+                    # on it. The gate needs a formula for every candidate, and
+                    # the model call is the slow part of it; done here, a replan
+                    # pays only for SPIN. Also surfaces an unusable mission
+                    # statement at mission start rather than at the first fault.
+                    Thread(
+                        target=self._ltl_gate.warm,
+                        args=(mission_text,),
+                        daemon=True,
+                    ).start()
 
     def _on_candidate(self, msg: String):
         self._decide(msg.data)
@@ -584,19 +624,25 @@ class ArbiterNode(Node):
         if not ok:
             return False, reason, False
 
-        # Everything below asks whether the candidate is still the mission that
-        # was asked for. That is the question the flag turns off; the three
-        # checks above ask whether it will run at all, and always hold.
+        # 4. Semantic: objective preservation / viability. Before the
+        # verification flag is consulted, not after: this is the check that
+        # decides whether the mission is still worth running, and it is the only
+        # one that can abort. A run with the formal gate down still needs the
+        # local loop to be able to finish.
+        if self.objective_gating:
+            ok, reason, abort = self._check_objective_preserved(doc)
+            if not ok:
+                return False, reason, abort
+
+        # Everything below is the formal claim and the two churn policies that
+        # ride with it. That is the question this flag turns off; checks 1-4
+        # above ask whether the plan will run and whether it is still the
+        # mission, and always hold.
         if not self.ltl_verification:
             with self._lock:
                 self._last_status["ltl_unverified"] += 1
                 self._last_status["ltl_last_reason"] = "verification disabled"
             return True, "", False
-
-        # 4. Semantic: objective preservation / viability
-        ok, reason, abort = self._check_objective_preserved(doc)
-        if not ok:
-            return False, reason, abort
 
         with self._lock:
             active = self.active_mission_xml

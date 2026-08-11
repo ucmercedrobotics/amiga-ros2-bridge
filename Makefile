@@ -168,7 +168,7 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 5
+ROBOT_COUNT ?= 1
 # Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
 # so this is the dial on how much coordination traffic the fleet can sustain.
 LORA_SF ?= 7
@@ -196,12 +196,17 @@ sim:
 		lora_spreading_factor:=$(LORA_SF)
 
 # One command, one working demo: a simulated fleet, a real LLM behind both
-# reasoning points, and a real BT failure (every robot is fed a mission with
-# no GPS/orchard data behind it, so MoveToTreeID aborts for real) that drives
-# the actual pipeline -- local LLM repair, arbiter, viability budget
-# exhausted, triage escalation, a real auction, and the winner's LLM splicing
-# the absorbed task into its own plan. Nothing is hand-injected; see
-# scripts/demo_llm_auction.sh for the full explanation and the tmux layout.
+# reasoning points, and a real BT failure -- every robot runs a real mission
+# with real GPS/orchard data (the checked-in examples/*.bin payloads), except
+# one robot that is missing a single tree from its own copy of the orchard.
+# Its plan still asks for that tree, so that one MoveToTreeID aborts for real
+# -- and because the tree itself is real and every other robot still has it,
+# the work that gets shed is work a peer can actually take. That drives the
+# actual pipeline: local LLM repair, arbiter rejection, budget exhausted,
+# triage escalation, a real auction among the still-healthy robots, and the
+# winner's LLM splicing the absorbed task into its own plan.
+# Nothing is hand-injected on a topic or service; see scripts/demo_llm_auction.sh
+# for the full explanation and the tmux layout.
 # Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
 llm-demo:
 	./scripts/demo_llm_auction.sh

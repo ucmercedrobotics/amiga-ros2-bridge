@@ -265,9 +265,16 @@ def test_a_choice_keeps_only_what_both_branches_establish():
 
 
 def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
-    """The names /bt/status_change actually reports, resolved to tree ids."""
-    got = ontology.sample_leaf_trees(example("sample_20_64.xml"), orchard_map)
-    assert got == {"CollectLeafFromTree20": "20", "CollectLeafFromTree64": "64"}
+    """The names /bt/status_change actually reports, resolved to tree ids.
+
+    The names are the planner's, not ours, and change whenever an example plan
+    is regenerated -- so what is pinned is the binding, not the spelling: each
+    SampleLeaf resolves to the tree the MoveToTreeID ahead of it approached.
+    """
+    plan = example("sample_20_64.xml")
+    names = [el.get("name") for el in plan.iter("SampleLeaf")]
+    expected = dict(zip(names, PLANNER_PLANS["sample_20_64.xml"]))
+    assert ontology.sample_leaf_trees(plan, orchard_map) == expected
 
 
 def test_pruning_nothing_returns_the_plan_unchanged():
@@ -287,8 +294,9 @@ def test_a_completed_tree_and_its_retry_wrapper_are_removed(orchard_map):
         el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
     }
     assert remaining_ids == {"64"}
-    assert pruned.find(".//RetryUntilSuccessful[@name='SampleTree20Retry']") is None
-    assert pruned.find(".//RetryUntilSuccessful[@name='SampleTree64Retry']") is not None
+    retries = pruned.findall(".//RetryUntilSuccessful")
+    assert len(retries) == 1, "tree 20's retry wrapper should have gone with it"
+    assert retries[0].find(".//MoveToTreeID").get("id") == "64"
 
 
 def test_a_completed_trees_own_aisle_head_goes_with_it(orchard_map):

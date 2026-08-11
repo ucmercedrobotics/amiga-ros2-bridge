@@ -452,6 +452,115 @@ def test_a_planner_give_up_escalates(node, monkeypatch):
     assert sent[0]["cause"] == "planner_gave_up"
 
 
+@pytest.mark.parametrize(
+    "cause",
+    ["rejection_retries_exhausted", "max_retries_exhausted"],
+)
+def test_the_payload_the_planner_actually_publishes_escalates(node, monkeypatch, cause):
+    """The give-up contract, taken from the producer rather than restated.
+
+    This is the seam the whole pipeline hangs off: a fault this robot cannot fix
+    only reaches the fleet because triage recognises the planner saying it has
+    stopped. It was broken for exactly this reason -- the planner published
+    ``outcome`` and this node read ``event``, so the branch below never ran in
+    any configuration, while the test above passed because it wrote the payload
+    the consumer wanted instead of the one the producer sends.
+
+    So the message here is produced by ``MissionPlannerNode._report_gave_up``
+    itself. If either side renames a key again, this fails; a test that spelled
+    the JSON out by hand would not.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    published = []
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(
+            planner.status_pub, "publish", lambda msg: published.append(msg.data)
+        )
+        planner._report_gave_up(
+            cause=cause, node="Visit_Tree_60", reason="the arbiter refused it thrice"
+        )
+    finally:
+        planner.destroy_node()
+
+    assert len(published) == 1, "the planner did not report giving up at all"
+
+    sent = escalations(node, monkeypatch)
+    node._on_planner_status(_string(published[0]))
+
+    assert len(sent) == 1, f"triage did not escalate on {published[0]}"
+    assert sent[0]["cause"] == "planner_gave_up"
+    # The arbiter's own words survive the hop. Without this the escalation --
+    # and so the triage prompt that reads it -- says only "gave up".
+    assert "the arbiter refused it thrice" in sent[0]["detail"]
+
+
+def test_a_give_up_is_reported_once_however_often_the_planner_stops(monkeypatch):
+    """Every later BT failure re-enters the planner; the give-up is still one.
+
+    Without the dedup each subsequent fault would re-announce an exhausted
+    budget, and each one would be a fresh escalation of work the fleet is
+    already deciding about.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    published = []
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(
+            planner.status_pub, "publish", lambda msg: published.append(msg.data)
+        )
+        for _ in range(3):
+            planner._report_gave_up(
+                cause="rejection_retries_exhausted",
+                node="Visit_Tree_60",
+                reason="out of budget",
+            )
+        # Rejection retries are counted per node, so a different node that also
+        # runs out is a second, genuine give-up.
+        planner._report_gave_up(
+            cause="rejection_retries_exhausted",
+            node="Visit_Tree_10",
+            reason="out of budget",
+        )
+    finally:
+        planner.destroy_node()
+
+    assert len(published) == 2
+
+
+def test_running_out_of_sessions_escalates_once_not_once_per_failing_node(monkeypatch):
+    """The shape a live fleet run actually produced, before this was keyed right.
+
+    MAX_RETRIES counts planning sessions for the whole mission, not attempts at
+    one node. And a leaf failure is *always* followed by the tree's own FAILURE
+    event -- see test_scenario_bt_fault -- so whichever leaf was last in, the
+    planner is re-entered a moment later with node="<tree>". Keying the dedup on
+    the node made those two different give-ups: the run escalated the same
+    exhausted budget twice, milliseconds apart, and the coordinator opened two
+    interpretations of one fault.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    published = []
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(
+            planner.status_pub, "publish", lambda msg: published.append(msg.data)
+        )
+        for node_name in ("EnterRow2", "<tree>", "ApproachTree20"):
+            planner._report_gave_up(
+                cause="max_retries_exhausted",
+                node=node_name,
+                reason="reached MAX_RETRIES (20) planning sessions",
+            )
+    finally:
+        planner.destroy_node()
+
+    assert len(published) == 1
+
+
 def test_ordinary_planner_progress_does_not_escalate(node, monkeypatch):
     # The planner publishes this topic for terminal outcomes, but the loop is
     # allowed to keep trying. Escalating on every status message would put a

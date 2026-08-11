@@ -245,14 +245,28 @@ class TriageNode(Node):
             return
         with self._lock:
             self.attempts.append(info)
-        event = str(info.get("event", ""))
+        # The planner names its terminal state in `outcome` and which budget ran
+        # out in `cause`. `event` is what a hand-written status uses -- the
+        # escalate CLI, a scenario script, a test poking this by hand -- and it
+        # is read too rather than picked between: this is the single hinge
+        # between local recovery and the fleet, and it failing closed because
+        # the producer named a key differently is the most expensive way for it
+        # to be wrong. Both sides are pinned by tests now.
+        outcome = " ".join(
+            str(info.get(key, "")) for key in ("outcome", "event", "cause")
+        )
         # The planner publishes this topic for terminal outcomes only, but not
         # every terminal outcome is a give-up -- match on the ones that are.
-        if "gave_up" in event or "give_up" in event or "max_retries" in event:
-            self._escalate(
-                detail=f"local replanning gave up: {info.get('reason', event)}",
-                cause="planner_gave_up",
-            )
+        if not any(word in outcome for word in ("gave_up", "give_up", "max_retries")):
+            return
+        # `last_reason` is the arbiter's own words for why the final candidate
+        # was refused, which is the most useful sentence available here; the
+        # others are fallbacks for a payload that did not carry one.
+        reason = info.get("last_reason") or info.get("reason") or outcome.strip()
+        self._escalate(
+            detail=f"local replanning gave up: {reason}",
+            cause="planner_gave_up",
+        )
 
     def _on_abort(self, msg: String):
         """The arbiter has declared the mission non-viable. Hard escalation."""

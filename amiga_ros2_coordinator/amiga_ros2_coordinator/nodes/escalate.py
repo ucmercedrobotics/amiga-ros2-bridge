@@ -65,8 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--robot",
         default="",
         help="Namespace of the robot to escalate at, e.g. amiga2. Empty -- the "
-        "default -- targets the unnamespaced robot, which is robot 1 in "
-        "sim_bringup.launch.py.",
+        "default -- targets the unnamespaced robot, which sim_bringup.launch.py "
+        "only produces when robot_count:=1. In a fleet every robot is "
+        "namespaced, robot 1 included, so pass amiga1 rather than nothing.",
     )
     parser.add_argument(
         "--task", type=int, default=42, help=f"Task id, 1..{TASK_ID_MAX}."

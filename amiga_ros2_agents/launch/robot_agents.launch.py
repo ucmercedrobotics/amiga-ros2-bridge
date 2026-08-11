@@ -118,6 +118,17 @@ def generate_launch_description() -> LaunchDescription:
                 "Every accept is then reported unverified.",
             ),
             DeclareLaunchArgument(
+                "objective_gating",
+                default_value="true",
+                description="Whether the arbiter checks that a candidate still "
+                "contains the mission's objectives, and aborts when too few "
+                "survive. This is the only check that can publish "
+                "/mission/abort, which is what ends the local repair loop and "
+                "escalates to the coordinator -- so a fleet run wants it on "
+                "even when ltl_verification is off. False only to study the "
+                "formal gate on its own.",
+            ),
+            DeclareLaunchArgument(
                 "launch_mission_bridge",
                 default_value="true",
                 description="Start the mission bridge alongside the agents. "
@@ -146,12 +157,16 @@ def generate_launch_description() -> LaunchDescription:
                     parameters=[
                         {
                             "use_sim_time": use_sim_time,
-                            # Only the arbiter declares it; a parameter a node
-                            # never declares is ignored, so passing it to all
+                            # Only the arbiter declares these; a parameter a node
+                            # never declares is ignored, so passing them to all
                             # of them keeps this a one-line table entry rather
                             # than a special case in the loop.
                             "ltl_verification": ParameterValue(
                                 LaunchConfiguration("ltl_verification"),
+                                value_type=bool,
+                            ),
+                            "objective_gating": ParameterValue(
+                                LaunchConfiguration("objective_gating"),
                                 value_type=bool,
                             ),
                         }
