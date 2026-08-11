@@ -316,10 +316,12 @@ Full details, the parameter table, and what is deliberately *not* modelled are i
 The **coordinator** is built, in
 [`amiga_ros2_coordinator`](../amiga_ros2_coordinator): the contract-net state
 machine (announce, bid, grant, confirm) with both roles, and the two LLM
-invocation points stubbed behind interfaces. It uses exactly what this package
-offers — `send_reliable` to hold task ownership consistent, `send_broadcast`
-for heartbeats, announcements and bids, and once-only delivery inbound — and owes
-the transport nothing but a decision about what to send.
+invocation points now backed by real agents in `amiga_ros2_agents` by default
+(stubbable behind the same interfaces for tests and bench runs). It uses
+exactly what this package offers — `send_reliable` to hold task ownership
+consistent, `send_broadcast` for heartbeats, announcements and bids, and
+once-only delivery inbound — and owes the transport nothing but a decision
+about what to send.
 
 Its `coordinator` executable runs a `ReliabilityNode` in its own process, so do
 not launch `lora_reliability.launch.py` alongside it.

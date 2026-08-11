@@ -188,6 +188,8 @@ hand it a retransmit.
 | `max_pending` | `32` | reliable sends in flight; beyond it sends **fail fast** |
 | `max_payload_bytes` | `50` | per-message budget handed to the codec |
 | `tick_period_sec` | `0.1` | retransmit-deadline granularity; keep well under the timeout |
+| `rx_queue_depth` | `64` | depth of the `/lora/rx` subscription |
+| `tx_queue_depth` | `32` | depth of the `/lora/tx` publisher |
 | `spreading_factor` | `7` | **only** used for the timeout sanity check; match the radio |
 | `stats_period_sec` | `30.0` | counters log line; `0` disables |
 

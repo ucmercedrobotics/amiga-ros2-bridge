@@ -33,18 +33,46 @@ interfaces, not into the state machine.
 
 ## Watching a fleet do this
 
+The one-command path is a real fault, not an injected one: every robot in the
+sim is fed a mission with no orchard/GPS data behind it, so `MoveToTreeID`
+aborts for real the moment the tree ticks it, on the real `/bt/status_change`
+topic `bt_runner`'s `FaultReporter` publishes. From there the actual pipeline
+runs itself — local LLM repair, arbiter review, viability budget exhausted,
+triage escalation, a real auction, and the winner's LLM splicing the absorbed
+task into its own plan:
+
 ```bash
-make sim ROBOT_COUNT=3          # three robots, one virtual radio, three coordinators
-make fleet-scenario             # tell robot 2 it cannot finish task 42
+export AGENT_MODEL=hosted_vllm/openai/gpt-oss-120b
+export AGENT_API_BASE=http://100.88.70.65:8000/v1
+make llm-demo                   # sim, real LLMs, real BT failure, real auction
 ```
 
-With a model endpoint available, the same fleet with reasoning in it:
+See [`scripts/demo_llm_auction.sh`](../../scripts/demo_llm_auction.sh) for the
+full explanation and the tmux layout it brings up.
+
+For a bench run without a model endpoint, or to reproduce one specific
+scenario rather than a whole fault-to-auction chain, inject by hand instead:
+
+```bash
+make sim ROBOT_COUNT=3          # three robots, one virtual radio, three coordinators
+ros2 run amiga_ros2_coordinator escalate --robot amiga2 --task 42 --tree 60 \
+    --note "north end of row 7 is flooded; approach from the south"
+```
+
+`escalate` publishes one escalation on a chosen robot's `coordination/infeasible`
+— the same message the triage agent publishes when the planner and the arbiter
+have both given up. Everything after that is the real stack: no `make` target
+wraps it any more, so run it directly. Useful well beyond the demo: it is the
+manual injection point for any bench run, and the one `test_fleet_auction.py`
+(below) drives programmatically.
+
+With a model endpoint available, the same hand-driven fleet with reasoning in
+it:
 
 ```bash
 export AGENT_MODEL=hosted_vllm/openai/gpt-oss-20b
 export AGENT_API_BASE=http://localhost:8000/v1
 make sim ROBOT_COUNT=3 AGENTS=true    # + a full agent stack per robot
-make fleet-fault FAULT_ROBOT=amiga2   # fail a leaf and let the loop earn the shed
 ```
 
 `AGENTS=true` is what puts a model behind both reasoning points. It also
@@ -58,25 +86,6 @@ when `launch_coordination` is true, which is the default: one `lora_sim` medium
 for the fleet, and per robot a `lora_bridge`, a `mission_bridge` and a
 `coordinator_sim`. Robot *i* gets `node_id:=i`; robot 1 is unnamespaced and the
 rest live under `amiga2`, `amiga3`, …
-
-`fleet-scenario` wraps `ros2 run amiga_ros2_coordinator escalate`, which
-publishes one escalation on a chosen robot's `coordination/infeasible` — the
-same message the triage agent publishes when the planner and the arbiter have
-both given up. Everything after that is the real stack. Useful well beyond the
-demo: it is the manual injection point for any bench run.
-
-```bash
-ros2 run amiga_ros2_coordinator escalate --robot amiga2 --task 42 --tree 60 \
-    --note "north end of row 7 is flooded; approach from the south"
-```
-
-`fleet-fault` is the other injection point, and the honest one. It publishes a
-leaf failure on one robot's `bt/status_change`, which is what `bt_runner` itself
-publishes when a node fails — so the mission planner edits the plan, the arbiter
-reviews the edit, and only when that loop gives up does triage decide to shed.
-`fleet-scenario` skips all of that and hands the decision over ready-made. Both
-are worth having: one shows the decision being earned, the other reproduces an
-auction on demand.
 
 Two knobs make the fleet asymmetric, which is what makes an auction worth
 watching. `batteries:=100,20,100` gives robot 2 a flat battery, which enters the
@@ -497,8 +506,8 @@ stack.
 [`test_fleet_auction.py`](../test/test_fleet_auction.py) does the same with
 **three robots on one shared channel**, which is the smallest fleet where the
 mechanism is observable rather than tautological: with a single possible bidder
-there is nothing to order and nothing to suppress. It runs the scenario `make
-fleet-scenario` runs by hand — robot 1 sheds a task with a note on it, the note
+there is nothing to order and nothing to suppress. It runs the scenario
+`escalate` runs by hand — robot 1 sheds a task with a note on it, the note
 fragments precede the announcement, robot 1 leaves the task immediately, the
 closer of the two bidders wins and the further one suppresses itself on
 overhearing it.

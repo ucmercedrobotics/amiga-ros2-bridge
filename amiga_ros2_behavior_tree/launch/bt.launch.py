@@ -60,6 +60,23 @@ def generate_launch_description():
                 default_value="true",
                 description="Whether a JSON frame is expected after the XML frame",
             ),
+            DeclareLaunchArgument(
+                "planner_host",
+                default_value="100.88.70.65",
+                description="Fleet planner host to register/heartbeat with. Empty disables "
+                "planner discovery.",
+            ),
+            DeclareLaunchArgument(
+                "planner_port",
+                default_value="8003",
+                description="Fleet planner HTTP port",
+            ),
+            DeclareLaunchArgument(
+                "robot_id",
+                default_value=namespace,
+                description="Stable robot id sent to the planner. Defaults to the "
+                "robot namespace; empty (no namespace) falls back to hostname.",
+            ),
             # The three topic names are relative on purpose -- see the module
             # docstring. Passing an absolute name here still works and opts out.
             DeclareLaunchArgument(
@@ -122,6 +139,11 @@ def generate_launch_description():
                         ),
                         "mission_topic": LaunchConfiguration("mission_topic"),
                         "orchard_topic": LaunchConfiguration("orchard_topic"),
+                        "planner_host": LaunchConfiguration("planner_host"),
+                        "planner_port": ParameterValue(
+                            LaunchConfiguration("planner_port"), value_type=int
+                        ),
+                        "robot_id": LaunchConfiguration("robot_id"),
                     }
                 ],
             ),

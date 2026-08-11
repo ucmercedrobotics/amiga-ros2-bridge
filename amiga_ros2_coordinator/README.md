@@ -67,26 +67,39 @@ absent by construction, and the tests assert it from the other side.
 
 ## The two reasoning points
 
-Exactly two questions here need judgement rather than a decision procedure.
-Both are ports; one is answered by a real agent now, the other is not.
+Exactly two questions here need judgement rather than a decision procedure, and
+a third port sits beside them without being one. All three are wired by
+default now.
 
 | point | answered by | in tests |
 | --- | --- | --- |
 | `interpret_anomaly(context)` | the **triage agent** in `amiga_ros2_agents` — an LLM over the BT fault, the `/rosout` window around it, the world state and the live peers | `ScriptedInterpreter` |
-| `replan_and_verify(delta)` | **not built** — the existing replan generation + LTL verification (SPIN/Spot, Z3) | `AcceptEverything` |
+| `interpret_note(context)` | the **note agent** in `amiga_ros2_agents` — reads a peer's sentence about work it is offering and says whether it changes our bid | `ScriptedNoteInterpreter`, `IgnoreNotes` |
+| `replan_and_verify(delta)` | `VerifyingReplanner`, which hands the delta to the arbiter's `/mission/verify_replan` and runs it through the same LTL gate a local replan gets — **not a reasoning point itself** | `AcceptEverything` |
 
 `interpret_anomaly` returns one of exactly three typed actions — `ReDelegate`,
-`AddTask`, `DropTask` — and **never free text**. A state machine that parses
+`AddTask`, `DropTask` — and **never free text**. `interpret_note` is closed the
+same way, to `keep` / `revise` / `withdraw`. A state machine that parses
 sentences has no enumerable set of behaviours to test. Constraining the output
 means the reasoning step chooses among decisions this layer already knows how to
 execute, and everything below it stays deterministic and testable *regardless of
 what the model says*.
 
-The call runs off the state machine's lock, on its own thread: it takes seconds,
-and `report_infeasible` holds the lock `tick` and `on_message` need. If the agent
-is unreachable or answers outside the schema, the task stays ours — there is no
-fallback to the stub, because shedding work on a timeout is a fleet-wide decision
-made on no evidence.
+Both calls run off the state machine's lock, on their own thread: each takes
+seconds, and `report_infeasible`/bidding hold the lock `tick` and `on_message`
+need. If an agent is unreachable or answers outside its schema, the fallback is
+conservative rather than a stub filling in an answer: an anomaly whose triage
+call fails leaves the task ours (no fleet-wide decision on no evidence), and a
+note whose interpretation fails leaves the bid as computed (a note only ever
+adjusts a bid this robot was already going to make).
+
+`replan_and_verify` defaults to `VerifyingReplanner`; set `verify_replans:=false`
+to fall back to `AcceptEverything` (the acceptance tests pin the state machine
+against this and the other ports as stubs, and must not need an arbiter to
+run). See
+[docs/coordinator.md](docs/coordinator.md#the-two-reasoning-points) for the
+full detail on both agents, including why `note` costs the auction a
+deliberative window when it fires.
 
 ## Where an anomaly comes from
 
@@ -108,10 +121,19 @@ answered it. "What do we do about it?" is the model's call.
 Navigation and the mission/behaviour-tree stack are separate existing nodes,
 reached through ports defined in
 [`interfaces.py`](amiga_ros2_coordinator/ports/interfaces.py) and mocked in the
-tests. `main()` supplies placeholders that decline everything and say so once —
-enough to run on a bench with two radios and watch the peer registry populate.
-Wiring the real stacks means passing two objects to `CoordinatorNode` and
-changing nothing else.
+tests. The `coordinator` executable's `main()` supplies placeholders
+(`UnavailableNav`, `UnavailableMission`) that decline everything and say so
+once — enough to run on a bench with two radios and watch the peer registry
+populate.
+
+`coordinator_sim` (`nodes/sim_node.py`) is the second entry point, and wires
+the real thing: `GpsNav` for nav, `BehaviorTreeMission` (backed by
+`mission_bridge` in `amiga_ros2_agents`) for mission, both answering from
+cache and never blocking, since they're called under the same lock `tick` and
+`on_message` need. Not one line of `engine/coordinator.py` or
+`nodes/coordinator_node.py` knows which entry point it's running under — see
+["The wired ports" in docs/coordinator.md](docs/coordinator.md#the-wired-ports-coordinator_sim)
+for the constraints that come with that.
 
 ## Layout
 

@@ -199,6 +199,27 @@ However, we also use RTK over IP provided by the Amiga and Nav2 works just fine.
 See [gpt-mission-planner](https://github.com/ucmercedrobotics/gpt-mission-planner) for more details on how to use LLMs to generate mission plans for the Amiga.
 This can be used natively with our BT.CPP implementation.
 
+### Fleet coordination and in-flight LLM replanning
+Once a mission is running, three in-tree packages take over from there:
+[`amiga_ros2_comms`](amiga_ros2_comms/README.md) (LoRa transport, a coordination
+message codec, and a reliability layer for a multi-robot radio link),
+[`amiga_ros2_agents`](amiga_ros2_agents/README.md) (LLM agents that repair a
+plan in flight, verify it against an LTL specification, and decide what to do
+with work a robot cannot finish), and
+[`amiga_ros2_coordinator`](amiga_ros2_coordinator/README.md) (the contract-net
+auction that lets a fleet shed and absorb tasks). See
+[`amiga_ros2_coordinator/docs/coordinator.md`](amiga_ros2_coordinator/docs/coordinator.md)
+for how the pieces fit together end to end.
+
+To watch the whole pipeline run against a simulated fleet with a real LLM
+behind it — a real BT failure, local repair, an auction, and the winner
+splicing the task into its own plan:
+```bash
+export AGENT_MODEL=...
+export AGENT_API_BASE=...
+make llm-demo
+```
+
 ## Continuous Integration
 Reproduce a CI failure locally, in the same image, without pushing:
 

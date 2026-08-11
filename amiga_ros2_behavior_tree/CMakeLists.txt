@@ -59,7 +59,7 @@ add_executable(mission_publisher src/mocks/mission_publisher.cpp)
 
 add_executable(orchard_management_node src/orchard_management.cpp)
 
-add_executable(tcp_demux_node src/tcp_demux_node.cpp)
+add_executable(tcp_demux_node src/tcp_demux_node.cpp src/planner_client.cpp)
 
 target_include_directories(bt_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -125,9 +125,18 @@ ament_target_dependencies(orchard_management_node
   std_msgs
 )
 
+target_include_directories(tcp_demux_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 ament_target_dependencies(tcp_demux_node
   rclcpp
   std_msgs
+)
+
+target_link_libraries(tcp_demux_node
+  nlohmann_json::nlohmann_json
 )
 
 target_link_libraries(bt_runner
@@ -195,6 +204,14 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_planner_client test/test_planner_client.cpp src/planner_client.cpp)
+  target_include_directories(test_planner_client PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(test_planner_client nlohmann_json::nlohmann_json)
 endif()
 
 ament_package()
