@@ -28,29 +28,9 @@ def launch_setup(context, *args, **kwargs):
     ns = LaunchConfiguration("robot_name").perform(context)
     use_sim_time = {"use_sim_time": True}
 
-    # Relative "from" patterns (not "/joint_states") so the remap matches
-    # regardless of this node's own namespace: move_group/RSP subscribe to
-    # the RELATIVE topic "joint_states", which resolves to /joint_states
-    # only when ns="" (robot1) — for a namespaced robot it resolves to
-    # /<ns>/joint_states BEFORE remapping, so an absolute "from" pattern
-    # would silently never match and these nodes would read the raw,
-    # unfiltered base+arm stream instead of the kinova-filtered one.
-    #
-    # The two TF entries below are the opposite case, and that is why their
-    # "from" patterns are absolute: tf2_ros hardcodes /tf and /tf_static
-    # regardless of a node's namespace, so a relative pattern would never
-    # match. Without them every robot's arm broadcasts its links to the one
-    # global /tf under identical bare names — this URDF comes from the Kinova
-    # config and names its links base_link, shoulder_link, tool_frame with no
-    # per-robot prefix — and each robot's move_group then plans against
-    # whichever robot's arm pose happened to arrive last. The frames stay
-    # bare; putting each robot's copy on its own topic is what disambiguates
-    # them, exactly as it does for the mobile base.
     kinova_remappings = [
         ("joint_states", qualify_ros(ns, "kinova/joint_states")),
         ("robot_description", qualify_ros(ns, "kinova/robot_description")),
-        ("/tf", qualify_ros(ns, "tf")),
-        ("/tf_static", qualify_ros(ns, "tf_static")),
     ]
 
     # Same description/mappings as kortex_move robot.launch.py, but with fake
