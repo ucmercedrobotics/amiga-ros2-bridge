@@ -26,6 +26,7 @@ find_package(amiga_interfaces REQUIRED)
 find_package(kortex_interfaces REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -53,6 +54,8 @@ add_executable(dummy_wp_server src/mocks/dummy_wp_server.cpp)
 add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 
 add_executable(dummy_segment_leaves_server src/mocks/dummy_segment_leaves_server.cpp)
+
+add_executable(sim_segment_leaves_server src/mocks/sim_segment_leaves_server.cpp)
 
 add_executable(dummy_tree_id_server src/mocks/dummy_tree_id_server.cpp)
 add_executable(mission_publisher src/mocks/mission_publisher.cpp)
@@ -97,6 +100,13 @@ ament_target_dependencies(dummy_segment_leaves_server
   rclcpp
   rclcpp_action
   kortex_interfaces
+)
+
+ament_target_dependencies(sim_segment_leaves_server
+  rclcpp
+  rclcpp_action
+  kortex_interfaces
+  trajectory_msgs
 )
 
 ament_target_dependencies(dummy_tree_id_server
@@ -158,6 +168,9 @@ install(TARGETS dummy_nav2_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_segment_leaves_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS sim_segment_leaves_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS mission_publisher

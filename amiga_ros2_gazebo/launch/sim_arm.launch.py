@@ -25,6 +25,7 @@ def qualify_ros(ns, path):
 def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration("launch_rviz")
     launch_moveto = LaunchConfiguration("launch_moveto")
+    launch_segment_leaves_sim = LaunchConfiguration("launch_segment_leaves_sim")
     ns = LaunchConfiguration("robot_name").perform(context)
     use_sim_time = {"use_sim_time": True}
 
@@ -139,6 +140,18 @@ def launch_setup(context, *args, **kwargs):
         )
     )
 
+    actions.append(
+        Node(
+            package="amiga_ros2_behavior_tree",
+            executable="sim_segment_leaves_server",
+            name="segment_leaves_sim",
+            namespace=ns,
+            output="screen",
+            parameters=[use_sim_time],
+            condition=IfCondition(launch_segment_leaves_sim),
+        )
+    )
+
     home_topic = qualify_ros(ns, "joint_trajectory_controller/joint_trajectory")
     home_goal = (
         "{joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6], "
@@ -176,6 +189,14 @@ def generate_launch_description():
                 "launch_moveto",
                 default_value="true",
                 description="Start the kortex_move moveto node (as in production tmux)",
+            ),
+            DeclareLaunchArgument(
+                "launch_segment_leaves_sim",
+                default_value="true",
+                description="Start the simulated `segment_leaves` action server "
+                "(steps the arm forward, closes the gripper, returns home) in "
+                "place of the real depth-camera/YOLO leaf-segmentation node, "
+                "which has nothing to see in Gazebo. Requires launch_moveto.",
             ),
             DeclareLaunchArgument(
                 "robot_name",
