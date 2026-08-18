@@ -66,7 +66,7 @@
 
 		    <!--#######  CHASSIS LINK  #######-->
 			<link name='kinova_plate_link'>
-      	<pose relative_to="chassis">0.15 -0.915 0.601 0 0 0</pose> <!--angles are in radian-->
+      	<pose relative_to="chassis">0.534 0 0.661 0 0 0</pose> <!--angles are in radian-->
 
 			<!--Inertial Informatıon of the kinova_plate taken from SolidWorks (not yet)-->
 		     	<!-- <inertial>
@@ -539,7 +539,7 @@
           <joint name='kinova_plate_joint' type='fixed'>
             <parent>chassis</parent>
             <child>kinova_plate_link</child>
-            <pose relative_to='chassis'>0 0 0.6 0 0 0</pose>
+            <pose relative_to='chassis'>0.534 0 0.661 0 0 0</pose>
         </joint>
 
 
@@ -549,7 +549,7 @@
        <!-- ==================== KINOVA ARM ==================== -->
 
     <link name='gen3_base_link'>
-      	<pose relative_to="kinova_plate_link">0 0 0.0078 0 0 -1.57079633</pose> <!--angles are in radian-->
+      	<pose relative_to="kinova_plate_link">0 0 0.0078 0 0 0</pose> <!--angles are in radian-->
 
       <inertial>
         <pose>-0.000648 -0.000166 0.08448700000000001 0 0 0</pose>

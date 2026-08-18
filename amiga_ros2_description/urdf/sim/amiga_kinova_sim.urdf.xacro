@@ -105,7 +105,7 @@
   <joint name="kinova_plate_joint" type="fixed">
     <parent link="chassis"/>
     <child link="kinova_plate_link"/>
-    <origin xyz="0.15 -0.915 0.601" rpy="0 0 0"/>
+    <origin xyz="0.534 0 0.661" rpy="0 0 0"/>
   </joint>
 
   <!-- ══════════════ KINOVA GEN3 ARM (kortex macro) ══════════════ -->
@@ -130,7 +130,7 @@
     fake_sensor_commands="false"
     sim_ignition="$(arg sim_ignition)"
     sim_gazebo="false">
-    <origin xyz="0 0 0.0078" rpy="0 0 -1.5708"/>
+    <origin xyz="0 0 0.0078" rpy="0 0 0"/>
   </xacro:load_robot>
 
   <!-- Wrist camera optical frame (the gz rgbd sensor in model.sdf hangs off

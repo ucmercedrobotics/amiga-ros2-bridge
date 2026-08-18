@@ -370,9 +370,9 @@ def launch_setup(context, *args, **kwargs):
                             "odom_topic": qualify_ros(ns, "odometry/filtered/local"),
                         }
                     ],
-                    # /cmd_vel_raw: hardcoded absolute publisher, no param.
+                    # /cmd_vel: hardcoded absolute publisher, no param.
                     remappings=tf_remaps(ns)
-                    + [("/cmd_vel_raw", qualify_ros(ns, "cmd_vel_raw"))],
+                    + [("/cmd_vel", qualify_ros(ns, "cmd_vel"))],
                 ),
                 Node(
                     package="amiga_navigation",
