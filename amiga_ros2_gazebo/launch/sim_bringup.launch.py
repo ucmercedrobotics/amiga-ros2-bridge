@@ -171,6 +171,14 @@ def launch_setup(context, *args, **kwargs):
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
     )
+    # 0 (default) means nobody: an ordinary sim run has no broken arm. Set it
+    # to a robot index to give exactly that robot a camera fault, which is the
+    # kind of failure a peer can take over -- unlike a missing tree, which no
+    # robot could reach and which triage therefore drops instead of auctioning.
+    broken_sampler_robot = int(
+        LaunchConfiguration("broken_sampler_robot").perform(context)
+    )
+    broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
     spreading_factor = int(
         LaunchConfiguration("lora_spreading_factor").perform(context)
@@ -318,6 +326,11 @@ def launch_setup(context, *args, **kwargs):
                     "sim_arm.launch.py",
                     launch_rviz=launch_rviz,
                     robot_name=ns,
+                    # Empty for every robot except broken_sampler_robot, so at
+                    # most one robot's arm is faulty and the rest of the fleet
+                    # can still take the work it sheds.
+                    sampler_fail_goals=("[0]" if i == broken_sampler_robot else "[]"),
+                    sampler_failure_mode=broken_sampler_mode,
                 )
             )
 
@@ -327,7 +340,7 @@ def launch_setup(context, *args, **kwargs):
                 Node(
                     package="amiga_navigation",
                     executable="waypoint_follower.py",
-                    name="waypoint_follower",
+                    name="amiga_waypoint_follower",
                     namespace=ns,
                     output="screen",
                     parameters=[
@@ -490,6 +503,22 @@ def generate_launch_description():
                 description="Start waypoint_follower + linear_velo (as in tmux bringup)",
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
+            DeclareLaunchArgument(
+                "broken_sampler_robot",
+                default_value="0",
+                description="Give this robot (1-based) a failing leaf sampler; "
+                "0, the default, breaks nobody. The orchard stays intact for "
+                "everyone, so the tree it cannot sample is one its peers can "
+                "still reach -- which is what makes the shed task worth "
+                "auctioning rather than dropping.",
+            ),
+            DeclareLaunchArgument(
+                "broken_sampler_mode",
+                default_value="no_point_cloud",
+                description="How that robot's sampler fails. no_point_cloud is "
+                "a fault in that robot (a peer with a working camera is the "
+                "right answer); no_leaves is permanent for everyone.",
+            ),
             DeclareLaunchArgument(
                 "launch_coordination",
                 default_value="true",

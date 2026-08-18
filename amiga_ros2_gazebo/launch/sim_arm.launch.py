@@ -140,6 +140,36 @@ def launch_setup(context, *args, **kwargs):
         )
     )
 
+    # Resolved here rather than passed as substitutions because an EMPTY list
+    # cannot survive the trip: `fail_goals: []` reaches the node as "no
+    # parameter value set" and rclcpp throws InvalidParameterValueException
+    # against the declared vector<int64_t>, killing the server on every robot
+    # that was meant to be healthy. So the healthy case passes no failure
+    # parameters at all and lets FailurePolicy's own defaults disable it.
+    sampler_fail_goals = [
+        int(v)
+        for v in LaunchConfiguration("sampler_fail_goals")
+        .perform(context)
+        .strip("[] ")
+        .split(",")
+        if v.strip()
+    ]
+    sampler_failure_params = (
+        [
+            {
+                "fail_goals": sampler_fail_goals,
+                "fail_after_n": int(
+                    LaunchConfiguration("sampler_fail_after_n").perform(context)
+                ),
+                "failure_mode": LaunchConfiguration("sampler_failure_mode").perform(
+                    context
+                ),
+            }
+        ]
+        if sampler_fail_goals
+        else []
+    )
+
     actions.append(
         Node(
             package="amiga_ros2_behavior_tree",
@@ -147,7 +177,13 @@ def launch_setup(context, *args, **kwargs):
             name="segment_leaves_sim",
             namespace=ns,
             output="screen",
-            parameters=[use_sim_time],
+            # sampler_failure_mode only bites when sampler_fail_goals is
+            # non-empty, which is not the default -- see FailurePolicy in
+            # mocks/failure_modes.hpp. Passed through so a fleet scenario can
+            # break ONE robot's arm while the orchard stays intact for
+            # everybody, which is the difference between a task worth offering
+            # to a peer and one worth dropping.
+            parameters=[use_sim_time, *sampler_failure_params],
             condition=IfCondition(launch_segment_leaves_sim),
         )
     )
@@ -197,6 +233,30 @@ def generate_launch_description():
                 "(steps the arm forward, closes the gripper, returns home) in "
                 "place of the real depth-camera/YOLO leaf-segmentation node, "
                 "which has nothing to see in Gazebo. Requires launch_moveto.",
+            ),
+            DeclareLaunchArgument(
+                "sampler_fail_goals",
+                default_value="[]",
+                description="Which segment_leaves goals fail. Empty (default) "
+                "disables the failure path entirely. SegmentLeaves takes no "
+                "arguments, so there is nothing to key on and the only "
+                "meaningful value is [0], meaning this server's goals.",
+            ),
+            DeclareLaunchArgument(
+                "sampler_fail_after_n",
+                default_value="0",
+                description="Succeed this many goals before failing. 0 fails "
+                "from the first, which is what a broken camera looks like.",
+            ),
+            DeclareLaunchArgument(
+                "sampler_failure_mode",
+                default_value="no_point_cloud",
+                description="Which real failure of the arm to reproduce, in "
+                "the real node's own words: no_point_cloud (the depth camera "
+                "produced nothing -- a fault in THIS robot, so a peer with a "
+                "working camera is the right answer) or no_leaves (the camera "
+                "worked and there was nothing there -- nobody else would find "
+                "leaves either, so that one is permanent).",
             ),
             DeclareLaunchArgument(
                 "robot_name",

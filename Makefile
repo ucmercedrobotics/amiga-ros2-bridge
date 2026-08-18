@@ -196,20 +196,28 @@ sim:
 		lora_spreading_factor:=$(LORA_SF)
 
 # One command, one working demo: a simulated fleet, a real LLM behind both
-# reasoning points, and a real BT failure -- every robot runs a real mission
-# with real GPS/orchard data (the checked-in examples/*.bin payloads), except
-# one robot that is missing a single tree from its own copy of the orchard.
-# Its plan still asks for that tree, so that one MoveToTreeID aborts for real
-# -- and because the tree itself is real and every other robot still has it,
-# the work that gets shed is work a peer can actually take. That drives the
-# actual pipeline: local LLM repair, arbiter rejection, budget exhausted,
+# reasoning points, and a real BT failure. Every robot runs a real mission with
+# real GPS/orchard data (the checked-in examples/*.bin payloads) and the full
+# 144-tree orchard; all the trees exist. What is broken is one robot's depth
+# camera, so it drives to its trees perfectly well and aborts for real only
+# when it tries to SAMPLE one -- the same "No point cloud available." the real
+# segmentation node logs. That fault is this robot's alone, so the work it
+# sheds is work a peer with a working camera can actually take, which is what
+# drives the pipeline: local LLM repair, arbiter rejection, budget exhausted,
 # triage escalation, a real auction among the still-healthy robots, and the
 # winner's LLM splicing the absorbed task into its own plan.
 # Nothing is hand-injected on a topic or service; see scripts/demo_llm_auction.sh
-# for the full explanation and the tmux layout.
+# for the full explanation, the tmux layout, and why the fault has to be a
+# camera rather than a missing tree.
 # Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
 llm-demo:
 	./scripts/demo_llm_auction.sh
+
+# Ends a run completely. `tmux kill-session` alone does not: ros_gz_sim's
+# `ign gazebo` server outlives the launch that started it, and the orphans
+# accumulate until they starve the next run's Nav2 into never activating.
+llm-demo-stop:
+	./scripts/demo_llm_auction.sh stop
 
 kortex-home:
 	ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/JointTrajectory "{ \

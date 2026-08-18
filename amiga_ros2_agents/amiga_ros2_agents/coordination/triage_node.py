@@ -4,32 +4,41 @@ triage_node.py
 The first of the two reasoning points: `interpret_anomaly`.
 
 The behaviour tree is the catalyst. A node fails, `/bt/status_change` fires, and
-the existing self-correction loop (mission_planner -> arbiter -> /mission/xml)
-tries to edit its way out of it. Most faults end there. This node is for the
-ones that do not.
+something has to decide what happens to that work. This node decides, and it
+decides *first* -- before the plan is edited, not after the editing has run out.
 
-Two jobs, and they are deliberately different in kind:
+Three jobs.
 
-**Escalation is deterministic.** "Has local recovery run out?" needs no model.
-The planner already answers it: the arbiter publishes /mission/abort when the
-mission is no longer viable, and the planner publishes /mission/planner_status
-when it gives up on a fault. Either one means the robot cannot fix this itself,
-and this node forwards it to the coordinator on /coordination/infeasible. A
-model asked to re-derive that would only add latency and a way to be wrong.
+**Routing is a judgement, and it comes first.** "Can this robot plan its way
+out of this?" used to be answered by a counter: the mission planner replanned
+until MAX_RETRIES ran out, and exhausting the budget was taken to mean the
+robot was incapable. It does not mean that. A dead depth camera is beyond any
+edit, and three sessions spent proving it are three sessions during which the
+plan grows retry wrappers around a sensor that is never coming back -- and the
+node the escalation would have named has been edited out from under it. So the
+first FAILURE on a leaf gets one model call, over the fault and the /rosout
+lines behind it, and the answer is `repair` or `escalate` on
+/mission/fault_route. The planner waits for it. One call per failing node per
+mission, cached, so repeated ticks of the same dead leaf are free.
 
-**The decision is not.** "What should be done about it?" is a judgement over
-unstructured evidence -- the fault event, the /rosout lines around it, where the
-robot is, what was already tried, who else is out there. That is the service
-this node serves, and it is where the model earns its place.
+**Escalation is still deterministic.** Whether the route said so, or the
+planner published a give-up on /mission/planner_status, or the arbiter aborted
+on /mission/abort -- all three mean local recovery is over, and this node
+forwards them to the coordinator on /coordination/infeasible unchanged. The
+give-up paths remain as backstops: routing says "don't bother", the budget says
+"we bothered and it didn't work", and both need to reach the fleet.
 
-The answer is constrained to three typed actions (re_delegate, add_task,
-drop_task) by InterpretAnomaly.srv, and the coordinator refuses anything else.
-That constraint is the whole design: the model chooses *among decisions the
-state machine already knows how to execute*, so every path below it stays
-deterministic and testable with this node swapped for a stub.
+**The decision about the shed work is not.** "What should the fleet do with
+it?" is a judgement over unstructured evidence -- the fault, the logs, where the
+robot is, what was tried, who else is out there. That is the service this node
+serves, and the answer is constrained to three typed actions (re_delegate,
+add_task, drop_task) by InterpretAnomaly.srv, which the coordinator refuses
+anything outside of. The model chooses *among decisions the state machine
+already knows how to execute*, so every path below it stays deterministic and
+testable with this node swapped for a stub.
 
-    /bt/status_change ─┐
-    /rosout ───────────┤
+    /bt/status_change ─┐            ┌──▶ /mission/fault_route (topic)
+    /rosout ───────────┤            │
     /world_state ──────┼──▶ [context buffers]
     /mission/xml ──────┤            │
     /mission/abort ────┤            ├──▶ /coordination/interpret_anomaly (srv)
@@ -42,7 +51,7 @@ import json
 import re
 import time
 from collections import deque
-from threading import Lock
+from threading import Lock, Thread
 from typing import Dict, List, Optional
 
 from amiga_interfaces.srv import InterpretAnomaly
@@ -88,6 +97,20 @@ ATTEMPT_HISTORY = 6  # local recovery attempts remembered per mission
 VALID_ACTIONS = ("re_delegate", "add_task", "drop_task")
 VALID_DISPOSITIONS = ("drop", "hold", "request_human")
 
+# The routing verdict. Two values because there are exactly two things that can
+# happen to a fault: this robot's planner has another go, or the fleet is told.
+VALID_ROUTES = ("repair", "escalate")
+
+#: Where the verdict goes. The planner blocks on this before it opens a
+#: planning session, so the name is part of the contract between the two nodes.
+ROUTE_TOPIC = "/mission/fault_route"
+
+#: A hint handed to the planner with a `repair` verdict, capped so one verbose
+#: reply cannot crowd the mission XML out of the planner's prompt. Cut rather
+#: than refused, unlike a note: this text never leaves the robot, so a clipped
+#: sentence costs a little context and not a fleet-wide misunderstanding.
+MAX_GUIDANCE_CHARS = 500
+
 # What a note may weigh, computed from the radio rather than written down again.
 # 328 bytes at the 50-byte payload budget: eight fragments, and every one of
 # them is a packet the fleet pays for whether or not the note changes any bid.
@@ -127,16 +150,29 @@ class TriageNode(Node):
         self.attempts: deque = deque(maxlen=ATTEMPT_HISTORY)
         self.last_fault: Optional[Dict] = None
         self.mission_xml: Optional[str] = None
+        #: Routing verdicts, keyed by failing node name. One model call per
+        #: node per mission: a permanently dead leaf re-ticks several times
+        #: under the plan's own retry decorators, and asking again each time
+        #: would spend a call to re-learn what the first one established.
+        self.routes: Dict[str, Dict] = {}
+        self._routing: set = set()
         self._last_status: Dict = {
             "model": llm.MODEL,
             "faults_seen": 0,
+            "routes": 0,
             "escalations": 0,
             "interpretations": 0,
             "refused": 0,
+            "last_route": None,
             "last_action": None,
             "last_error": None,
         }
 
+        self.route_system_prompt = prompts.render(
+            "triage/route_system.j2",
+            valid_routes=VALID_ROUTES,
+            reason_codes=sorted(REASON_CODES),
+        )
         self.system_prompt = prompts.render(
             "triage/system.j2",
             valid_actions=VALID_ACTIONS,
@@ -168,6 +204,11 @@ class TriageNode(Node):
         self.create_subscription(
             String, "/mission/planner_status", self._on_planner_status, 10
         )
+
+        # The routing verdict. Not latched: a stale verdict replayed to a
+        # planner that restarted mid-mission would stand down a session for a
+        # fault nobody is looking at any more.
+        self.route_pub = self.create_publisher(String, ROUTE_TOPIC, 10)
 
         # The escalation. Deterministic, and the coordinator's only entry point.
         self.infeasible_pub = self.create_publisher(
@@ -226,17 +267,187 @@ class TriageNode(Node):
             self.mission_xml = msg.data
 
     def _on_fault(self, msg: String):
+        """A leaf failed. Note it, then decide where it goes.
+
+        Two filters before anything else, and both were bugs.
+
+        ``/bt/status_change`` reports a leaf reaching SUCCESS as well as
+        FAILURE. Recording those as ``last_fault`` meant the escalation named
+        whichever leaf happened to succeed last -- typically the *approach*
+        that worked, not the sample that did not.
+
+        The tree also reports its own final outcome as ``<tree>``, and that
+        arrives after the leaf fault that caused it. It is not a unit of work:
+        ``task_for_node`` finds nothing for it, so letting it overwrite
+        ``last_fault`` is how an escalation goes out with ``task_id: 0`` and
+        the coordinator has nothing to announce.
+        """
         event = self._parse(msg.data, "/bt/status_change")
         if event is None:
             return
+        # No "status" key is the older hand-written shape, which only ever
+        # meant FAILURE.
+        status = str(event.get("status") or "FAILURE").upper()
+        if status != "FAILURE":
+            return
+        name = str(event.get("node") or "")
+        whole_tree = name in ("", "<tree>") or event.get("source") == "tree"
+
         with self._lock:
-            self.last_fault = event
             self._last_status["faults_seen"] += 1
+            if not whole_tree:
+                self.last_fault = event
+            cached = self.routes.get(name)
+            start = not whole_tree and cached is None and name not in self._routing
+            if start:
+                self._routing.add(name)
+
         self.get_logger().info(
-            f"BT fault noted: node={event.get('node')!r} "
-            f"source={event.get('source', '?')}"
+            f"BT fault noted: node={name!r} source={event.get('source', '?')}"
         )
         self.status.publish(self.get_status())
+
+        if whole_tree:
+            return
+        if cached is not None:
+            # Same leaf failing again under its retry decorator. Re-publish the
+            # verdict rather than re-deriving it: the planner may have come up
+            # since, and this costs a message instead of a model call.
+            self._publish_route(cached)
+            return
+        if start:
+            Thread(target=self._route_fault, args=(event,), daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Routing — the model, before the plan is touched
+    # ------------------------------------------------------------------
+
+    def _route_fault(self, event: Dict) -> None:
+        """Decide whether this fault is worth replanning for. One model call.
+
+        Runs before the mission planner opens a session, which is the whole
+        point: the planner blocks on ``ROUTE_TOPIC``, so until this publishes,
+        ``/mission/xml`` still holds the plan that was running when the leaf
+        failed. That is what makes an ``escalate`` verdict announceable -- the
+        failing node is still in the plan to be resolved against.
+
+        Fails open. A model that is down, slow or incoherent must not stop a
+        robot recovering from a fault it could have planned around, so any
+        error here becomes ``repair`` with the error as the rationale -- which
+        is exactly the behaviour this node replaced.
+        """
+        name = str(event.get("node") or "")
+        try:
+            decision = self._decide_route(event)
+        except Exception as exc:  # noqa: BLE001 - a model, a parser, a timeout
+            self.get_logger().warn(
+                f"routing {name!r} failed ({exc}) — defaulting to local repair"
+            )
+            decision = {
+                "route": "repair",
+                "reason_code": REASON_CODES["unspecified"],
+                "rationale": f"routing failed ({exc}); defaulting to local repair",
+                "guidance": "",
+            }
+
+        payload = {
+            "node": name,
+            "timestamp_ms": event.get("timestamp_ms", 0),
+            "at": time.time(),
+            **decision,
+        }
+        with self._lock:
+            self.routes[name] = payload
+            self._routing.discard(name)
+            self._last_status["routes"] += 1
+            self._last_status["last_route"] = decision["route"]
+
+        # Published before the escalation, deliberately. The planner has to
+        # stand down before the coordinator starts committing edits to the same
+        # plan, or the two of them are writing over each other.
+        self._publish_route(payload)
+        self.get_logger().info(
+            f"routed {name!r}: {decision['route']} — {decision['rationale'][:160]}"
+        )
+        self.status.publish(self.get_status())
+
+        if decision["route"] == "escalate":
+            self._escalate(
+                detail=f"triage routed the fault to the fleet: {decision['rationale']}",
+                cause="triage_route",
+            )
+
+    def _publish_route(self, payload: Dict) -> None:
+        self.route_pub.publish(String(data=json.dumps(payload)))
+
+    def _decide_route(self, event: Dict) -> Dict:
+        with self._lock:
+            world = self.world_state_frames[-1] if self.world_state_frames else ""
+            attempts = (
+                json.dumps(list(self.attempts), indent=2) if self.attempts else ""
+            )
+            mission_xml = self.mission_xml
+            # Under the lock like every other reader of the buffer: _on_log
+            # rebuilds it on each line, and _assemble takes it for the same
+            # slice on the interpretation path.
+            logs = self._log_slice(event)
+        task = self._task_for(event, mission_xml)
+        prompt = prompts.render(
+            "triage/route_user.j2",
+            fault=json.dumps(event, indent=2),
+            log_context=logs or "(no log lines in the window)",
+            world_state=world or "(no world-state frame)",
+            local_attempts=attempts or "(none)",
+            mission_xml=mission_xml or "(no plan received yet)",
+            # What the fleet would be offered if this escalates. Naming it here
+            # is the difference between "should we give up on this leaf" and
+            # "should we give this unit of work to somebody else".
+            task=(
+                f"{task.name!r} — "
+                f"{', '.join(mission_tasks.capability_names(task.capabilities))} "
+                f"at {task.target}"
+                if task is not None
+                else "(this fault does not resolve to a unit of work the fleet "
+                "could be offered)"
+            ),
+        )
+        return self._parse_route(llm.complete(self.route_system_prompt, prompt))
+
+    def _parse_route(self, reply: str) -> Dict:
+        """Turn the routing reply into a verdict, or raise.
+
+        Same unforgiving shape as ``_parse_decision`` and for the same reason,
+        with one difference: the caller catches. A refused verdict here means
+        local repair, not a stalled fault.
+        """
+        text = llm.strip_code_fence(reply)
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"no JSON object in the reply: {text[:200]!r}")
+        verdict = json.loads(text[start : end + 1])
+        if not isinstance(verdict, dict):
+            raise ValueError(f"expected a JSON object, got {type(verdict).__name__}")
+
+        route = str(verdict.get("route", "")).strip().lower()
+        if route not in VALID_ROUTES:
+            raise ValueError(f"route {route!r} is not one of {', '.join(VALID_ROUTES)}")
+        reason = str(verdict.get("reason_code", "unspecified")).strip().lower()
+        if reason not in REASON_CODES:
+            raise ValueError(
+                f"reason_code {reason!r} is not one of {sorted(REASON_CODES)}"
+            )
+        return {
+            "route": route,
+            "reason_code": REASON_CODES[reason],
+            "rationale": str(verdict.get("rationale", "")).strip(),
+            # Only meaningful for repair -- there is no local planner to advise
+            # once the work has left the robot.
+            "guidance": (
+                str(verdict.get("guidance", "")).strip()[:MAX_GUIDANCE_CHARS]
+                if route == "repair"
+                else ""
+            ),
+        }
 
     def _on_planner_status(self, msg: String):
         """The local loop reporting on itself. Give-ups are escalations."""
@@ -285,9 +496,17 @@ class TriageNode(Node):
     def _escalate(self, detail: str, cause: str) -> None:
         """Tell the coordinator this robot cannot recover on its own.
 
-        No model call. The planner and the arbiter have already made the only
-        judgement this step needs -- that local recovery is exhausted -- and
-        re-deriving it here would add a second opinion nobody asked for.
+        No model call of its own -- the judgement has already been made by
+        whichever of the three callers got here: routing decided the fault was
+        not worth planning around, the planner ran out of budget, or the
+        arbiter declared the mission non-viable. This step only carries it.
+
+        The routing caller is the one that can name the work. It runs before
+        any edit has been committed, so ``self.mission_xml`` is still the plan
+        that was executing when the leaf failed and ``_task_for`` resolves
+        against it. The two give-up callers arrive after the planner has been
+        rewriting that plan for a minute or more, which is when the failing
+        node has been edited away and this falls back to ``task_id: 0``.
         """
         with self._lock:
             fault = dict(self.last_fault) if self.last_fault else {}
