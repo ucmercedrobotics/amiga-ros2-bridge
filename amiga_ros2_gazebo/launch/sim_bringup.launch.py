@@ -395,7 +395,7 @@ def launch_setup(context, *args, **kwargs):
                     output="screen",
                     parameters=[
                         {
-                            "safety_distance": 0.8,
+                            "safety_distance": 1.5,
                             "lidar_topic": qualify_ros(ns, "ouster/points"),
                             "azimuth_tolerance": 0.5,
                             "min_object_height": 0.1,
