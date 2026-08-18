@@ -24,8 +24,9 @@ Prompts live in prompts/mission_planner/.
 import json
 import re
 import textwrap
+import time
 from collections import deque
-from threading import Lock, Thread
+from threading import Condition, Lock, Thread
 from typing import Dict, List, Optional, Set
 
 from lxml import etree
@@ -43,7 +44,7 @@ from ..runtime.status import StatusPublisher
 LOG_WINDOW_SEC = 30.0  # rolling /rosout window kept in memory
 FAILURE_CONTEXT_SEC = 3.0  # log slice sent to LLM (±N sec around failure)
 RESULT_HISTORY_CHARS = 1000  # max chars of any single result in memory
-MAX_RETRIES = 20  # max planning attempts before giving up (= MAX_STEPS)
+MAX_RETRIES = 3  # max planning sessions for the whole mission before giving up
 MAX_REJECTION_RETRIES = 3  # max arbiter-rejection retries per single BT failure
 COMPRESS_AFTER = 3  # compress memory beyond the last N entries
 WORLD_STATE_FRAMES = 3  # /world_state frames kept for prompt context
@@ -51,6 +52,22 @@ WORLD_STATE_FRAMES = 3  # /world_state frames kept for prompt context
 # Same document, same topic, as the arbiter's own orchard subscription
 # (arbiter_node.py's ORCHARD_TOPIC) -- both sides answer from the same map.
 ORCHARD_TOPIC = "/orchard/tree_info_json"
+
+# Triage's routing verdict, and the same name as triage_node.ROUTE_TOPIC --
+# written out rather than imported, because importing the coordination package
+# from here would pull the service definitions and the codec into every planner
+# process to learn one string. A test pins the two spellings together.
+ROUTE_TOPIC = "/mission/fault_route"
+
+# How long a fault waits for a verdict before the session opens anyway.
+#
+# This gate must fail open. Triage not running, a model endpoint that is down, a
+# reply that will not parse -- none of those should leave a robot sitting on a
+# fault it could have planned around, so the timeout restores exactly the
+# behaviour this gate replaced: replan and find out. Long enough for one model
+# call and change; short enough that a robot stalled at a tree is not stalled
+# for a minute.
+ROUTE_TIMEOUT_SEC = 25.0
 
 # A whole XML plan comes back in one reply, so this must NOT fall back to
 # llm.MAX_TOKENS (2048) — a truncated plan fails XSD validation every time.
@@ -97,6 +114,12 @@ class MissionPlannerNode(Node):
         # for the node's lifetime -- same "first mission XML is the mission"
         # assumption the arbiter's original_objectives already makes.
         self.completed_trees: Set[str] = set()
+        # Every leaf that reported SUCCESS, in order, by name. The general
+        # ledger: bt_runner publishes this for *any* action, so adding a new
+        # one (SprayTree, PruneBranch) needs no code here and no new fact type.
+        # completed_trees above stays because pruning removes work by tree id,
+        # which is the one place a tree id is genuinely the right key.
+        self.succeeded_nodes: List[str] = []
         self.fault_constraints: List[Dict] = []
         self._last_status: Dict = {
             "mission_xml_received": False,
@@ -135,6 +158,7 @@ class MissionPlannerNode(Node):
         self.create_subscription(
             String, "/mission/replan_request", self._on_replan_request, 10
         )
+        self.create_subscription(String, ROUTE_TOPIC, self._on_fault_route, 10)
 
         # Publisher — candidates only; the Arbiter owns /mission/xml
         self.mission_pub = self.create_publisher(String, "/mission/candidate_xml", 10)
@@ -150,11 +174,15 @@ class MissionPlannerNode(Node):
         self._mission_aborted = False  # set when arbiter declares non-viable
         # (template, extra) of the session in flight, so a rejection retries the
         # same question rather than the default one.
-        self._last_planner_call = ("mission_planner/replan_user.j2", {})
+        self._last_planner_call = ("mission_planner/replan_user.j2", {}, "")
         # (cause, node) pairs already reported as a give-up. Every later BT
         # failure re-enters _run_planner and would re-announce an exhausted
         # budget on each one, which downstream reads as a fresh escalation.
         self._gave_up: Set[tuple] = set()
+        # Routing verdicts from triage, keyed by failing node name, and the
+        # condition a waiting session blocks on.
+        self._routes: Dict[str, Dict] = {}
+        self._route_cv = Condition()
 
         self.status = StatusPublisher(self)
         self.status.publish(self.get_status())
@@ -262,19 +290,104 @@ class MissionPlannerNode(Node):
                 <= failure_sec + FAILURE_CONTEXT_SEC
             ]
 
-        # Run planner in a background thread so the spin loop stays responsive
-        Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
+        # Run planner in a background thread so the spin loop stays responsive.
+        # The thread blocks on triage's verdict first -- see _repair_if_routed.
+        Thread(
+            target=self._repair_if_routed, args=(event, log_context), daemon=True
+        ).start()
+
+    def _on_fault_route(self, msg: String):
+        """Triage's verdict on a fault. Wakes whoever is waiting for it."""
+        try:
+            route = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().error(f"Could not parse {ROUTE_TOPIC} payload")
+            return
+        if not isinstance(route, dict):
+            return
+        name = str(route.get("node") or "")
+        if not name:
+            return
+        with self._route_cv:
+            self._routes[name] = route
+            self._route_cv.notify_all()
+
+    def _repair_if_routed(self, event: Dict, log_context: List[Dict]) -> None:
+        """Open a planning session only if the fault is worth one.
+
+        The budget used to be the only thing standing between a fault and three
+        model calls, and a budget cannot tell a plan that can be fixed from a
+        camera that is broken. It spent the same three sessions on both, and on
+        the broken camera the sessions were worse than useless: each edit
+        wrapped the dead leaf in another retry, and each accepted plan replaced
+        the one the escalation would have named its failing node in.
+
+        So the verdict comes first. ``escalate`` means the work leaves this
+        robot -- the coordinator sheds it and sends back a
+        ``/mission/replan_request``, which is where this robot's plan actually
+        gets rewritten. Nothing is lost by not planning here; the rest of the
+        mission is untouched and still runs.
+
+        The tree's own outcome is not routable and is not waited for. Triage
+        rules on leaves, because a verdict is only useful when it names a unit
+        of work the fleet could be offered, and ``<tree>`` names the whole
+        mission. Waiting on a verdict triage will never publish just costs
+        ROUTE_TIMEOUT_SEC of silence before replanning anyway -- and by then
+        the leaf underneath has already been ruled on.
+        """
+        name = str(event.get("node") or "")
+        whole_tree = name in ("", "<tree>") or event.get("source") == "tree"
+        route = {"route": "repair"} if whole_tree else self._await_route(name)
+        if str(route.get("route")) == "escalate":
+            self.get_logger().info(
+                f"Fault on {name!r} routed to the fleet — no local replan. "
+                f"{str(route.get('rationale', ''))[:160]}"
+            )
+            return
+        self._run_planner(
+            event, log_context, route_guidance=str(route.get("guidance") or "")
+        )
+
+    def _await_route(self, name: str) -> Dict:
+        """Block until triage rules on this node, or ROUTE_TIMEOUT_SEC passes.
+
+        A verdict already in hand returns immediately, which is what makes the
+        second and third tick of a leaf failing under its own retry decorator
+        free -- triage re-publishes the cached verdict, and this never waits.
+        """
+        deadline = time.monotonic() + ROUTE_TIMEOUT_SEC
+        with self._route_cv:
+            while name not in self._routes:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.get_logger().warn(
+                        f"No routing verdict for {name!r} after "
+                        f"{ROUTE_TIMEOUT_SEC:.0f}s — replanning anyway"
+                    )
+                    return {"route": "repair"}
+                self._route_cv.wait(remaining)
+            return dict(self._routes[name])
 
     def _on_leaf_success(self, event: Dict):
-        """A leaf finished. If it was a SampleLeaf, remember which tree —
-        the executor rebuilds its tree from scratch on every redeploy, so
-        anything still in the plan gets re-ticked; this is what lets a later
-        replan leave a finished tree out instead of driving through it again.
+        """A leaf finished. Recorded twice, at two different levels.
+
+        The name goes into ``succeeded_nodes`` unconditionally — that is the
+        general ledger, and it is general precisely because it interprets
+        nothing: bt_runner reports a SUCCESS the same way for a SampleLeaf as
+        for anything added to the schema later, so what the model is told about
+        this robot's progress does not need a new fact type per action.
+
+        The tree id, when there is one, additionally goes into
+        ``completed_trees``, because the executor rebuilds its tree from
+        scratch on every redeploy — anything still in the plan gets re-ticked —
+        and the pruning that prevents that removes work by tree id.
         """
         name = event.get("node")
         if not name or name == "<tree>":
             return
         with self._lock:
+            if name not in self.succeeded_nodes:
+                self.succeeded_nodes.append(name)
             xml = self.current_mission_xml
             orchard_map = self.orchard
         if xml is None:
@@ -328,6 +441,34 @@ class MissionPlannerNode(Node):
             "reason": cause,
             "timestamp_ms": request.get("timestamp_ms", 0),
         }
+
+        # The repair budget is spent, and this is the moment it stops applying.
+        #
+        # MAX_RETRIES bounds how long a robot may keep asking a model to fix ONE
+        # situation, and a workload change is the end of that situation: the
+        # coordinator has committed an edit, so either the work that could not
+        # be done is now a peer's, or work that is not ours has just arrived.
+        # Either way the plan in front of the planner is not the plan the budget
+        # was spent on.
+        #
+        # Without this reset, a robot that shed a task stayed exhausted for the
+        # rest of the mission, and the damage was not the missed refinement --
+        # it was everything after. Observed end to end: amiga1 lost its depth
+        # camera, burned all three sessions on tree 20, shed it to amiga3, and
+        # then drove to tree 64 and hit the identical fault with no budget left
+        # to replan and -- because _gave_up had already recorded
+        # max_retries_exhausted and dedupes on it -- no way to escalate a second
+        # time either. The one broken camera it could have offered the fleet
+        # twice was offered once, and tree 64 was abandoned in silence.
+        #
+        # _gave_up is cleared for the same reason: it exists so ONE exhausted
+        # budget is announced once, not so a robot may only ever give up once.
+        with self._lock:
+            self._last_status["sessions"] = 0
+            self._gave_up.clear()
+            self._rejection_retries = 0
+            self._last_rejection_reason = None
+            self._last_failure_event = None
         self.get_logger().info(
             f"Replan requested — {cause} task {request.get('task_id')}, "
             f"{len(request.get('findings') or [])} finding(s)"
@@ -373,7 +514,7 @@ class MissionPlannerNode(Node):
                 self._rejection_retries += 1
                 self._last_rejection_reason = reason
                 attempt = self._rejection_retries
-                template, extra = self._last_planner_call
+                template, extra, guidance = self._last_planner_call
                 gave_up = False
 
         if gave_up:
@@ -392,7 +533,15 @@ class MissionPlannerNode(Node):
         Thread(
             target=self._run_planner,
             args=(event, []),
-            kwargs={"template": template, "extra": extra},
+            kwargs={
+                "template": template,
+                "extra": extra,
+                # Carried into the retry too. Triage's reading of the logs is
+                # no less true because the arbiter refused the first edit made
+                # from it, and dropping it here would mean every retry planned
+                # with strictly less evidence than the attempt it is fixing.
+                "route_guidance": guidance,
+            },
             daemon=True,
         ).start()
 
@@ -474,6 +623,7 @@ class MissionPlannerNode(Node):
         log_context: List[Dict],
         template: str = "mission_planner/replan_user.j2",
         extra: Optional[Dict] = None,
+        route_guidance: str = "",
     ):
         """One planning session: build context → call LLM → publish candidate.
 
@@ -482,6 +632,11 @@ class MissionPlannerNode(Node):
         check, the candidate publish, the memory, the rejection loop — and
         forking it would mean the arbiter's retry feedback only worked for one
         of the two reasons a robot replans.
+
+        ``route_guidance`` is triage's one sentence about what it saw in the
+        logs, when it saw something. It arrives with the verdict that let this
+        session open at all, so it is the only piece of context here derived
+        from evidence *outside* this node's own buffers.
         """
         with self._lock:
             xml = self.current_mission_xml
@@ -523,7 +678,7 @@ class MissionPlannerNode(Node):
             # Held so a rejection retries the session that was actually run. A
             # retry that fell back to the fault template would ask the model to
             # fix a failing node for a session that had no failure in it.
-            self._last_planner_call = (template, dict(extra or {}))
+            self._last_planner_call = (template, dict(extra or {}), route_guidance)
 
         self.get_logger().info(_box(f"Mission Planner — session {sessions_done + 1}"))
 
@@ -533,6 +688,7 @@ class MissionPlannerNode(Node):
         # possibility structurally instead of asking the model to notice it.
         with self._lock:
             completed = set(self.completed_trees)
+            succeeded = list(self.succeeded_nodes)
             orchard_map = self.orchard
         try:
             active_doc = etree.fromstring(xml.encode("utf-8"))
@@ -631,7 +787,9 @@ class MissionPlannerNode(Node):
             orchard_facts=orchard_facts,
             known_aisles=known_aisles,
             completed_trees=sorted(completed),
+            succeeded_nodes=succeeded,
             prior_fault_constraints=prior_fault_constraints,
+            route_guidance=route_guidance,
             **fields,
         )
 

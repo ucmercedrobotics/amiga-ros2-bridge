@@ -57,11 +57,21 @@ ROBOT_INTERFACES = [
     "/mission/viability_budget",
     "/mission/verify_replan",
     "/mission/replan_request",
+    "/mission/fault_route",
     "/mission_status",
     # The tree.
     "/bt/status_change",
     # What the robot is doing, aggregated.
     "/world_state",
+    # The orchard the robot was fed with its mission. Missing from this table
+    # through a live fleet run, and the symptom was quiet: the arbiter and the
+    # planner both subscribed to the fleet-wide name, which nothing publishes,
+    # so `orchard` stayed None in every agent. mission_tasks.synthesize then
+    # could not place the aisle move for a task won at auction -- it reported
+    # MoveToAisleHead as `dropped` and left the winner's planner to reinvent it
+    # from the rows already in its own plan, which it did, correctly, at the
+    # cost of a model call and a step nobody could see was missing.
+    "/orchard/tree_info_json",
     "/navigate_to_pose/_action/feedback",
     "/navigate_to_pose/_action/status",
     "/follow_tree_id_waypoint/_action/feedback",

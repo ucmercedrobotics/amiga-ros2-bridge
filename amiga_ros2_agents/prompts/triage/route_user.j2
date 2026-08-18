@@ -1,0 +1,44 @@
+## Behaviour-tree fault
+
+{{ fault }}
+
+## Log lines around the fault
+
+The fault event says which step failed; these say why. This is your main
+evidence — read it for whether the same thing is failing the same way.
+
+```
+{{ log_context }}
+```
+
+## World state
+
+{{ world_state }}
+
+## What local recovery already tried
+
+Plan edits already made for faults in this mission, and what became of them. An
+empty list means nothing has been tried yet, which argues for repair. An entry
+describing an edit that was made and did not help argues the opposite.
+
+{{ local_attempts }}
+
+## The unit of work at stake
+
+This is what would leave the robot if you escalate — the whole subtree the
+failing step belongs to, not just that step. Sampling a tree, for instance, is
+the move to it *and* the sample.
+
+{{ task }}
+
+## The plan currently running
+
+Untouched. Nothing has been edited yet.
+
+```xml
+{{ mission_xml }}
+```
+
+---
+
+Decide. Reply with one JSON object.

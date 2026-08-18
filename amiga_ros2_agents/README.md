@@ -56,8 +56,12 @@ reason it exists is that the coordinator never parses XML.
    tcp_demux_node ──────────────────▶ bt_runner
                             ▲             │
                             │             ▼ (BT node fails)
-                        arbiter ◀── /bt/status_change ──▶ mission_planner
-                            ▲                                   │
+                        arbiter ◀── /bt/status_change ──▶ triage
+                            ▲                               │
+                            │                    /mission/fault_route
+                            │                               │ repair
+                            │                               ▼
+                            │                        mission_planner
    /mission/rejection ──────┴─────── /mission/candidate_xml ◀────┘
    /mission/abort │                                             ▲
                   │     world_state ──── /world_state (1 Hz) ───┘
@@ -76,11 +80,30 @@ The arbiter is the only node that publishes `/mission/xml`. The planner proposes
 the arbiter accepts (republish), rejects (planner retries with the reason) or
 aborts (planner stops replanning for the rest of the mission).
 
-`triage` sits at the end of that chain and does two things that are deliberately
-different in kind. When the loop above gives up — `/mission/abort`, or a planner
-give-up on `/mission/planner_status` — it escalates to the coordinator on
-`/coordination/infeasible`. **No model is involved in that**: the planner and the
-arbiter already decided local recovery was exhausted. What *does* need a model is
+`triage` sits at *both* ends of that chain, and does three things that are
+deliberately different in kind.
+
+**It routes the fault first.** The first FAILURE on a leaf reaches triage
+before the planner acts on it: one model call over the fault and the `/rosout`
+lines behind it answers "would a different plan fix this?", and the verdict —
+`repair` or `escalate` — goes out on `/mission/fault_route`. The planner blocks
+on that verdict (`ROUTE_TIMEOUT_SEC`, fail-open) and opens a session only for
+`repair`. One call per failing node per mission; repeats of the same leaf get
+the cached verdict re-published. This exists because the alternative was using
+`MAX_RETRIES` as a proxy for incapacity, and a counter cannot tell a plan that
+can be fixed from a camera that is broken — it spent three sessions on both, and
+on the broken camera each session wrapped the dead leaf in another retry
+decorator and replaced the plan the escalation needed to name its failing node
+in.
+
+**Escalation stays deterministic.** A routed `escalate`, an `/mission/abort`,
+or a planner give-up on `/mission/planner_status` all publish to
+`/coordination/infeasible` unchanged. **No model is involved in that step**: the
+judgement was already made by whichever path got there. The give-up paths remain
+as backstops — routing says "don't bother", the budget says "we bothered and it
+didn't work", and both have to reach the fleet.
+
+What *does* need a model again is
 the coordinator's follow-up question, served on `/coordination/interpret_anomaly`:
 given the fault, the logs around it, the world state and who else is on the
 radio, should this task be offered to the fleet, dropped, or replaced with
@@ -159,11 +182,11 @@ works on aarch64). Without it, plans are accepted and recorded as
 
 | Agent | Subscribes | Publishes | Services |
 | --- | --- | --- | --- |
-| `mission_planner` | `/mission/xml`, `/rosout`, `/bt/status_change`, `/mission/rejection`, `/mission/abort`, `/world_state` | `/mission/candidate_xml`, `/mission/planner_status` | — |
+| `mission_planner` | `/mission/xml`, `/rosout`, `/bt/status_change`, `/mission/fault_route`, `/mission/rejection`, `/mission/abort`, `/world_state`, `/mission/replan_request` | `/mission/candidate_xml`, `/mission/planner_status` | — |
 | `arbiter` | `/mission/candidate_xml`, `/mission/xml`, `/bt/status_change` | `/mission/xml`, `/mission/rejection`, `/mission/abort`, `/mission/viability_budget` | `/mission/verify_replan` (`amiga_interfaces/srv/VerifyReplan`) |
 | `world_state` | action feedback/status topics, `/mission_status` | `/world_state` (1 Hz JSON) | — |
 | `ltl_gen` | `/mission/text` | `/mission/ltl` | `/mission/generate_ltl` (`amiga_interfaces/srv/GenerateLTL`) |
-| `triage` | `/bt/status_change`, `/rosout`, `/world_state`, `/mission/xml`, `/mission/abort`, `/mission/planner_status` | `/coordination/infeasible` | `/coordination/interpret_anomaly` (`amiga_interfaces/srv/InterpretAnomaly`) |
+| `triage` | `/bt/status_change`, `/rosout`, `/world_state`, `/mission/xml`, `/mission/abort`, `/mission/planner_status` | `/mission/fault_route`, `/coordination/infeasible` | `/coordination/interpret_anomaly` (`amiga_interfaces/srv/InterpretAnomaly`) |
 | `note` | — | — | `/coordination/interpret_note` (`amiga_interfaces/srv/InterpretNote`) |
 | `mission_bridge` | `mission/xml` | `mission/coordination_state` (latched JSON) | — |
 

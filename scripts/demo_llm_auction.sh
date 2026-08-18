@@ -5,50 +5,39 @@
 # GPS/orchard data (the checked-in examples/*.bin two-frame payloads), and
 # let the real pipeline run.
 #
-# All GPS data is real on purpose. Two earlier versions of this fault are
-# worth knowing about, because each one fails in a way that looks like a
-# broken pipeline rather than a badly chosen scenario:
+# All GPS data is real on purpose, and so is every tree: all three robots get
+# the full 144-tree orchard and an unmodified mission. Exactly one robot
+# ($FAIL_ROBOT) has a broken depth camera, so it drives to its trees perfectly
+# well and fails only when it tries to SAMPLE one -- the real
+# "No point cloud available." that pistachio_leaf_segmentation.py logs, from
+# the shared mock failure vocabulary in
+# amiga_ros2_behavior_tree/include/.../mocks/failure_modes.hpp. The fault
+# reaches the pipeline on the real /bt/status_change topic bt_runner's own
+# FaultReporter publishes. Nothing here injects a topic or service by hand.
 #
-#   * Starving EVERY robot of orchard data. Every robot fails its first goal
-#     at once and every robot tries to shed a task simultaneously -- there is
-#     no healthy fleet left to bid, so the auction never chooses a winner.
-#   * Pointing one MoveToTreeID at a tree id that does not exist. That fault
-#     is real, but the task it produces is one nobody can ever take: a peer
-#     resolves tree 9999 against its own orchard, finds nothing, and bids
-#     infeasible. So does every other peer. The auction runs, collects a full
-#     set of "I cannot", and hands the task straight back -- everything works
-#     except the part the demo exists to show.
-#
-# The fault has to be local to one robot while the work stays real. So
-# exactly one robot ($FAIL_ROBOT) gets its normal mission, with its normal
-# plan asking for its normal trees, and ONE tree removed from its own copy of
-# the orchard JSON -- see scripts/build_broken_mission.py.
-# /orchard/get_tree_info filters its cached tree list server-side
-# (orchard_management.cpp) and legitimately finds no match, so
-# amiga_navigation's waypoint_follower.py aborts that one goal for real
-# ("GetTreeInfo returned empty result"), on the real /bt/status_change topic
-# bt_runner's own FaultReporter publishes. Every other robot has the untouched
-# orchard, so $HIDDEN_TREE is somewhere they can all actually go, and the task
-# is worth bidding on. Nothing here injects a topic or service call by hand.
-# From there the existing pipeline runs itself:
+# Why an arm fault and not a missing tree, which is what this demo used to do:
+# triage's decision is "is this beyond THIS robot, or beyond ANY robot?", and
+# it only sees this robot's own evidence -- never what peers know. A robot
+# whose orchard copy is missing tree 20 logs "GetTreeInfo returned empty
+# result", which from inside that robot is indistinguishable from the tree not
+# existing at all, so triage drops the task instead of offering it and no
+# auction ever runs. A camera that produced no point cloud is unambiguously
+# this robot's problem, and a peer with a working camera is the right answer.
 #
 #   leaf fails -> mission_planner (LLM) tries to repair its own XML
-#              -> arbiter reviews the candidate; dropping the tree is an
-#                 unjustified drop, so the candidate is rejected
-#              -> this robot cannot reach that tree however the plan is
-#                 written, so repair keeps failing until a budget runs out
-#              -> /mission/abort (viability) or a terminal give-up on
-#                 /mission/planner_status (rejection retries) -- either one
-#                 escalates
-#              -> triage -> /coordination/infeasible
-#              -> the fleet (still running real, valid missions, and all of
-#                 them able to reach $HIDDEN_TREE) auctions the shed task
-#              -> the winner's mission_planner (LLM) splices the absorbed
-#                 task into ITS OWN XML
+#              -> arbiter reviews each candidate
+#              -> no rewrite makes this robot's camera work, so repair runs out
+#                 of budget (MAX_RETRIES planning sessions)
+#              -> the planner reports a terminal give-up on
+#                 /mission/planner_status
+#              -> triage -> /coordination/infeasible, carrying the whole failed
+#                 subtree as a task descriptor
+#              -> triage interprets it as re_delegate, and the fleet auctions
+#                 the shed task over the simulated LoRa radio
+#              -> the winner's mission_planner (LLM) splices the absorbed task
+#                 into ITS OWN XML
 #
-# Two real LLM replans, on two different robots' XML, off one real,
-# single-goal fault. Nothing here is fabricated on the wire -- one robot's
-# orchard frame is short by one tree, and that is the whole injection.
+# Two real LLM replans, on two different robots' XML, off one real fault.
 #
 # NOTE the arbiter must be able to ABORT for the loop above to terminate,
 # which is `objective_gating` (on by default) and NOT `ltl_verification`.
@@ -91,14 +80,36 @@ MISSION_BINS=(
     "${EXAMPLES_DIR}/sample_24_68.bin"
 )
 
-# Which robot (1-based) gets the crippled orchard, and which of its two real
-# tree targets is removed from that robot's copy of it. The tree stays real
-# and stays in everybody else's orchard -- that is what makes the shed task
-# something a peer can actually win.
+# Which robot (1-based) gets the broken arm, and how it breaks. Everything
+# else about that robot is ordinary: it gets a real, unmodified mission and the
+# full 144-tree orchard, drives to its trees successfully, and fails only when
+# it tries to SAMPLE one.
+#
+# The mode matters more than it looks. Triage's whole decision is "is this
+# beyond THIS robot, or beyond ANY robot?", and it only ever sees this robot's
+# own evidence -- the fault, the log lines around it, its battery, and which
+# peers are alive. Never what those peers know. So the fault has to be one
+# whose own log line says "me", not "the world":
+#
+#   no_point_cloud  "No point cloud available."  -- this robot's depth camera
+#                   produced nothing. A peer with a working camera is exactly
+#                   the right answer, so triage re-delegates and the fleet
+#                   auctions it. This is the one this demo wants.
+#   no_leaves       "No leaves detected in the point cloud." -- the camera
+#                   worked and there was nothing there. Nobody else would find
+#                   leaves either, so triage correctly DROPS it and no auction
+#                   happens.
+#
+# An earlier version of this demo hid one tree from one robot's orchard copy
+# instead. That produced a real fault and a real escalation, but the robot's
+# evidence read "GetTreeInfo returned empty result for tree 20" -- which is
+# indistinguishable, from inside that robot, from the tree not existing at all.
+# Triage dropped the task, exactly as amiga_ros2_coordinator/docs/coordinator.md
+# says it should ("a spray task on a felled tree" is not worth a peer's time),
+# and the auction never ran. The lesson is in mocks/failure_modes.hpp, which
+# labels each mode permanent or not for precisely this reason.
 FAIL_ROBOT="${FAIL_ROBOT:-1}"
-BROKEN_TREE_SOURCE="${EXAMPLES_DIR}/sample_20_64.bin"
-HIDDEN_TREE="${HIDDEN_TREE:-64}"
-BROKEN_MISSION_BIN="${LOG_DIR}/broken_mission.bin"
+SAMPLER_FAILURE_MODE="${SAMPLER_FAILURE_MODE:-no_point_cloud}"
 
 # Must match sim_bringup.launch.py's robot_name_prefix, since that is what
 # names both the namespaces and the virtual radio's per-robot ptys.
@@ -114,6 +125,37 @@ HEADLESS="${HEADLESS:-false}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_PATH="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_PATH" || exit 1
+
+# Both patterns are anchored, and that is not cosmetic: `pkill -f` matches the
+# WHOLE command line of every process, so an unanchored "ign gazebo" also
+# matches any shell whose own arguments happen to mention it -- including the
+# one that called this function, which it then kills. Anchor on how the process
+# actually starts: the gz server's argv[0] is literally `ign`, and a launch is
+# always exec'd through .../bin/ros2.
+GZ_PATTERN='^ign gazebo'
+LAUNCH_PATTERN='bin/ros2 launch amiga_ros2_(gazebo|behavior_tree)'
+
+teardown() {
+    tmux kill-session -t "$SESSION" 2>/dev/null
+    # Launch first so it stops respawning, then the server it orphaned.
+    pkill -f "$LAUNCH_PATTERN" 2>/dev/null
+    pkill -f "$GZ_PATTERN" 2>/dev/null
+    for _ in $(seq 1 10); do
+        pgrep -f "$GZ_PATTERN" >/dev/null 2>&1 || return 0
+        sleep 1
+    done
+    pkill -9 -f "$GZ_PATTERN" 2>/dev/null
+    pkill -9 -f "$LAUNCH_PATTERN" 2>/dev/null
+}
+
+# Before the AGENT_MODEL check on purpose: tearing a run down is exactly what
+# you need to do when the environment is wrong, so it must not itself require
+# the environment to be right.
+if [ "${1:-}" = "stop" ]; then
+    teardown
+    echo "torn down: tmux session, launches, and any orphaned gz servers."
+    exit 0
+fi
 
 if [ -z "${AGENT_MODEL:-}" ]; then
     echo "AGENT_MODEL is not set." >&2
@@ -152,20 +194,60 @@ topic_prefix_for() { # namespace -> leading path segment for its topics
     if [ -z "$1" ]; then echo ""; else echo "/$1"; fi
 }
 
+# Killing the tmux session is NOT enough to end a run. `ros2 launch` starts the
+# Ignition server through ros_gz_sim, which execs `ign gazebo -s` as a process
+# that does not die with the launch service that started it, so every teardown
+# so far has left a full physics server behind. They accumulate silently: by the
+# fifth run this machine had four orphans from previous runs still integrating
+# an empty world, load average ~19, and only ONE of the three robots managed to
+# bring Nav2 up -- the other two spent the run logging "Timed out waiting for
+# transform from amiga<i>/base_link to map". That failure looks exactly like a
+# broken demo and is really just a starved one, so teardown is the script's job,
+# not the reader's.
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     echo "Session '$SESSION' already exists -- attaching."
-    echo "(tmux kill-session -t $SESSION to tear down and start clean)"
+    echo "($0 stop to tear it down, orphaned gz servers included, and start clean)"
     tmux attach -t "$SESSION"
     exit 0
 fi
 
-mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/*_mission_xml.log
+# No session, but a previous run's gz server may still be alive and will starve
+# this one if it is. Sweep before launching rather than after the demo confuses
+# someone.
+if pgrep -f "$GZ_PATTERN" >/dev/null 2>&1; then
+    echo "orphaned gz server(s) from an earlier run are still up -- clearing them:"
+    pgrep -af "$GZ_PATTERN" | sed 's/^/  /'
+    teardown
+fi
 
+mkdir -p "$LOG_DIR"
+rm -f "$LOG_DIR"/*.log
+
+# `tmux set -g` needs a running server, and prints "no server running" and
+# changes nothing without one -- while both options below are read when a pane
+# is CREATED, so setting them after the sim window exists is already too late
+# for the one window whose scrollback matters most.
+#
+# `tmux start-server` does not solve it: a server with no sessions exits again
+# immediately, so the `set` calls still find nothing. The only thing that holds
+# a server open is a session, hence this throwaway window -- created first, so
+# the options are in place before any real window is, and killed at the end.
+#
+# This was invisible for as long as teardown left a tmux server behind: the
+# settings landed on the leftover server from the previous run and looked like
+# they worked. They only started failing once teardown began actually killing
+# it, which is also when it started to matter.
+tmux new-session -d -s "$SESSION" -n bootstrap
 tmux set -g mouse on
-tmux new-session -d -s "$SESSION" -n sim
+# Three robots' worth of Nav2 chatter scrolls the agent story out of a default
+# 2000-line pane in seconds, and ros2 launch does NOT copy node stdout into
+# ~/.ros/log (output="screen" goes to the terminal and nowhere else), so
+# without both of these the only record of the run is already gone by the time
+# you go looking for it. Every window is also teed to $LOG_DIR.
+tmux set -g history-limit 500000
+tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true ltl_verification:=false objective_gating:=true" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true ltl_verification:=false objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"
@@ -174,7 +256,7 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     [ -n "$ns" ] && ns_arg="namespace:=${ns}"
     tmux new-window -t "$SESSION" -n "bt${i}"
     tmux send-keys -t "$SESSION:bt${i}" \
-        "ros2 launch amiga_ros2_behavior_tree bt.launch.py ${ns_arg} port:=${port}" C-m
+        "ros2 launch amiga_ros2_behavior_tree bt.launch.py ${ns_arg} port:=${port} 2>&1 | tee ${LOG_DIR}/bt${i}.log" C-m
 done
 
 # Three tiled windows, one pane per robot each:
@@ -194,9 +276,28 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     label="${ns:-robot1}"
     log_file="$LOG_DIR/${ns:-robot1}_mission_xml.log"
 
-    watch_cmd="echo '--- ${label}: mission_planner candidates ---'; ros2 topic echo ${prefix}/mission/candidate_xml"
-    infeasible_cmd="echo '--- ${label}: coordination/infeasible ---'; ros2 topic echo ${prefix}/coordination/infeasible"
-    mission_cmd="echo '--- ${label}: mission/xml (accepted) -- also logging to ${log_file} ---'; ros2 topic echo ${prefix}/mission/xml | tee -a '${log_file}'"
+    # Two things this line has to get right, both learned the hard way:
+    #
+    #  --full-length: ros2 topic echo truncates long string fields to ~100
+    #  chars by default, which turns every plan in these panes into the same
+    #  unusable '<root BTCPP_format=\"4\"...' stub with the actual edit cut off.
+    #
+    #  the wait loop: `ros2 topic echo` on a topic whose type it cannot resolve
+    #  yet does NOT wait -- it prints "does not appear to be published yet /
+    #  Could not determine the type for the passed topic" and EXITS. These
+    #  windows are opened before the agents exist, precisely so they are
+    #  already listening when the run starts, so every one of them used to die
+    #  in its first second. That cost a whole run: /coordination/infeasible is
+    #  published exactly once, is not latched, and its pane had exited long
+    #  before, so the escalation left no trace anywhere.
+    #
+    # Everything is teed, for the same reason: a message that arrives once
+    # should not be recoverable only from scrollback.
+    wait_topic() { echo "until ros2 topic list 2>/dev/null | grep -qx '$1'; do sleep 2; done"; }
+
+    watch_cmd="echo '--- ${label}: mission_planner candidates ---'; $(wait_topic "${prefix}/mission/candidate_xml"); ros2 topic echo --full-length ${prefix}/mission/candidate_xml | tee -a '$LOG_DIR/${ns}_candidates.log'"
+    infeasible_cmd="echo '--- ${label}: coordination/infeasible ---'; $(wait_topic "${prefix}/coordination/infeasible"); ros2 topic echo --full-length ${prefix}/coordination/infeasible | tee -a '$LOG_DIR/${ns}_infeasible.log'"
+    mission_cmd="echo '--- ${label}: mission/xml (accepted) -- also logging to ${log_file} ---'; $(wait_topic "${prefix}/mission/xml"); ros2 topic echo --full-length ${prefix}/mission/xml | tee -a '${log_file}'"
 
     if [ "$i" -eq 1 ]; then
         tmux send-keys -t "$SESSION:watch" "$watch_cmd" C-m
@@ -212,10 +313,6 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     fi
 done
 
-python3 "$SCRIPT_DIR/build_broken_mission.py" \
-    "$BROKEN_TREE_SOURCE" "$HIDDEN_TREE" "$BROKEN_MISSION_BIN" \
-    || { echo "failed to build the broken mission payload" >&2; exit 1; }
-
 # Feed each robot a real, correctly-framed mission once its port is actually
 # accepting connections -- the broken one to $FAIL_ROBOT, an unmodified real
 # one (round-robin over MISSION_BINS) to everyone else.
@@ -225,15 +322,63 @@ bins=($(printf '%q ' "${MISSION_BINS[@]}"))
 n_bins=\${#bins[@]}
 for i in \$(seq 1 ${ROBOT_COUNT}); do
     port=\$(( ${BASE_PORT} + i - 1 ))
+    mission=\"\${bins[\$(( (i - 1) % n_bins ))]}\"
     if [ \"\$i\" -eq ${FAIL_ROBOT} ]; then
-        mission='${BROKEN_MISSION_BIN}'
-        echo \"robot \$i is the fail case: tree ${HIDDEN_TREE} removed from its orchard data (its plan still asks for it; every other robot can still reach it)\"
-    else
-        mission=\"\${bins[\$(( (i - 1) % n_bins ))]}\"
+        echo \"robot \$i is the fail case: real mission, full orchard, but its leaf sampler fails (${SAMPLER_FAILURE_MODE})\"
     fi
     echo \"waiting for robot \$i's mission port (\$port)...\"
     until (exec 3<>/dev/tcp/127.0.0.1/\$port) 2>/dev/null; do sleep 1; done
     exec 3<&- 3>&-
+    # The open port only means tcp_demux is up, and tcp_demux is up long
+    # before Gazebo, Nav2 and waypoint_follower are. Feeding on the port
+    # alone hands the tree a mission whose action servers do not exist yet,
+    # and every leaf fails instantly with 'Action server ... is not
+    # reachable' -- a real fault, but the wrong one, firing before the robot
+    # could even try. waypoint_follower.py creates its action servers only
+    # after waitUntilNav2Active() returns, so their presence is also the
+    # signal that Nav2 finished coming up.
+    #
+    # Counted off the action's own status topic, NOT \`ros2 action info\`.
+    # An action server is exactly the publisher of <action>/_action/status, so
+    # this is the same fact, but read the one way that survives this setup:
+    # \`ros2 action info\` aggregates per node name and goes wrong when the graph
+    # reports a node more than once, which it does here -- with a DDS profile
+    # whose interface allowlist does not match the machine, every node is
+    # announced twice, and the server counts come back doubled, or 0 for a
+    # server that accepts goals perfectly well.
+    #
+    # Bounded, because the wait is per robot and the loop is serial: an
+    # unbounded wait on a robot whose Nav2 never activates does not just fail
+    # that robot, it silently prevents every LATER robot from ever being fed,
+    # and the window sits there looking busy. A robot that has not made it in
+    # five minutes is not going to, so say so and move on -- a two-robot demo
+    # still shows an auction.
+    ns=\"${ROBOT_PREFIX}\$i\"
+    ready=1
+    for act in move_to_aisle_head follow_tree_id_waypoint segment_leaves; do
+        echo \"  waiting for /\$ns/\$act ...\"
+        waited=0
+        until timeout 10 ros2 topic info /\$ns/\$act/_action/status 2>/dev/null \\
+            | grep -qE 'Publisher count: [1-9]'; do
+            sleep 3
+            waited=\$(( waited + 3 ))
+            if [ \"\$waited\" -ge 300 ]; then
+                echo \"  robot \$i never brought up \$act -- its Nav2 did not\"
+                echo \"  finish activating (check the sim window for the\"
+                echo \"  lifecycle_manager bonds). NOT feeding this robot.\"
+                ready=0
+                break
+            fi
+        done
+        [ \"\$ready\" -eq 1 ] || break
+    done
+    if [ \"\$ready\" -eq 0 ]; then
+        if [ \"\$i\" -eq ${FAIL_ROBOT} ]; then
+            echo \"  robot \$i is FAIL_ROBOT -- without it there is no fault to\"
+            echo \"  shed and no auction. Tear down and start clean.\"
+        fi
+        continue
+    fi
     echo \"feeding robot \$i on port \$port: \$mission\"
     nc -q 1 127.0.0.1 \$port < \"\$mission\"
 done
@@ -243,6 +388,10 @@ echo 'watch: bt<i> for BT execution, watch/infeasible/mission-xml for the LLM+au
 echo 'logs: $LOG_DIR/*_mission_xml.log'
 "
 tmux send-keys -t "$SESSION:feed" "$feed_cmd" C-m
+
+# Every real window exists now, so the session no longer needs the window that
+# was only there to hold the server open long enough to configure it.
+tmux kill-window -t "$SESSION:bootstrap" 2>/dev/null
 
 tmux select-window -t "$SESSION:sim"
 tmux attach -t "$SESSION"

@@ -17,6 +17,24 @@ Read that as follows:
 - `findings` — what the edit left inconsistent. A step that establishes something nothing later needs is now dead weight; a step whose expected prerequisite is gone will run badly.
 - `note` — free text from the robot that had this task, sent over a very narrow radio link. If it is non-empty it is the most valuable thing in this message: it is a fact about the world that this robot has no other way of knowing, and it usually constrains HOW the work has to be done rather than whether. Act on it. If it names a route, a hazard, or an ordering, your plan should reflect that and not merely append the task.
 
+{% if completed_trees or succeeded_nodes %}
+## Already finished this mission — leave these out
+{% if completed_trees %}Trees {{ completed_trees | join(", ") }} have already been sampled successfully and are deliberately absent from the "Active mission XML" below.
+{% endif %}{% if succeeded_nodes %}Steps that have already run and succeeded: {{ succeeded_nodes | join(", ") }}.
+{% endif %}
+The robot has no way to resume mid-plan — it re-runs the whole XML from the top
+on every redeploy — so re-adding finished work drives the robot through it
+again. Keep it out.
+
+The one exception is when the absorbed task DEPENDS on it. Finishing a tree
+does not mean the robot is still next to it, and the absorbed work has its own
+prerequisite chain: if reaching the new target needs an aisle entered or a
+position established that an earlier, now-finished step happened to provide,
+add that step back for the new work rather than assuming it still holds. Add it
+as a prerequisite of the absorbed task — never by restoring the finished
+objective itself.
+
+{% endif %}
 ## What a good edit does here
 - Absorbed work: place it where it costs least given what else the plan visits, and make sure its prerequisite chain is intact (enter the aisle, approach the tree, then sample). If the note says something about how to reach it, honour that.
 - Transferred work: remove what the findings say is now pointless, and repair anything that lost a prerequisite it needed.

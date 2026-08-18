@@ -17,6 +17,7 @@ reply, and a real model would only make the input less controlled.
 """
 
 import json
+import time
 
 import pytest
 
@@ -24,15 +25,47 @@ from amiga_ros2_agents.coordination import triage_node as tn
 from amiga_ros2_comms.codec import Capability, Target, TargetKind, cap_mask
 
 
+class _Inline:
+    """A Thread that runs its target on ``start()``.
+
+    Routing happens on a background thread so the executor keeps spinning while
+    a model is thinking. That is right in the node and useless in a test: a
+    verdict that lands after the assertions is a flake, and a thread still
+    publishing after ``destroy_node`` is a crash in a daemon nobody reads. The
+    test wants the same work, finished before the call returns.
+    """
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._call = lambda: target(*args, **(kwargs or {}))
+
+    def start(self):
+        self._call()
+
+
 @pytest.fixture
 def node(monkeypatch):
     monkeypatch.setattr(tn.llm, "MODEL", "test-model")
+    monkeypatch.setattr(tn, "Thread", _Inline)
+    # Every /bt/status_change FAILURE now costs a routing call, so a test that
+    # is about something else would otherwise reach for a real endpoint. The
+    # default verdict is the one that changes nothing downstream.
+    monkeypatch.setattr(
+        tn.llm,
+        "complete",
+        lambda system, user, **kw: route_reply(
+            route="repair", reason_code="unspecified", rationale="default test verdict"
+        ),
+    )
     created = tn.TriageNode()
     yield created
     created.destroy_node()
 
 
 def reply(**fields) -> str:
+    return json.dumps(fields)
+
+
+def route_reply(**fields) -> str:
     return json.dumps(fields)
 
 
@@ -407,6 +440,294 @@ def test_unparseable_mission_xml_does_not_raise(node):
 
 
 # ==========================================================================
+# Routing: the judgement that used to be a retry counter
+# ==========================================================================
+
+
+def routes(node, monkeypatch):
+    """Capture what would go out on /mission/fault_route."""
+    sent = []
+    monkeypatch.setattr(
+        node.route_pub, "publish", lambda msg: sent.append(json.loads(msg.data))
+    )
+    return sent
+
+
+def _model(monkeypatch, *replies):
+    """Answer each model call with the next reply, and count the calls."""
+    calls = []
+
+    def answer(system, user, **kw):
+        calls.append(user)
+        return replies[min(len(calls) - 1, len(replies) - 1)]
+
+    monkeypatch.setattr(tn.llm, "complete", answer)
+    return calls
+
+
+FAULT = json.dumps(
+    {
+        "node": "Sample_Leaves_Tree_60",
+        "status": "FAILURE",
+        "source": "leaf",
+        "timestamp_ms": 0,
+    }
+)
+
+
+def test_a_repair_verdict_is_published_and_escalates_nothing(node, monkeypatch):
+    published = routes(node, monkeypatch)
+    sent = escalations(node, monkeypatch)
+    _model(
+        monkeypatch,
+        route_reply(
+            route="repair",
+            reason_code="unspecified",
+            guidance="the arm was still stowed",
+            rationale="a different plan could order this correctly",
+        ),
+    )
+    node._on_mission(_string(MISSION_XML))
+
+    node._on_fault(_string(FAULT))
+
+    assert len(published) == 1
+    assert published[0]["route"] == "repair"
+    assert published[0]["node"] == "Sample_Leaves_Tree_60"
+    assert published[0]["guidance"] == "the arm was still stowed"
+    assert sent == [], "a repairable fault must not reach the fleet"
+
+
+def test_an_escalate_verdict_sheds_the_work_immediately(node, monkeypatch):
+    """The whole point of routing first: the plan is still the one that failed.
+
+    This is what a give-up escalation cannot do. By the time MAX_RETRIES runs
+    out the planner has replaced /mission/xml several times over, and the node
+    named in the fault is no longer in it -- so the escalation carries task_id
+    0 and the coordinator has nothing it can announce.
+    """
+    published = routes(node, monkeypatch)
+    sent = escalations(node, monkeypatch)
+    _model(
+        monkeypatch,
+        route_reply(
+            route="escalate",
+            reason_code="capability_missing",
+            rationale="no point cloud on any attempt; the camera is dead",
+        ),
+    )
+    node._on_mission(_string(MISSION_XML))
+
+    node._on_fault(_string(FAULT))
+
+    assert published[0]["route"] == "escalate"
+    assert len(sent) == 1
+    assert sent[0]["cause"] == "triage_route"
+    assert "camera is dead" in sent[0]["detail"]
+    # Announceable: the whole descriptor, resolved against the plan that was
+    # running when the leaf failed.
+    assert sent[0]["task_id"] > 0
+    assert sent[0]["name"] == "Sample_Tree_60"
+    assert sent[0]["capabilities"] == cap_mask(
+        Capability.MOVE_TO_TREE_ID, Capability.SAMPLE_LEAF
+    )
+    assert sent[0]["target_a"] == 60
+
+
+def test_the_verdict_goes_out_before_the_escalation(node, monkeypatch):
+    """Ordering, not decoration.
+
+    The planner stands down on the verdict. If the escalation went first the
+    coordinator could commit an edit to the same plan the planner is about to
+    open a session on, and the two would be writing over each other.
+    """
+    order = []
+    monkeypatch.setattr(node.route_pub, "publish", lambda msg: order.append("route"))
+    monkeypatch.setattr(
+        node.infeasible_pub, "publish", lambda msg: order.append("escalation")
+    )
+    _model(
+        monkeypatch,
+        route_reply(
+            route="escalate", reason_code="capability_missing", rationale="dead"
+        ),
+    )
+    node._on_mission(_string(MISSION_XML))
+
+    node._on_fault(_string(FAULT))
+
+    assert order == ["route", "escalation"]
+
+
+def test_the_same_leaf_failing_again_costs_no_second_model_call(node, monkeypatch):
+    """Retry decorators re-tick a dead leaf several times before the tree ends.
+
+    The verdict does not change between those ticks, and a model call each time
+    would spend the mission's budget re-learning it. The cached verdict is
+    re-published rather than dropped, so a planner that came up late still gets
+    one.
+    """
+    published = routes(node, monkeypatch)
+    calls = _model(
+        monkeypatch,
+        route_reply(route="repair", reason_code="unspecified", rationale="once"),
+    )
+    node._on_mission(_string(MISSION_XML))
+
+    for _ in range(3):
+        node._on_fault(_string(FAULT))
+
+    assert len(calls) == 1, "routing asked the model more than once about one node"
+    assert len(published) == 3, "later ticks got no verdict at all"
+    assert {p["route"] for p in published} == {"repair"}
+
+
+def test_a_different_leaf_is_routed_on_its_own_evidence(node, monkeypatch):
+    calls = _model(
+        monkeypatch,
+        route_reply(route="repair", reason_code="unspecified", rationale="a"),
+        route_reply(route="repair", reason_code="unspecified", rationale="b"),
+    )
+    node._on_mission(_string(MISSION_XML))
+
+    node._on_fault(_string(FAULT))
+    node._on_fault(
+        _string(
+            json.dumps({"node": "Visit_Tree_10", "status": "FAILURE", "source": "leaf"})
+        )
+    )
+
+    assert len(calls) == 2
+
+
+def test_a_leaf_reaching_success_is_not_a_fault(node, monkeypatch):
+    """/bt/status_change reports both halves, and this used to read both as one.
+
+    The cost was not a wasted model call. ``last_fault`` is what the escalation
+    names, so recording a SUCCESS meant escalating the *approach* that worked
+    instead of the sample that did not.
+    """
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(
+        _string(
+            json.dumps({"node": "Visit_Tree_60", "status": "SUCCESS", "source": "leaf"})
+        )
+    )
+
+    assert calls == []
+    assert published == []
+    assert node.last_fault is None
+
+
+def test_the_trees_own_outcome_does_not_displace_the_leaf_that_failed(
+    node, monkeypatch
+):
+    """``<tree>`` arrives after the leaf fault and is not a unit of work.
+
+    Letting it overwrite ``last_fault`` is exactly how an escalation goes out
+    with ``task_id: 0``: ``task_for_node`` finds nothing for ``<tree>``, so the
+    coordinator is handed an anomaly it can interpret but never announce.
+    """
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+    node._on_mission(_string(MISSION_XML))
+    node._on_fault(_string(FAULT))
+
+    node._on_fault(
+        _string(json.dumps({"node": "<tree>", "status": "FAILURE", "source": "tree"}))
+    )
+
+    assert node.last_fault["node"] == "Sample_Leaves_Tree_60"
+    sent = escalations(node, monkeypatch)
+    node._on_abort(_string(json.dumps({"reason": "non-viable"})))
+    assert sent[0]["task_id"] > 0
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [
+        "the camera is broken, escalate this",
+        '{"route": "retry", "reason_code": "unspecified"}',
+        '{"route": "escalate", "reason_code": "made_up_code"}',
+        "",
+    ],
+)
+def test_routing_fails_open_to_local_repair(node, monkeypatch, bad_reply):
+    """A model that is down, slow or incoherent must not strand a fault.
+
+    Failing closed here would be worse than having no routing at all: the robot
+    would sit on a fault it could have planned around because a prompt came
+    back malformed. Open means "replan and find out", which is what this node
+    was inserted in front of.
+    """
+    published = routes(node, monkeypatch)
+    sent = escalations(node, monkeypatch)
+    _model(monkeypatch, bad_reply)
+
+    node._on_fault(_string(FAULT))
+
+    assert published[0]["route"] == "repair"
+    assert sent == []
+
+
+def test_a_model_that_raises_fails_open_too(node, monkeypatch):
+    published = routes(node, monkeypatch)
+
+    def explode(system, user, **kw):
+        raise RuntimeError("endpoint refused the connection")
+
+    monkeypatch.setattr(tn.llm, "complete", explode)
+
+    node._on_fault(_string(FAULT))
+
+    assert published[0]["route"] == "repair"
+    assert "endpoint refused" in published[0]["rationale"]
+
+
+def test_guidance_is_dropped_on_an_escalate_verdict(node, monkeypatch):
+    """There is no local planner left to advise once the work has gone."""
+    published = routes(node, monkeypatch)
+    _model(
+        monkeypatch,
+        route_reply(
+            route="escalate",
+            reason_code="capability_missing",
+            guidance="try deploying the arm first",
+            rationale="dead camera",
+        ),
+    )
+
+    node._on_fault(_string(FAULT))
+
+    assert published[0]["guidance"] == ""
+
+
+def test_the_routing_prompt_carries_the_evidence_and_the_stakes(node, monkeypatch):
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+    node._on_mission(_string(MISSION_XML))
+    node._on_world_state(_string('{"battery": 9, "row": 4}'))
+
+    node._on_fault(_string(FAULT))
+
+    prompt = calls[0]
+    assert "Sample_Leaves_Tree_60" in prompt
+    assert '"battery": 9' in prompt
+    # The unit of work at stake, not just the leaf -- the difference between
+    # "give up on this step" and "give this job to somebody else".
+    assert "Sample_Tree_60" in prompt
+    for route in tn.VALID_ROUTES:
+        assert route in node.route_system_prompt
+
+
+def test_the_planner_and_triage_agree_on_the_topic_name(node):
+    """Spelled out on both sides rather than imported. Pin them together."""
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    assert mp.ROUTE_TOPIC == tn.ROUTE_TOPIC
+
+
+# ==========================================================================
 # Escalation: deterministic, and only on a give-up
 # ==========================================================================
 
@@ -541,7 +862,10 @@ def test_running_out_of_sessions_escalates_once_not_once_per_failing_node(monkey
     exhausted budget twice, milliseconds apart, and the coordinator opened two
     interpretations of one fault.
     """
-    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+    from amiga_ros2_agents.replanning.mission_planner_node import (
+        MAX_RETRIES,
+        MissionPlannerNode,
+    )
 
     published = []
     planner = MissionPlannerNode()
@@ -553,12 +877,66 @@ def test_running_out_of_sessions_escalates_once_not_once_per_failing_node(monkey
             planner._report_gave_up(
                 cause="max_retries_exhausted",
                 node=node_name,
-                reason="reached MAX_RETRIES (20) planning sessions",
+                reason=f"reached MAX_RETRIES ({MAX_RETRIES}) planning sessions",
             )
     finally:
         planner.destroy_node()
 
     assert len(published) == 1
+
+
+def test_shedding_a_task_restores_the_planning_budget(monkeypatch):
+    """A robot that sheds a task must be able to fail again, and shed again.
+
+    The shape a live fleet run produced. amiga1's depth camera was broken for
+    the whole mission, so tree 20 burned all three planning sessions, escalated,
+    and was auctioned to amiga3 -- correctly. Then amiga1 drove to tree 64 and
+    hit the identical fault with the budget still reported as spent, and
+    _gave_up still holding max_retries_exhausted from the first one. No replan
+    was possible and no second escalation could fire, so the one fault it could
+    have offered the fleet twice was offered once and tree 64 was abandoned
+    without a word.
+
+    MAX_RETRIES bounds work on ONE situation. The transfer ends that situation:
+    the coordinator has already committed the edit, so the plan the planner is
+    now holding is not the plan the budget was spent on.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import (
+        MAX_RETRIES,
+        MissionPlannerNode,
+    )
+
+    planner = MissionPlannerNode()
+    try:
+        # No model call: what is under test is the state around the session,
+        # and _on_replan_request hands _run_planner to a thread.
+        started = []
+        monkeypatch.setattr(
+            planner, "_run_planner", lambda *a, **kw: started.append((a, kw))
+        )
+        planner._last_status["sessions"] = MAX_RETRIES
+        planner._gave_up.add(("max_retries_exhausted",))
+        planner._rejection_retries = MAX_RETRIES
+
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_transferred",
+                        "task_id": 43808,
+                        "findings": [],
+                    }
+                )
+            )
+        )
+
+        assert planner._last_status["sessions"] == 0
+        # Not merely reset: still holding it would silence the give-up that
+        # the NEXT exhausted budget has to publish for triage to escalate.
+        assert planner._gave_up == set()
+        assert planner._rejection_retries == 0
+    finally:
+        planner.destroy_node()
 
 
 def test_ordinary_planner_progress_does_not_escalate(node, monkeypatch):
@@ -662,6 +1040,180 @@ def test_the_prompt_carries_the_evidence_the_node_gathered(node, monkeypatch):
     assert "Peers alive right now" in seen["user"]
     for action in tn.VALID_ACTIONS:
         assert action in seen["system"]
+
+
+# ==========================================================================
+# The other half of the contract: the planner's gate
+# ==========================================================================
+
+
+@pytest.fixture
+def planner():
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    created = MissionPlannerNode()
+    yield created
+    created.destroy_node()
+
+
+def sessions(planner, monkeypatch):
+    """Capture the planning sessions that actually opened."""
+    opened = []
+    monkeypatch.setattr(
+        planner,
+        "_run_planner",
+        lambda event, logs, **kw: opened.append((event, kw)),
+    )
+    return opened
+
+
+def test_an_escalate_verdict_opens_no_planning_session(planner, monkeypatch):
+    """The behaviour the whole reordering exists for.
+
+    Every session opened against a permanently dead leaf makes things worse in
+    two ways at once: the edit is usually another retry decorator around the
+    dead thing, and the accepted plan replaces the one the escalation needs to
+    resolve its failing node against.
+    """
+    opened = sessions(planner, monkeypatch)
+    planner._on_fault_route(
+        _string(json.dumps({"node": "Sample_Leaves_Tree_60", "route": "escalate"}))
+    )
+
+    planner._repair_if_routed({"node": "Sample_Leaves_Tree_60"}, [])
+
+    assert opened == []
+
+
+def test_a_repair_verdict_opens_one_and_carries_the_guidance(planner, monkeypatch):
+    opened = sessions(planner, monkeypatch)
+    planner._on_fault_route(
+        _string(
+            json.dumps(
+                {
+                    "node": "Sample_Leaves_Tree_60",
+                    "route": "repair",
+                    "guidance": "the arm was still stowed",
+                }
+            )
+        )
+    )
+
+    planner._repair_if_routed({"node": "Sample_Leaves_Tree_60"}, [])
+
+    assert len(opened) == 1
+    assert opened[0][1]["route_guidance"] == "the arm was still stowed"
+
+
+def test_no_verdict_replans_anyway_rather_than_stranding_the_fault(
+    planner, monkeypatch
+):
+    """The gate fails open, or triage being down stops the robot recovering.
+
+    Failing closed would make a new node a single point of failure for a loop
+    that worked without it, which is a strictly worse trade than the wasted
+    session the timeout occasionally costs.
+    """
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    monkeypatch.setattr(mp, "ROUTE_TIMEOUT_SEC", 0.05)
+    opened = sessions(planner, monkeypatch)
+
+    planner._repair_if_routed({"node": "Sample_Leaves_Tree_60"}, [])
+
+    assert len(opened) == 1
+    assert opened[0][1]["route_guidance"] == ""
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"node": "<tree>", "source": "tree"},
+        {"node": "", "source": "tree"},
+        {"node": "<tree>"},
+    ],
+)
+def test_the_trees_own_outcome_is_not_waited_on(planner, monkeypatch, event):
+    """Triage rules on leaves, so the gate must not block on a whole-tree event.
+
+    Seen live: the leaf was routed and escalated in 11s, then the tree's own
+    FAILURE arrived and the planner sat for the full ROUTE_TIMEOUT_SEC waiting
+    for a verdict on '<tree>' that triage will never publish -- because a
+    verdict is only useful when it names a unit of work the fleet could be
+    offered. The wait changed nothing except when the replan started.
+    """
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    monkeypatch.setattr(mp, "ROUTE_TIMEOUT_SEC", 30.0)
+    opened = sessions(planner, monkeypatch)
+
+    started = time.monotonic()
+    planner._repair_if_routed(event, [])
+
+    assert len(opened) == 1
+    assert time.monotonic() - started < 1.0, "the gate waited on an unroutable event"
+
+
+def test_a_verdict_arriving_late_wakes_the_waiting_session(planner, monkeypatch):
+    """The wait is a condition, not a poll: the session starts when triage answers.
+
+    Worth pinning because the alternative shapes both fail quietly -- a sleep
+    long enough to be safe adds that delay to every repairable fault, and one
+    short enough not to would fall through the gate before any model replies.
+    """
+    import threading
+
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    monkeypatch.setattr(mp, "ROUTE_TIMEOUT_SEC", 10.0)
+    opened = sessions(planner, monkeypatch)
+
+    waiter = threading.Thread(
+        target=planner._repair_if_routed,
+        args=({"node": "Sample_Leaves_Tree_60"}, []),
+        daemon=True,
+    )
+    waiter.start()
+    time.sleep(0.1)
+    assert opened == [], "the session started before any verdict arrived"
+
+    planner._on_fault_route(
+        _string(json.dumps({"node": "Sample_Leaves_Tree_60", "route": "repair"}))
+    )
+    waiter.join(timeout=5)
+
+    assert not waiter.is_alive(), "the verdict did not wake the waiting session"
+    assert len(opened) == 1
+
+
+def test_a_verdict_for_a_different_node_does_not_release_the_gate(planner, monkeypatch):
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    monkeypatch.setattr(mp, "ROUTE_TIMEOUT_SEC", 0.05)
+    opened = sessions(planner, monkeypatch)
+    planner._on_fault_route(
+        _string(json.dumps({"node": "Visit_Tree_10", "route": "escalate"}))
+    )
+
+    # Times out and replans, rather than adopting another node's verdict and
+    # standing down on work nobody ruled on.
+    planner._repair_if_routed({"node": "Sample_Leaves_Tree_60"}, [])
+
+    assert len(opened) == 1
+
+
+def test_a_malformed_verdict_is_ignored_not_fatal(planner, monkeypatch):
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    monkeypatch.setattr(mp, "ROUTE_TIMEOUT_SEC", 0.05)
+    opened = sessions(planner, monkeypatch)
+    planner._on_fault_route(_string("not json at all"))
+    planner._on_fault_route(_string('"a bare string"'))
+    planner._on_fault_route(_string(json.dumps({"route": "escalate"})))  # no node
+
+    planner._repair_if_routed({"node": "Sample_Leaves_Tree_60"}, [])
+
+    assert len(opened) == 1
 
 
 # --------------------------------------------------------------------------

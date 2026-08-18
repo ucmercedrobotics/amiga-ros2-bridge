@@ -234,6 +234,70 @@ def test_transfer_justifies_the_drop_it_causes(arbiter):
 
 
 @needs_spin
+@pytest.mark.parametrize("arbiter", ["<>sampled_tree_10"], indirect=True)
+def test_a_transferred_tree_does_not_spend_the_viability_budget(arbiter):
+    """The abort that ended a live mission over work a peer was already doing.
+
+    amiga1's camera was dead, so both its trees went to auction. Robot 2 took
+    tree 20 and robot 3 took tree 64, and both sampled them. But amiga1's own
+    budget said one tree may go unsampled, and the second transfer made two
+    trees "dropped" from its plan -- so its arbiter aborted the mission while
+    robot 2 was standing at tree 20 with the arm out.
+
+    The budget bounds work that will NOT HAPPEN. Transferred work happens; it
+    happens somewhere else. So it comes out of the outstanding set the same way
+    finished work does, and only genuine abandonment is charged for.
+    """
+    arbiter.max_droppable = 0  # not one tree of this mission may go unsampled
+
+    task_id = _task_id_of(ACTIVE, "Visit_Tree_60")
+    assert call(arbiter, request_for(task_id=task_id, removing=True)).accepted
+    assert arbiter.transferred_objectives == {"60"}
+
+    # The plan the robot runs from here holds tree 10 and nothing else, which
+    # against a budget of zero is only acceptable if 60 stopped being ours.
+    ok, reason, abort = arbiter._check_objective_preserved(
+        etree.fromstring(arbiter.active_mission_xml.encode("utf-8"))
+    )
+    assert ok, reason
+    assert not abort
+
+
+def test_abandoning_a_tree_still_spends_it(arbiter):
+    """The other half, or the fix would just disable the gate.
+
+    The same shortened plan as above, arrived at without a peer taking
+    anything -- tree 60 is simply gone. That is the case the budget exists for,
+    and it must still abort.
+    """
+    from amiga_ros2_agents.mission import mission_tasks
+
+    arbiter.max_droppable = 0
+    arbiter.justified_drops = {"60"}  # gate 1 satisfied, so gate 2 is what answers
+
+    abandoned = mission_tasks.remove_task(ACTIVE, _task_id_of(ACTIVE, "Visit_Tree_60"))
+    ok, reason, abort = arbiter._check_objective_preserved(
+        etree.fromstring(abandoned.encode("utf-8"))
+    )
+
+    assert not ok
+    assert abort, "an abandoned objective over budget must still end the mission"
+    assert "viability budget" in reason
+
+
+@needs_spin
+@pytest.mark.parametrize(
+    "arbiter", ["<>sampled_tree_10 && <>sampled_tree_60"], indirect=True
+)
+def test_a_rejected_transfer_leaves_no_transfer_credit_behind(arbiter):
+    """A transfer that failed verification hands nothing over, so it buys
+    nothing -- neither a justified drop nor room in the budget."""
+    task_id = _task_id_of(ACTIVE, "Visit_Tree_60")
+    assert not call(arbiter, request_for(task_id=task_id, removing=True)).accepted
+    assert arbiter.transferred_objectives == set()
+
+
+@needs_spin
 @pytest.mark.parametrize(
     "arbiter", ["<>sampled_tree_10 && <>sampled_tree_60"], indirect=True
 )
@@ -570,6 +634,69 @@ def test_verification_off_still_refuses_a_plan_that_cannot_run():
         assert "Sample_Nowhere" in reason
     finally:
         node.destroy_node()
+
+
+#: A plan for the absorbed task and nothing else -- the shape a robot that has
+#: finished its own mission and won one at auction actually produces, because
+#: the planner prunes completed work before the model ever sees it.
+ABSORBED_ONLY = (
+    '<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+    "<Mission>sample leaves from trees 10 and 60</Mission>"
+    '<BehaviorTree ID="Main"><Sequence name="task_43808">'
+    '<MoveToAisleHead name="task_43808_aisle" action_name="move_to_aisle_head" id="2"/>'
+    '<MoveToTreeID name="task_43808_visit" action_name="follow_tree_id_waypoint"'
+    ' id="20" approach_tree="true"/>'
+    '<SampleLeaf name="task_43808_sample" action_name="segment_leaves"/>'
+    "</Sequence></BehaviorTree></root>"
+)
+
+
+def test_finished_objectives_are_not_drops(arbiter):
+    """The rejection that cost a live auction its replan.
+
+    amiga3 sampled trees 24 and 68, won tree 20 from a peer with a broken
+    camera, and its planner -- correctly -- sent back a plan holding only the
+    absorbed task, because finished work is pruned before the model sees it
+    (the executor re-ticks from the root, so anything left in the plan is
+    driven again). The arbiter compared that against the objectives captured at
+    mission start, saw both trees missing, and rejected the edit as an
+    unjustified drop of the two trees the robot had just finished.
+
+    A finished objective is not an abandoned one. Nothing about the candidate
+    changes here -- only whether the arbiter was told the work had happened.
+    """
+    doc = etree.fromstring(ABSORBED_ONLY.encode("utf-8"))
+
+    ok, reason, abort = arbiter._check_objective_preserved(doc)
+    assert not ok
+    assert "unjustified drop" in reason
+    assert not abort, "a fixable rejection, never an abort"
+
+    arbiter.completed_objectives = {"10", "60"}
+    ok, reason, abort = arbiter._check_objective_preserved(doc)
+    assert ok, reason
+
+
+def test_completion_ledger_is_read_off_bt_status(arbiter):
+    """Populated from the SUCCESS half of /bt/status_change, by the same
+    binding the planner uses -- so the two agree by construction. A SampleLeaf
+    reports its own name; the tree id lives on the MoveToTreeID ahead of it."""
+    import json as _json
+
+    from std_msgs.msg import String as _String
+
+    def _status(node, status):
+        return _String(data=_json.dumps({"node": node, "status": status, "reason": ""}))
+
+    arbiter._on_bt_status(_status("Sample_Leaves_Tree_10", "SUCCESS"))
+    assert arbiter.completed_objectives == {"10"}
+
+    # A failure must not land in the ledger -- it is the reason channel.
+    arbiter._on_bt_status(_status("Sample_Leaves_Tree_60", "FAILURE"))
+    assert arbiter.completed_objectives == {"10"}
+
+    arbiter._on_bt_status(_status("Sample_Leaves_Tree_60", "SUCCESS"))
+    assert arbiter.completed_objectives == {"10", "60"}
 
 
 def _task_id_of(mission_xml: str, node_name: str) -> int:

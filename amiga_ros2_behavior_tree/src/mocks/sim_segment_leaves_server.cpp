@@ -11,6 +11,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
+#include "amiga_ros2_behavior_tree/mocks/failure_modes.hpp"
 #include "kortex_interfaces/action/gripper_control.hpp"
 #include "kortex_interfaces/action/move_to.hpp"
 #include "kortex_interfaces/action/segment_leaves.hpp"
@@ -127,6 +128,28 @@ class SimSegmentLeavesServer : public rclcpp::Node {
   void execute(const std::shared_ptr<GoalHandleSegmentLeaves> goal_handle) {
     auto result = std::make_shared<SegmentLeaves::Result>();
     std::string error;
+
+    // Off unless a scenario asked for it: FailurePolicy is disabled while
+    // `fail_goals` is empty, which is the default, so an ordinary sim run
+    // reaches none of this. Shared with dummy_segment_leaves_server so both
+    // mocks fail in the real node's words -- see mocks/failure_modes.hpp.
+    //
+    // Checked before the arm moves, unlike the dummy's post-feedback check.
+    // The two arm modes are camera faults: with no point cloud there is no
+    // leaf pose to approach, so the real node never commands a motion. An
+    // approach that ran and then failed would be a different fault.
+    if (policy_ && policy_->shouldFail(amiga_bt::mocks::kUnkeyedGoal)) {
+      const auto mode = policy_->mode();
+      if (amiga_bt::mocks::logsAsWarning(mode)) {
+        RCLCPP_WARN(get_logger(), "%s", amiga_bt::mocks::failureLog(mode));
+      } else {
+        RCLCPP_ERROR(get_logger(), "%s", amiga_bt::mocks::failureLog(mode));
+      }
+      result->success = false;
+      result->message = amiga_bt::mocks::failureResultMessage(mode);
+      goal_handle->abort(result);
+      return;
+    }
 
     publish_state(goal_handle, "approaching_leaf");
     if (!move_relative(0.0, 0.0, approach_distance_, error)) {
@@ -258,11 +281,24 @@ class SimSegmentLeavesServer : public rclcpp::Node {
     std::this_thread::sleep_for(
         std::chrono::duration<double>(home_time_sec_ + 0.5));
   }
+
+  std::unique_ptr<amiga_bt::mocks::FailurePolicy> policy_;
+
+ public:
+  // Separate from the constructor because FailurePolicy needs a SharedPtr to
+  // declare its parameters on, and shared_from_this() is not available until
+  // the node is owned by one.
+  void configureFailures() {
+    policy_ = std::make_unique<amiga_bt::mocks::FailurePolicy>(
+        shared_from_this());
+  }
 };
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<SimSegmentLeavesServer>());
+  auto node = std::make_shared<SimSegmentLeavesServer>();
+  node->configureFailures();
+  rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }

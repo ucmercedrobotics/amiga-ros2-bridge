@@ -132,6 +132,22 @@ class ArbiterNode(Node):
             None  # tree set of the pristine mission
         )
         self.justified_drops: set = set()  # trees already accepted as dropped
+        # Objectives this robot has actually finished, off the SUCCESS half of
+        # /bt/status_change. Distinct from justified_drops: a justified drop is
+        # work nobody is doing, a completed objective is work already done, and
+        # conflating them is what made an accepted plan look like an abandoned
+        # one. See _check_objective_preserved.
+        self.completed_objectives: set = set()
+        # Objectives a peer took at auction. A third case again: not done, not
+        # abandoned -- being done by somebody else. Only the viability budget
+        # needs the distinction, and it needs it badly. The budget answers "how
+        # much of this mission may go UNDONE", and work that left for a robot
+        # that can do it is not undone by anyone's reading. Counting it as such
+        # was live: amiga1's camera was dead, both its trees went to peers who
+        # sampled them, and its own arbiter aborted the mission on the second
+        # transfer for "2 trees dropped ['20', '64'] exceeds viability budget
+        # of 1" -- while robot 2 was standing at tree 20.
+        self.transferred_objectives: set = set()
         self.max_droppable: Optional[int] = None  # model-determined viability budget
         self._last_failure_reason: str = ""
         self._last_accept_time = 0.0
@@ -173,7 +189,7 @@ class ArbiterNode(Node):
         )
         self.create_subscription(String, ORCHARD_TOPIC, self._on_orchard, 10)
         self.create_subscription(String, "/mission/xml", self._on_mission, 10)
-        self.create_subscription(String, "/bt/status_change", self._on_bt_failure, 10)
+        self.create_subscription(String, "/bt/status_change", self._on_bt_status, 10)
         self.mission_pub = self.create_publisher(String, "/mission/xml", 10)
         self.rejection_pub = self.create_publisher(String, "/mission/rejection", 10)
         self.abort_pub = self.create_publisher(String, "/mission/abort", 10)
@@ -335,6 +351,7 @@ class ArbiterNode(Node):
             self._ltl_gate.allow_mission_text(appendix)
         with self._lock:
             self.justified_drops |= departing
+            self.transferred_objectives |= departing
         try:
             accepted, verified, reason = self._decide(candidate)
         finally:
@@ -349,6 +366,7 @@ class ArbiterNode(Node):
                 # that objective later for free.
                 with self._lock:
                     self.justified_drops -= departing
+                    self.transferred_objectives -= departing
 
         if accepted:
             self._request_replan(request, candidate, dropped)
@@ -547,16 +565,56 @@ class ArbiterNode(Node):
         self.status.publish(self.get_status())
         return verdict, verified, reason
 
-    def _on_bt_failure(self, msg: String):
-        """The arbiter listens to failures only to know WHY the planner is
-        editing — used to decide whether a drop is permanently justified."""
+    def _on_bt_status(self, msg: String):
+        """Both halves of /bt/status_change, for two different questions.
+
+        FAILURE tells the arbiter WHY the planner is editing, which is what
+        decides whether a drop is permanently justified.
+
+        SUCCESS tells it what this robot has already DONE, which it previously
+        had no way of knowing at all — and that gap is a bug the fleet ran into
+        live. The planner deliberately prunes finished work out of the XML it
+        shows the model (the executor has no resume point), so the candidate
+        that comes back is missing those objectives on purpose. With no record
+        of completion, every one of them read as an unjustified drop: amiga3
+        finished trees 24 and 68, won tree 20 at auction, and had its correct
+        absorb plan rejected for "dropping" the two trees it had just sampled.
+
+        Read off the same binding the planner uses, so the two agree by
+        construction rather than by both being right separately.
+        """
         try:
             event = json.loads(msg.data)
         except json.JSONDecodeError:
             return
-        if isinstance(event, dict):
+        if not isinstance(event, dict):
+            return
+
+        status = str(event.get("status") or "FAILURE").upper()
+        if status == "FAILURE":
             with self._lock:
                 self._last_failure_reason = str(event.get("reason", ""))
+            return
+        if status != "SUCCESS":
+            return
+
+        name = event.get("node")
+        if not name or name == "<tree>":
+            return
+        with self._lock:
+            xml = self.active_mission_xml
+            orchard_map = self.orchard
+        if not xml:
+            return
+        try:
+            doc = etree.fromstring(xml.encode("utf-8"))
+        except etree.XMLSyntaxError:
+            return
+        tree_id = ontology.sample_leaf_trees(doc, orchard_map).get(name)
+        if tree_id is None:
+            return
+        with self._lock:
+            self.completed_objectives.add(tree_id)
 
     # ------------------------------------------------------------------
     # Viability budget — one LLM call when the pristine mission is captured
@@ -751,11 +809,24 @@ class ArbiterNode(Node):
           by a permanent failure. Only new drops count; already-justified drops
           are remembered so removals accumulate across a mission.
         - Gate 2 (unfixable → abort): total dropped trees must stay within the
-          model-determined viability budget."""
+          model-determined viability budget.
+
+        Both gates are about work that will NOT happen, so both are computed
+        against the objectives still outstanding — the mission minus what this
+        robot has already finished, and minus what a peer took at auction. An
+        objective absent from a candidate because it is done is not a drop by
+        any reading: the work happened. Counting it as one made a finished
+        robot unable to produce an acceptable plan at all, since every edit it
+        made "dropped" its whole completed history. An objective absent because
+        a peer won it is not a drop either — the work is scheduled, just not
+        here — and counting it aborted a mission over trees that were being
+        sampled at that moment."""
         with self._lock:
             original = self.original_objectives
             reason = self._last_failure_reason.lower()
             already_justified = set(self.justified_drops)
+            completed = set(self.completed_objectives)
+            transferred = set(self.transferred_objectives)
             budget = self.max_droppable
         if not original:
             return True, "", False
@@ -763,7 +834,8 @@ class ArbiterNode(Node):
             budget = DEFAULT_VIABILITY_BUDGET  # call not back yet
 
         candidate_objs = self._objective_tree_ids(doc)
-        dropped = original - candidate_objs
+        outstanding = original - completed - transferred
+        dropped = outstanding - candidate_objs
         newly_dropped = dropped - already_justified
 
         # Gate 1: each NEW drop must be justified — fixable → normal rejection
