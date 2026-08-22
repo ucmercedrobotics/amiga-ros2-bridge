@@ -10,6 +10,17 @@ The fault event says which node failed; these say why.
 {{ log_context }}
 ```
 
+{% if visual_context %}
+## What the camera can see
+
+What the front camera showed when the step failed. It bears on the one decision
+that matters: is this beyond THIS robot, or beyond ANY robot? Work that is
+plainly still there to be done argues a peer could finish it; work that is gone
+or impossible argues no robot could. It is also where a note comes from.
+
+{{ visual_context }}
+
+{% endif %}
 ## World state
 
 {{ world_state }}

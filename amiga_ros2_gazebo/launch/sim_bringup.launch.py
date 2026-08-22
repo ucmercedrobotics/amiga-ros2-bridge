@@ -171,6 +171,8 @@ def launch_setup(context, *args, **kwargs):
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
     )
+    launch_vlm = LaunchConfiguration("launch_vlm").perform(context).lower()
+    vlm_url = LaunchConfiguration("vlm_url").perform(context)
     # 0 (default) means nobody: an ordinary sim run has no broken arm. Set it
     # to a robot index to give exactly that robot a camera fault, which is the
     # kind of failure a peer can take over -- unlike a missing tree, which no
@@ -461,6 +463,14 @@ def launch_setup(context, *args, **kwargs):
                     battery_percent=str(batteries[i - 1]),
                     ltl_verification=ltl_verification,
                     objective_gating=objective_gating,
+                    launch_vlm=launch_vlm,
+                    vlm_url=vlm_url,
+                    # Relative, and the same for every robot: the namespace is
+                    # what makes robot 2 look through robot 2's camera. This is
+                    # the topic sim_hardware_shims republishes the Gazebo front
+                    # camera on, so it is the same name the real Oak-D driver
+                    # publishes and nothing below the shim layer changes.
+                    vlm_image_topic="oak0/rgb/image_raw",
                 )
             )
 
@@ -538,6 +548,22 @@ def generate_launch_description():
                 "also switches the coordinators' use_triage_agent, so with this "
                 "false they fall back to the local stub interpreter rather than "
                 "waiting 45 s on a service nobody serves.",
+            ),
+            DeclareLaunchArgument(
+                "launch_vlm",
+                default_value="false",
+                description="Give each robot a vlm_server, so every failure "
+                "carries a description of what that robot's camera saw into "
+                "its triage decisions. Needs launch_agents too -- triage is "
+                "what asks -- and a vision model on vlm_url: a separate model "
+                "and endpoint from the one the agents reason with. Off by "
+                "default.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_url",
+                default_value="http://localhost:8001/v1/chat/completions",
+                description="OpenAI-compatible endpoint accepting image content "
+                "parts. One endpoint serves the whole simulated fleet.",
             ),
             DeclareLaunchArgument(
                 "lora_symlink_dir",

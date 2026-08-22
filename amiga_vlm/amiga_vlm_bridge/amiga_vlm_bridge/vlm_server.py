@@ -6,6 +6,8 @@ import cv2
 import requests
 from cv_bridge import CvBridge
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy, ReliabilityPolicy
 from sensor_msgs.msg import Image
@@ -18,13 +20,29 @@ class VlmServer(Node):
     def __init__(self):
         super().__init__("vlm_server")
 
-        self.declare_parameter("image_topic", "/zed/zed_node/rgb/color/rect/image")
+        # The Oak-D front camera, on the real robot and through the Gazebo
+        # shim alike. Was a ZED topic, which nothing in this workspace
+        # publishes, so the default could only report "No image received yet".
+        self.declare_parameter("image_topic", "/oak0/rgb/image_raw")
         self.declare_parameter("service_name", "/vlm/ask")
-        self.declare_parameter("vlm_url", "http://localhost:9000/v1/chat/completions")
+        # 8001, not 8000: the agents' reasoning model is what lives on 8000
+        # (llm.py's AGENT_API_BASE default), and this is a different model on a
+        # different service. A default that collided with it would send camera
+        # frames to a text model, or quietly work and put a 4B describer where a
+        # reasoning model was meant to be.
+        self.declare_parameter("vlm_url", "http://localhost:8001/v1/chat/completions")
         self.declare_parameter("system_prompt", "You are a helpful AI assistant.")
         self.declare_parameter("max_tokens", 256)
-        self.declare_parameter("min_tokens", 1)
+        # A vLLM extension, not part of the OpenAI schema. Sent only when set
+        # above 0, so the default request is one any compatible server accepts;
+        # a stricter one rejects the unknown field and the failure reads as the
+        # whole VLM being down.
+        self.declare_parameter("min_tokens", 0)
         self.declare_parameter("jpeg_quality", 85)
+        # Generous for a hand-driven `ros2 service call` against a cold model.
+        # Every automated caller overrides it downward -- the agent launch files
+        # pass 6.0, because triage gives up at 8.0 and a reply nobody is still
+        # waiting for is worse than an error.
         self.declare_parameter("http_timeout_sec", 180.0)
 
         self._image_topic: str = self.get_parameter("image_topic").value
@@ -48,8 +66,24 @@ class VlmServer(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        self.create_subscription(Image, self._image_topic, self._on_image, image_qos)
-        self.create_service(VlmAsk, self._service_name, self._on_ask)
+        # Separate groups, with a MultiThreadedExecutor in main(): _on_ask
+        # blocks on HTTP for seconds, and on a single-threaded executor the
+        # frame buffer would stop being refilled for that whole time, so the
+        # next question would be answered from a picture taken before the last
+        # inference began.
+        self.create_subscription(
+            Image,
+            self._image_topic,
+            self._on_image,
+            image_qos,
+            callback_group=MutuallyExclusiveCallbackGroup(),
+        )
+        self.create_service(
+            VlmAsk,
+            self._service_name,
+            self._on_ask,
+            callback_group=ReentrantCallbackGroup(),
+        )
 
         self.get_logger().info(f"image_topic={self._image_topic}")
         self.get_logger().info(f"service_name={self._service_name}")
@@ -104,8 +138,9 @@ class VlmServer(Node):
                     },
                 ],
                 "max_tokens": self._max_tokens,
-                "min_tokens": self._min_tokens,
             }
+            if self._min_tokens > 0:
+                payload["min_tokens"] = self._min_tokens
 
             try:
                 r = requests.post(self._vlm_url, json=payload, timeout=self._http_timeout)
@@ -123,10 +158,25 @@ class VlmServer(Node):
 
 
 def main() -> None:
+    """Spin until asked to stop, then clean up without a traceback.
+
+    Ctrl-C raises KeyboardInterrupt; `ros2 launch` sending SIGTERM shuts the
+    context down underneath us and raises ExternalShutdownException, after
+    which an unconditional shutdown() raises again. Same shape as
+    amiga_ros2_agents/runtime/spin.py, and now for the same reason: both agent
+    launch files start this node.
+    """
     rclpy.init()
     node = VlmServer()
     try:
-        rclpy.spin(node)
+        rclpy.spin(node, executor=MultiThreadedExecutor())
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

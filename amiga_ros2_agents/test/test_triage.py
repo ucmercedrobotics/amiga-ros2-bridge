@@ -1018,10 +1018,12 @@ def test_a_model_that_raises_does_not_take_the_service_down(node, monkeypatch):
 
 def test_the_prompt_carries_the_evidence_the_node_gathered(node, monkeypatch):
     node._on_mission(_string(MISSION_XML))
+    # World state before the fault, which is the real ordering: it publishes at
+    # 1 Hz and the fault latches whichever frame was current.
+    node._on_world_state(_string('{"battery": 9, "row": 4}'))
     node._on_fault(
         _string(json.dumps({"node": "Visit_Tree_60", "timestamp_ms": 0, "uid": 3}))
     )
-    node._on_world_state(_string('{"battery": 9, "row": 4}'))
 
     seen = {}
 
@@ -1040,6 +1042,232 @@ def test_the_prompt_carries_the_evidence_the_node_gathered(node, monkeypatch):
     assert "Peers alive right now" in seen["user"]
     for action in tn.VALID_ACTIONS:
         assert action in seen["system"]
+
+
+# ==========================================================================
+# The camera: always in the context of a fault
+# ==========================================================================
+#
+# The description is fetched on every fault, not when the model asks for it.
+# The decision is made from all the evidence at once, so what is worth pinning
+# is that the description reaches the prompt, and that a camera which is
+# absent, slow or broken never stops a verdict coming out -- the mission
+# planner replans anyway after ROUTE_TIMEOUT_SEC.
+
+
+class _FakeVlm:
+    """Stands in for VlmClient. Only ``ask`` and ``service_name`` are used."""
+
+    service_name = "/vlm/ask"
+
+    def __init__(self, answer="a tree fills the frame", raises=None):
+        self._answer = answer
+        self._raises = raises
+        self.questions = []
+
+    def ask(self, question):
+        self.questions.append(question)
+        if self._raises is not None:
+            raise self._raises
+        return self._answer
+
+
+def test_without_a_camera_the_prompt_has_no_camera_section(node, monkeypatch):
+    """The default: one model call, and nothing about a camera in the prompt."""
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    assert node.vlm is None
+    node._on_fault(_string(FAULT))
+
+    assert len(calls) == 1
+    assert "What the camera can see" not in calls[0]
+    assert published[0]["route"] == "repair"
+    assert node.get_status()["vlm_looks"] == 0
+
+
+def test_the_description_is_in_the_decision_prompt(node, monkeypatch):
+    node.vlm = _FakeVlm(answer="A person is visible, wearing a white shirt.")
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert node.vlm.questions == [tn.vlm_client.DESCRIBE_QUESTION]
+    assert "What the camera can see" in calls[0]
+    assert "A person is visible, wearing a white shirt." in calls[0]
+    assert node.get_status()["vlm_looks"] == 1
+    assert published[0]["route"] == "repair"
+
+
+def test_every_fault_costs_one_camera_call(node, monkeypatch):
+    """No gate, so the count is the number of faults and nothing else."""
+    node.vlm = _FakeVlm()
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    for name in ("Visit_Tree_10", "Sample_Leaves_Tree_10", "Visit_Tree_60"):
+        node._on_fault(_string(json.dumps({**json.loads(FAULT), "node": name})))
+
+    assert len(node.vlm.questions) == 3
+    assert node.get_status()["vlm_looks"] == 3
+
+
+def test_a_repeat_of_the_same_leaf_does_not_look_again(node, monkeypatch):
+    """The per-node route cache still holds: a dead leaf re-ticking under its
+    own retry decorator republishes the cached verdict and asks nothing."""
+    node.vlm = _FakeVlm()
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+    node._on_fault(_string(FAULT))
+    node._on_fault(_string(FAULT))
+
+    assert len(node.vlm.questions) == 1
+
+
+@pytest.mark.parametrize(
+    "vlm",
+    [
+        _FakeVlm(answer=None),  # timed out, or the server declined
+        _FakeVlm(answer=""),  # answered with nothing
+    ],
+    ids=["no answer", "empty answer"],
+)
+def test_a_failed_camera_says_so_and_the_verdict_still_comes(node, monkeypatch, vlm):
+    node.vlm = vlm
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert "did not answer" in calls[0]
+    assert node.get_status()["vlm_looks"] == 0
+    assert published[0]["route"] == "repair"
+
+
+def test_a_camera_that_raises_does_not_stop_the_verdict(node, monkeypatch):
+    """`_decide_route` fails open, so even an unhandled client error routes."""
+    node.vlm = _FakeVlm(raises=RuntimeError("service died"))
+    published = routes(node, monkeypatch)
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert len(published) == 1
+    assert published[0]["route"] == "repair"
+
+
+def test_a_talkative_camera_cannot_crowd_out_the_logs(node, monkeypatch):
+    """Cut, not refused, and capped at both ends like a note."""
+    node.vlm = _FakeVlm(answer="tree. " * 500)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert calls[0].count("tree.") <= (
+        tn.vlm_client.MAX_ANSWER_CHARS // len("tree. ")
+    )
+
+
+def test_the_camera_is_asked_to_describe_and_not_to_judge():
+    """The camera reports; the reasoning model decides.
+
+    Every one of these words was in this question at some point, and each is a
+    conclusion the model downstream is supposed to reach for itself. A vision
+    model that answers them hands back a verdict -- "the row appears passable"
+    was once repeated verbatim as the reason for one.
+    """
+    question = tn.vlm_client.DESCRIBE_QUESTION.lower()
+    before = question.split("do not say whether")[0]
+    for judgement in ("passable", "usable", "in the way", "blocking", "safe"):
+        assert judgement not in before, (
+            f"the camera is being asked to judge {judgement!r}"
+        )
+
+
+def test_the_camera_is_not_asked_for_geometry():
+    """The robot measures range and bearing; a 4B describer guesses them.
+
+    Asked for position, the vision model put a person "to the right" while the
+    collision monitor had an obstacle 0.62 m directly ahead, and the reasoner
+    concluded the robot was misaligned.
+    """
+    assert "distances or bearings" in tn.vlm_client.DESCRIBE_QUESTION
+
+
+def test_the_camera_deadline_fits_inside_the_planners_budget(node):
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    assert tn.vlm_client.DEFAULT_TIMEOUT_SEC * 2 < mp.ROUTE_TIMEOUT_SEC
+
+
+def test_the_interpretation_path_gets_the_description_too(node, monkeypatch):
+    """Both reasoning points, not just routing."""
+    node.vlm = _FakeVlm(answer="The row ahead is flooded.")
+    calls = _model(
+        monkeypatch,
+        reply(action="drop_task", reason_code="unreachable", disposition="drop"),
+    )
+
+    node._on_interpret(_request(task_id=42), _response())
+
+    assert "The row ahead is flooded." in calls[0]
+
+
+def test_the_evidence_is_latched_at_the_fault(node, monkeypatch):
+    """Interpretation reads the fault's moment, not the buffers as they stand.
+
+    The coordinator only asks once local recovery has run out, which is minutes
+    after the failure. A world frame or a camera image from *then* describes a
+    different moment than the fault it is offered as evidence of.
+    """
+    node.vlm = _FakeVlm(answer="a person is visible")
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+    node._on_world_state(_string('{"battery": 88, "at_tree": 60}'))
+
+    node._on_fault(_string(FAULT))
+
+    # Everything below arrives after the fault and must not reach the decision.
+    node.vlm = _FakeVlm(answer="an empty aisle")
+    node._on_world_state(_string('{"battery": 12, "at_tree": 99}'))
+
+    seen = {}
+    monkeypatch.setattr(
+        tn.llm,
+        "complete",
+        lambda system, user, **kw: seen.setdefault("user", user)
+        or reply(action="drop_task", reason_code="unreachable", disposition="drop"),
+    )
+    node._on_interpret(_request(task_id=60), _response())
+
+    assert "a person is visible" in seen["user"]
+    assert "an empty aisle" not in seen["user"]
+    assert '"battery": 88' in seen["user"]
+    assert '"battery": 12' not in seen["user"]
+    # And the camera was asked once, at the fault, not again for this decision.
+    assert node.get_status()["vlm_looks"] == 1
+
+
+def test_the_log_buffer_prunes_without_rebuilding(node):
+    """A deque pruned from the left, not a list rebuilt on every line.
+
+    This runs at whatever rate the whole stack logs and holds the lock a
+    diagnosis needs, so its cost must not grow with the buffer.
+    """
+    from collections import deque
+
+    assert isinstance(node.log_buffer, deque)
+    for _ in range(200):
+        node._on_log(_log_line("chatty_node", "still here"))
+    assert len(node.log_buffer) == 200
+
+    stale = _log_line("old_node", "long gone")
+    stale.stamp.sec -= int(tn.LOG_WINDOW_SEC) + 5
+    node.log_buffer.appendleft(
+        {"stamp": 0.0, "level": "INFO", "name": "old", "msg": "ancient"}
+    )
+    node._on_log(_log_line("chatty_node", "one more"))
+    assert all(entry["msg"] != "ancient" for entry in node.log_buffer)
 
 
 # ==========================================================================
@@ -1225,6 +1453,32 @@ def _string(data: str):
     from std_msgs.msg import String
 
     return String(data=data)
+
+
+def _log_line(name: str, text: str, level: int = 40):
+    """One /rosout entry, stamped now. Pair it with `_fault_now()`."""
+    from rcl_interfaces.msg import Log
+
+    message = Log()
+    message.stamp = _now_stamp()
+    message.level = level
+    message.name = name
+    message.msg = text
+    return message
+
+
+def _now_stamp():
+    from rclpy.clock import Clock
+
+    return Clock().now().to_msg()
+
+
+def _fault_now() -> str:
+    """FAULT, but stamped now so the log slice around it is not empty."""
+    stamp = _now_stamp()
+    event = json.loads(FAULT)
+    event["timestamp_ms"] = int((stamp.sec + stamp.nanosec * 1e-9) * 1000)
+    return json.dumps(event)
 
 
 def _request(**fields):

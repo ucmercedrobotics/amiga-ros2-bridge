@@ -44,6 +44,7 @@ agent.
 | `coordination/triage_node.py` | **Triage** — decides what happens to work the local loop could not recover. |
 | `coordination/note_node.py` | **Note** — reads a peer's note about work it is offering and says what it means for our bid. |
 | `coordination/mission_bridge_node.py` | **Mission bridge** — answers the coordinator's questions about the plan, read-only. |
+| `coordination/vlm_client.py` | How triage asks what the camera sees when a fault is captured. |
 
 `world_state` sits under `replanning/` because the planner's context window is
 what it feeds; `mission_bridge` sits under `coordination/` because the only
@@ -95,6 +96,75 @@ can be fixed from a camera that is broken — it spent three sessions on both, a
 on the broken camera each session wrapped the dead leaf in another retry
 decorator and replaced the plan the escalation needed to name its failing node
 in.
+
+**It looks at the scene, every time.** Everything else triage reads is the
+robot's own account of itself — log lines, world state, the plan. None of it
+says what is in front of the robot, and that is the fact both decisions turn on:
+a sampler that fails because its camera is dead and one that fails because the
+robot is parked a row over produce the same repeated error.
+
+So with `use_vlm:=true`, a fault is captured the moment it arrives — the
+fault-centred log slice, the world-state frame current at that instant, and one
+call to `/vlm/ask` (the `vlm_server` in [`amiga_vlm`](../amiga_vlm)) asking the
+camera to describe the scene. `_capture` does this on the routing thread, and
+both decisions read that snapshot.
+
+Two properties fall out of latching it at the fault rather than pulling it when
+a prompt is built:
+
+* **The evidence describes one moment.** The logs were always fault-centred; the
+  world frame and the camera were not. For routing that gap was milliseconds.
+  For interpretation it was minutes — the coordinator only asks once local
+  recovery has run out — so the prompt was pairing a fault with a world frame
+  and a picture from long afterwards and presenting them as one picture.
+* **One camera call per fault**, not one per decision. Measured: routing and
+  interpretation chained six times, zero extra calls for the second.
+
+### The camera describes, the model decides
+
+The question put to the camera is fixed and asks for a description only. That
+division is the easiest thing here to get wrong:
+
+* **No judgements.** "Is anything in the way", "is the row passable", "is the
+  image usable" all sound like camera questions and are all decisions belonging
+  to the model holding the logs, the plan, the battery and the fleet. A vision
+  model asked them hands back a conclusion, and a conclusion is hard to argue
+  with downstream — *"the row appears passable"* came back once and was repeated
+  verbatim as the reason for a verdict.
+* **No geometry.** The robot measures range and bearing. Asked for position
+  anyway, a 4B describer put a person *"to the right"* while `collision_monitor`
+  had an obstacle 0.62 m directly ahead, and the reasoner concluded the robot
+  was misaligned.
+
+What is left is the one thing only the camera knows: what the things in front of
+the robot *are*.
+
+### What it changes
+
+Measured against a Gazebo run with a person standing in the robot's path, the
+same navigation failure put through the pipeline twelve times with the camera
+and twelve times without:
+
+| | with the camera | without |
+| --- | --- | --- |
+| verdict | `repair` 12/12 | `repair` 12/12 |
+| names a person | **11/12** | **0/12** |
+| suggests waiting for them | 9/12 | 2/12 |
+| median latency | 10.9 s | 7.0 s |
+
+The verdict never changes; the reasoning behind it does. Without the camera the
+model gets no further than *"an obstacle blocked the current path"* and plans a
+way around it every time. With it: *"a man standing in the aisle; this is a
+transient blockage"* — and the advice becomes *wait for the person to move*,
+which is the right manoeuvre near a human in a narrow row and one the logs alone
+give no reason to consider.
+
+The vision model is a **separate model on a separate endpoint** from
+`AGENT_MODEL` / `AGENT_API_BASE`, which are untouched by any of this. A small
+vision model is enough precisely because it decides nothing.
+
+Never load-bearing. A camera that is absent, slow or broken leaves the section
+out or says it could not answer, and the verdict comes out as it always did.
 
 **Escalation stays deterministic.** A routed `escalate`, an `/mission/abort`,
 or a planner give-up on `/mission/planner_status` all publish to

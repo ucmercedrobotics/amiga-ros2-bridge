@@ -157,7 +157,10 @@ oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
 VLM_IMAGE_TOPIC ?= /oak0/rgb/image_raw
-VLM_URL ?= http://localhost:8000/v1/chat/completions
+# The vision model's endpoint. 8001 because AGENT_API_BASE -- the agents'
+# reasoning model -- is the one that lives on 8000; this is a separate service
+# that only describes camera frames.
+VLM_URL ?= http://localhost:8001/v1/chat/completions
 VLM_QUESTION ?= Describe what you see.
 vlm:
 	ros2 run amiga_vlm_bridge vlm_server --ros-args \
@@ -199,11 +202,18 @@ AGENTS ?= false
 # task crosses robots and comes back as executable XML. Every accept is then
 # reported unverified, in the service response and in the arbiter's status.
 LTL ?= true
+# VLM=true gives each robot a vlm_server, so its triage agent can ask what the
+# camera sees. Needs AGENTS=true, since triage is the only caller, and a vision
+# model on VLM_URL -- a different model and endpoint from AGENT_API_BASE, which
+# stays pointed at the agents' reasoning model.
+VLM ?= false
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
 		launch_coordination:=$(COORDINATION) \
 		launch_agents:=$(AGENTS) \
+		launch_vlm:=$(VLM) \
+		vlm_url:=$(VLM_URL) \
 		ltl_verification:=$(LTL) \
 		lora_spreading_factor:=$(LORA_SF)
 

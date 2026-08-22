@@ -64,10 +64,19 @@ ROUTE_TOPIC = "/mission/fault_route"
 # This gate must fail open. Triage not running, a model endpoint that is down, a
 # reply that will not parse -- none of those should leave a robot sitting on a
 # fault it could have planned around, so the timeout restores exactly the
-# behaviour this gate replaced: replan and find out. Long enough for one model
-# call and change; short enough that a robot stalled at a tree is not stalled
-# for a minute.
-ROUTE_TIMEOUT_SEC = 25.0
+# behaviour this gate replaced: replan and find out.
+#
+# Sized for triage's slowest honest path, not its usual one. With `use_vlm` set
+# a verdict costs three round-trips -- the look gate, the camera, and the
+# decision -- which measured 15-22 s against gpt-oss-120b with a vision model
+# beside it. At 25 s that was inside the budget only until the endpoint had
+# other work, and a verdict arriving late is worse than none: the planner has
+# already opened a session on a fault triage was about to say was hardware.
+#
+# Raising it costs nothing when triage is healthy, because it publishes as soon
+# as it decides and this returns immediately. It is only how long the planner
+# waits on a triage that is never going to answer.
+ROUTE_TIMEOUT_SEC = 45.0
 
 # A whole XML plan comes back in one reply, so this must NOT fall back to
 # llm.MAX_TOKENS (2048) — a truncated plan fails XSD validation every time.

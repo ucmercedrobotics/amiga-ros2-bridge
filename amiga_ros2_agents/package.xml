@@ -23,6 +23,7 @@
        XML and a task announced on the radio cannot come to mean different
        things. -->
   <depend>amiga_ros2_comms</depend>
+  <depend>amiga_vlm_interfaces</depend>
 
   <!-- The arbiter and planner validate against this package's installed
        schemas/amiga_btcpp.xsd — the same schema the BT executor uses. -->
