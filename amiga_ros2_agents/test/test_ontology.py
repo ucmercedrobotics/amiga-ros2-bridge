@@ -299,6 +299,79 @@ def test_a_completed_tree_and_its_retry_wrapper_are_removed(orchard_map):
     assert retries[0].find(".//MoveToTreeID").get("id") == "64"
 
 
+def test_pruning_leaves_no_empty_wrapper_behind(orchard_map):
+    """The XSD failure that fired on every absorb in a live run.
+
+    Grafting a won task wraps the plan's original leaves in a bare
+    ``<Sequence>`` so the two halves stay separable. When the winner had
+    already finished the work in that wrapper, pruning emptied it and left
+    ``<Sequence/>`` in the plan -- which the XSD rejects, because a control
+    node must hold at least one action.
+
+    The plan the planner shows the model is the *pruned* one, so the model was
+    handed XML that could not validate and every edit it returned inherited
+    the fault: "LLM edit failed XSD validation -- not publishing", on every
+    hand-off, costing the winner the one replan that would have re-derived the
+    Wait its rebuild dropped.
+
+    Both of the wrapper's objectives have to be finished for this to bite: with
+    one still pending, ``_isolated_ancestor`` stops below the wrapper and the
+    wrapper keeps a child. It is the aisle heads outliving the last tree that
+    empty it.
+    """
+    plan = example("sample_20_64.xml")
+    root_control = plan.find(".//BehaviorTree")[0]
+    wrapper = etree.Element("Sequence")
+    root_control.insert(0, wrapper)
+    for element in list(root_control)[1:]:
+        wrapper.append(element)
+    absorbed = etree.SubElement(root_control, "Sequence", name="task_43808")
+    etree.SubElement(
+        absorbed,
+        "MoveToTreeID",
+        name="task_43808_visit_90",
+        action_name="follow_tree_id_waypoint",
+        id="90",
+        approach_tree="true",
+    )
+    etree.SubElement(
+        absorbed,
+        "SampleLeaf",
+        name="task_43808_sample_90",
+        action_name="segment_leaves",
+    )
+
+    pruned = ontology.prune_completed(plan, {"20", "64"}, orchard_map)
+
+    assert not [
+        el for el in pruned.iter() if el.tag in ontology.CONTROLS and len(el) == 0
+    ], "the emptied wrapper must go with its contents"
+    assert etree.XMLSchema(etree.parse(SCHEMA)).validate(pruned), (
+        "the pruned plan is what the model is asked to edit, so it has to be "
+        "valid before the model ever sees it"
+    )
+    remaining = {
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
+    }
+    assert remaining == {"90"}, "only the absorbed task is left to do"
+
+
+def test_pruning_cascades_through_nested_wrappers(orchard_map):
+    """A wrapper whose only child was itself emptied goes too, so one prune
+    cannot leave a chain of hollow controls in the middle of a plan."""
+    plan = example("sample_20_64.xml")
+    root_control = plan.find(".//BehaviorTree")[0]
+    outer = etree.SubElement(root_control, "Sequence", name="outer")
+    inner = etree.SubElement(outer, "Sequence", name="inner")
+    for child in list(root_control)[:-1]:
+        inner.append(child)
+
+    pruned = ontology.prune_completed(plan, {"20", "64"}, orchard_map)
+
+    assert pruned.find('.//Sequence[@name="inner"]') is None
+    assert pruned.find('.//Sequence[@name="outer"]') is None
+
+
 def test_a_completed_trees_own_aisle_head_goes_with_it(orchard_map):
     """Tree 20's aisle (2) belongs to no other tree in this plan, so both its
     enter and exit MoveToAisleHead should go; tree 64's aisle (4) must stay."""

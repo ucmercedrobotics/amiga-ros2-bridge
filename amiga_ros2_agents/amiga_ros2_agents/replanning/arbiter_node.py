@@ -492,7 +492,7 @@ class ArbiterNode(Node):
             # MissionTask is frozen: a new one, not an assignment.
             task = replace(task, xml=rebuilt.xml)
 
-        edited = mission_tasks.insert_task(active, task)
+        edited = mission_tasks.insert_task(self._without_completed(active), task)
         if edited is None:
             raise ValueError(f"could not graft task {task_id} into the active plan")
 
@@ -504,6 +504,49 @@ class ArbiterNode(Node):
         if clause:
             edited = _extend_mission_text(edited, clause)
         return edited, clause, dropped
+
+    def _without_completed(self, xml: str) -> str:
+        """``xml`` with the trees this robot already sampled taken out.
+
+        bt_runner has no resume point -- it builds a fresh tree from every plan
+        published to /mission/xml and ticks it from the root -- so a task
+        grafted onto the plan as written sends the robot back through its whole
+        finished aisle before it reaches the work it just won. That is not a
+        hypothetical: a robot that had sampled trees 58 and 64, then won tree 20
+        at auction, drove back to 58 and 64 and re-sampled both before setting
+        off for 20.
+
+        The planner already prunes for exactly this reason before it shows the
+        model a plan. The arbiter is the *other* writer of /mission/xml and was
+        the one path that did not, which is why absorbing work re-ran it.
+
+        Unlike the planner's copy of this step there is no bail-out when
+        everything prunes away: an empty plan is the right answer for a robot
+        whose own aisle is finished, because a task is about to be appended to
+        it. ``completed_objectives`` is the same ledger
+        ``_check_objective_preserved`` subtracts, so a plan short of these trees
+        is not read as dropping them.
+        """
+        with self._lock:
+            completed = set(self.completed_objectives)
+            orchard_map = self.orchard
+        # No orchard means no way to tell which aisle heads the *remaining*
+        # trees still need, and prune_completed drops every one it cannot
+        # justify -- which would leave the surviving objectives with no route
+        # into their aisle. Re-driving a sampled tree is waste; publishing a
+        # plan that cannot reach the trees it kept is worse.
+        if not completed or orchard_map is None:
+            return xml
+        try:
+            doc = etree.fromstring(xml.encode("utf-8"))
+        except etree.XMLSyntaxError:
+            return xml
+        pruned = ontology.prune_completed(doc, completed, orchard_map)
+        self.get_logger().info(
+            f"pruned {sorted(completed)} from the plan before grafting — "
+            "already sampled this session"
+        )
+        return etree.tostring(pruned, encoding="unicode")
 
     def _decide(self, candidate: str) -> Tuple[bool, bool, str]:
         """Evaluate a candidate, act on the verdict, and report it.

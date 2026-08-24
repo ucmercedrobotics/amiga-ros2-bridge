@@ -587,7 +587,46 @@ def prune_completed(root, completed, orchard=None):
             if parent is not None:
                 parent.remove(element)
 
+    # 3. Whatever the two steps above emptied goes with its contents.
+    _drop_emptied_controls(doc)
+
     return doc
+
+
+#: Control nodes, matching the XSD's ControlGroup. Spelled out here rather
+#: than imported from ``mission_tasks``: that module builds on this one.
+CONTROLS = frozenset(
+    {"Sequence", "ReactiveSequence", "Fallback", "RetryUntilSuccessful"}
+)
+
+
+def _drop_emptied_controls(root) -> None:
+    """Remove control nodes that pruning left holding nothing.
+
+    The XSD requires every control node to have at least one child, so a
+    wrapper emptied by pruning makes the entire plan invalid -- and the plan
+    the planner shows the model is the *pruned* one, so the model is handed
+    XML that cannot validate and its edit inherits the fault. That is the
+    whole of ``LLM edit failed XSD validation -- Element 'Sequence': Missing
+    child element(s)``, which fired on every absorb in a live run and cost the
+    winner the one replan that would have re-derived the ``Wait`` the rebuild
+    dropped.
+
+    The path there: grafting a won task wraps the original leaves in a bare
+    ``<Sequence>`` so the two stay separable, and pruning the robot's finished
+    trees out of that wrapper leaves ``<Sequence/>`` behind.
+
+    Deepest first, so a wrapper whose only child was itself emptied goes too.
+    The ``BehaviorTree``'s own root control node always stays: it is what an
+    absorbed task gets appended to, and a childless ``BehaviorTree`` is no
+    better than an empty ``Sequence``.
+    """
+    protected = {child for tree in root.iter("BehaviorTree") for child in tree}
+    for element in reversed(list(root.iter())):
+        if element.tag in CONTROLS and len(element) == 0 and element not in protected:
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
 
 
 def sample_leaf_trees(root, orchard=None) -> Dict[str, str]:

@@ -677,6 +677,52 @@ def test_finished_objectives_are_not_drops(arbiter):
     assert ok, reason
 
 
+def test_absorbing_work_does_not_re_run_finished_trees(arbiter):
+    """The three minutes of driving that a live run spent going nowhere.
+
+    amiga2 sampled tree 58, sampled tree 64, then won tree 20 at auction. The
+    plan it was handed still opened with tree 58 and tree 64, so it re-entered
+    its own aisle, drove to 58, sampled it again, drove to 64, sampled it again,
+    and only then set off for the tree it had actually won.
+
+    Nothing was wrong with the ledger -- the planner had already logged both
+    trees as complete. The arbiter simply grafted the new task onto the plan as
+    written, and bt_runner ticks every published plan from the root.
+    """
+    arbiter.orchard = real_orchard()
+    arbiter.completed_objectives = {"10"}
+
+    edited, _clause, _dropped = arbiter._apply_task_edit(
+        request_for(task_id=43808, tree=20), ACTIVE
+    )
+
+    approached = {
+        element.get("id")
+        for element in etree.fromstring(edited.encode("utf-8")).iter("MoveToTreeID")
+        if (element.get("approach_tree") or "").lower() == "true"
+    }
+    assert "10" not in approached, "already sampled -- driving there again is waste"
+    assert {"60", "20"} <= approached, "pending work and the won task both survive"
+
+
+def test_absorbing_work_keeps_a_plan_whose_trees_are_all_pending(arbiter):
+    """The pruning only ever removes what is provably done. With an empty
+    ledger the plan reaching insert_task is the plan as written, so a robot
+    that has finished nothing absorbs work exactly as it did before."""
+    arbiter.orchard = real_orchard()
+
+    edited, _clause, _dropped = arbiter._apply_task_edit(
+        request_for(task_id=43808, tree=20), ACTIVE
+    )
+
+    approached = {
+        element.get("id")
+        for element in etree.fromstring(edited.encode("utf-8")).iter("MoveToTreeID")
+        if (element.get("approach_tree") or "").lower() == "true"
+    }
+    assert {"10", "60", "20"} <= approached
+
+
 def test_completion_ledger_is_read_off_bt_status(arbiter):
     """Populated from the SUCCESS half of /bt/status_change, by the same
     binding the planner uses -- so the two agree by construction. A SampleLeaf
