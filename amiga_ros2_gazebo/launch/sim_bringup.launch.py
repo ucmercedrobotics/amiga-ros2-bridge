@@ -43,6 +43,7 @@ ALL_CAPABILITIES = [
     "FollowPerson",
     "SampleLeaf",
     "MoveArmToPosition",
+    "Wait",
 ]
 
 

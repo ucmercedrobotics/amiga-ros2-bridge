@@ -43,6 +43,7 @@ add_executable(bt_runner
   src/actions/detect_object.cpp
   src/actions/sample_leaf.cpp
   src/actions/check_value.cpp
+  src/actions/wait.cpp
   src/actions/assert_true.cpp
   src/actions/follow_person.cpp
   src/actions/orient_robot_heading.cpp

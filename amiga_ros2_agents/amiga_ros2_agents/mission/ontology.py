@@ -354,6 +354,17 @@ def _local(element, orchard, state) -> dict:
     return {"proposition": DONE}
 
 
+def _wait(element, orchard, state) -> dict:
+    """Wait: time passes and the robot does not move.
+
+    Clears nothing, on purpose. The pose it already had is the pose it still
+    has, so "approach the tree, wait for someone to walk past, sample it" reads
+    as one continuous approach rather than an approach, a gap, and an orphaned
+    sample the fleet would refuse.
+    """
+    return {"proposition": DONE}
+
+
 def _follow(element, orchard, state) -> dict:
     """FollowPerson: unbounded movement, so nowhere is known afterwards."""
     return {"clears": TRAVELS, "proposition": DONE}
@@ -372,6 +383,7 @@ TABLE: Dict[str, object] = {
     "FollowPerson": _follow,
     "MoveArmToPosition": _arm,
     "SampleLeaf": _sample_leaf,
+    "Wait": _wait,
 }
 
 #: Every action this module can talk about.
