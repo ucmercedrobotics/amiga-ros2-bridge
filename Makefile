@@ -70,7 +70,7 @@ repo-init:
 	pre-commit install
 
 shell:
-	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}:${IMAGE_TAG}) && \
+	CONTAINER_PS=$(shell docker ps -q --filter ancestor=${IMAGE}:${IMAGE_TAG} --filter status=running | head -n1) && \
 	docker exec -it $${CONTAINER_PS} bash
 
 manifest:
@@ -95,7 +95,7 @@ bash: udev
 	--net=host \
 	--privileged \
 	${CUDA_MOUNT} \
-	--env="DISPLAY=:2" \
+	--env="DISPLAY=:1" \
 	-v .:/${WORKSPACE}:Z \
 	-v /${WORKSPACE}/manifests \
 	-v ~/.ssh:/root/.ssh:ro \
@@ -183,7 +183,7 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 1
+ROBOT_COUNT ?= 3
 # Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
 # so this is the dial on how much coordination traffic the fleet can sustain.
 LORA_SF ?= 7
@@ -207,6 +207,8 @@ LTL ?= true
 # model on VLM_URL -- a different model and endpoint from AGENT_API_BASE, which
 # stays pointed at the agents' reasoning model.
 VLM ?= false
+
+PERSON ?= 20
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
@@ -214,6 +216,7 @@ sim:
 		launch_agents:=$(AGENTS) \
 		launch_vlm:=$(VLM) \
 		vlm_url:=$(VLM_URL) \
+		spawn_person:=$(PERSON) \
 		ltl_verification:=$(LTL) \
 		lora_spreading_factor:=$(LORA_SF)
 
@@ -234,6 +237,12 @@ sim:
 # Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
 llm-demo:
 	./scripts/demo_llm_auction.sh
+
+vlm-demo:
+	./scripts/demo_vlm_human.sh
+
+vlm-demo-stop:
+	./scripts/demo_vlm_human.sh stop
 
 # Ends a run completely. `tmux kill-session` alone does not: ros_gz_sim's
 # `ign gazebo` server outlives the launch that started it, and the orphans

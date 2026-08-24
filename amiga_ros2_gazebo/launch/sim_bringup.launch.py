@@ -1,9 +1,10 @@
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
 )
@@ -180,6 +181,12 @@ def launch_setup(context, *args, **kwargs):
     broken_sampler_robot = int(
         LaunchConfiguration("broken_sampler_robot").perform(context)
     )
+    # 0 (default) means an empty orchard. A tree index puts a standing person
+    # on that tree's row waypoint -- the pose Nav2 aims at before handing over
+    # to the lidar approach, and the only spot in the aisle where one body is
+    # enough to abort a goal rather than be driven around.
+    spawn_person = int(LaunchConfiguration("spawn_person").perform(context))
+    planner_host = LaunchConfiguration("planner_host").perform(context)
     broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
     spreading_factor = int(
@@ -397,9 +404,9 @@ def launch_setup(context, *args, **kwargs):
                     output="screen",
                     parameters=[
                         {
-                            "safety_distance": 1.5,
+                            "safety_distance": 2.5,
                             "lidar_topic": qualify_ros(ns, "ouster/points"),
-                            "azimuth_tolerance": 0.5,
+                            "azimuth_tolerance": 0.8,
                             "min_object_height": 0.1,
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
@@ -426,6 +433,7 @@ def launch_setup(context, *args, **kwargs):
                     "bt.launch.py",
                     namespace=ns,
                     port=str(mission_port_base + i - 1),
+                    planner_host=planner_host,
                 )
             )
 
@@ -474,6 +482,20 @@ def launch_setup(context, *args, **kwargs):
                 )
             )
 
+    if spawn_person:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib", "amiga_ros2_gazebo", "spawn_person.py",
+                    ),
+                    "--tree", str(spawn_person),
+                ],
+                output="screen",
+            )
+        )
+
     return actions
 
 
@@ -514,6 +536,16 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
             DeclareLaunchArgument(
+                "planner_host",
+                default_value="",
+                description="Fleet planner to register and heartbeat with. "
+                "Empty (the default here) disables discovery, because a sim is "
+                "driven by netcat straight into each robot's mission port and "
+                "has no planner to answer -- bt.launch.py's own default points "
+                "at the real fleet host, which on a dev box just refuses every "
+                "5s per robot. Set it to that host to opt back in.",
+            ),
+            DeclareLaunchArgument(
                 "broken_sampler_robot",
                 default_value="0",
                 description="Give this robot (1-based) a failing leaf sampler; "
@@ -548,6 +580,14 @@ def generate_launch_description():
                 "also switches the coordinators' use_triage_agent, so with this "
                 "false they fall back to the local stub interpreter rather than "
                 "waiting 45 s on a service nobody serves.",
+            ),
+            DeclareLaunchArgument(
+                "spawn_person",
+                default_value="0",
+                description="Tree index to put a standing person in front of, "
+                "or 0 for none. The person lands on that tree's row waypoint, "
+                "which makes MoveToTreeID abort for real instead of routing "
+                "around -- the fault the triage agent and the VLM read.",
             ),
             DeclareLaunchArgument(
                 "launch_vlm",
