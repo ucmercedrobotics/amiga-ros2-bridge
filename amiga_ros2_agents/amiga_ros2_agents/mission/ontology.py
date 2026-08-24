@@ -568,7 +568,24 @@ def prune_completed(root, completed, orchard=None):
     aisles_still_needed = set()
     for move, sample, tree_id in objectives:
         if tree_id in completed_ids:
+            # Both halves, not just the move. When the pair is wrapped in a
+            # RetryUntilSuccessful of its own -- how the planner writes an
+            # objective -- both climbs reach that wrapper and the set collapses
+            # them to one removal, exactly as before. When it is NOT wrapped
+            # they climb nowhere and return themselves, so both leaves go.
+            #
+            # That second shape is the one a task won at auction has: the graft
+            # puts the aisle move, the approach, the sample and whatever the
+            # planner added into one flat Sequence, so no ancestor holds the
+            # pair alone. Asking only about the move then deleted only the
+            # move, and the orphaned SampleLeaf failed the arbiter's own
+            # precondition check -- "requires a preceding <MoveToTreeID
+            # approach_tree='true'>" -- which rejected the whole plan. Live,
+            # that cost amiga2 a task it had just won: it had sampled tree 20
+            # from an earlier auction, won tree 26, and could not graft it
+            # because pruning tree 20 left its sample behind.
             to_remove.add(_isolated_ancestor(move, {move, sample}))
+            to_remove.add(_isolated_ancestor(sample, {move, sample}))
         else:
             aisle = orchard.aisle_of(tree_id) if orchard is not None else None
             if aisle is not None:

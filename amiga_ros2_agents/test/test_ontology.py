@@ -356,6 +356,47 @@ def test_pruning_leaves_no_empty_wrapper_behind(orchard_map):
     assert remaining == {"90"}, "only the absorbed task is left to do"
 
 
+def test_pruning_removes_both_halves_of_a_flat_objective(orchard_map):
+    """The task amiga2 won and could not keep.
+
+    A task won at auction is grafted as one flat Sequence -- aisle move,
+    approach, sample, and whatever the planner added, all siblings. No ancestor
+    holds the approach/sample pair alone, so the climb that normally finds a
+    wrapper to delete has nowhere to go and returns the approach by itself.
+
+    Pruning then removed the approach and left the SampleLeaf behind, and the
+    arbiter's own precondition check rejected the plan for it: "<SampleLeaf>
+    ... requires a preceding <MoveToTreeID approach_tree='true'>". Live, amiga2
+    had sampled tree 20 from an earlier auction, won tree 26, and could not
+    graft it -- the task bounced and had to be auctioned again.
+
+    Only bites on a SECOND absorb: a robot's own objectives arrive wrapped in
+    their own RetryUntilSuccessful and prune cleanly, which is why the first
+    hand-off of a run always worked.
+    """
+    plan = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b"<Mission>sample leaves from tree 20</Mission>"
+        b'<BehaviorTree ID="Main"><Sequence name="Mission">'
+        b'<Sequence name="task_43808">'
+        b'<MoveToAisleHead name="task_43808_aisle" action_name="move_to_aisle_head" id="2"/>'
+        b'<MoveToTreeID name="task_43808_visit" action_name="follow_tree_id_waypoint"'
+        b' id="20" approach_tree="true"/>'
+        b'<SampleLeaf name="task_43808_sample" action_name="segment_leaves"/>'
+        b'<Wait name="task_43808_wait" seconds="2.0"/>'
+        b"</Sequence></Sequence></BehaviorTree></root>"
+    )
+
+    pruned = ontology.prune_completed(plan, {"20"}, orchard_map)
+
+    assert pruned.find(".//MoveToTreeID") is None
+    assert pruned.find(".//SampleLeaf") is None, (
+        "a sample whose approach was pruned away has nothing establishing "
+        "where the robot is standing"
+    )
+    assert ontology.violations(pruned, orchard_map) == []
+
+
 def test_pruning_cascades_through_nested_wrappers(orchard_map):
     """A wrapper whose only child was itself emptied goes too, so one prune
     cannot leave a chain of hollow controls in the middle of a plan."""
