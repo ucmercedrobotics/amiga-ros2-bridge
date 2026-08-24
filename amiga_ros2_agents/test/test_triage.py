@@ -939,6 +939,87 @@ def test_shedding_a_task_restores_the_planning_budget(monkeypatch):
         planner.destroy_node()
 
 
+def test_a_tree_won_by_a_peer_is_remembered_as_theirs(monkeypatch):
+    """The deadlock in aisle 2.
+
+    amiga3 gave tree 20 to amiga2 at auction. ``remove_task`` took it out of
+    the plan correctly and two published plans went out without it. Then the
+    next fault replan put it back, because the <Mission> line still read
+    "sample trees 20 and 26": a transfer removes the work but deliberately
+    does not narrow the stated mission, so the model read the mission, saw an
+    objective missing from the plan, and restored it. Both robots then drove
+    at the same tree and one ended up parked on the approach waypoint the
+    other needed.
+
+    The plan cannot carry this fact and the mission text actively contradicts
+    it, so the planner has to hold it the way it already holds completed work.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_transferred",
+                        "task_id": 43808,
+                        "target": {"kind": "tree", "a": 20, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_trees == {"20"}
+
+        # Won back: the ledger says who owns the work now, not what has ever
+        # left, so a tree that comes home is plannable again.
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_absorbed",
+                        "task_id": 43808,
+                        "target": {"kind": "tree", "a": 20, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_trees == set()
+    finally:
+        planner.destroy_node()
+
+
+def test_only_tree_targets_are_recorded_as_transferred(monkeypatch):
+    """An aisle is not an objective anything would re-add, and expanding one
+    into the trees it holds would put work nobody transferred out of reach."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        for target in ({"kind": "aisle", "a": 2, "b": 0}, None):
+            planner._on_replan_request(
+                _string(
+                    json.dumps(
+                        {
+                            "cause": "task_transferred",
+                            "task_id": 43808,
+                            "target": target,
+                            "findings": [],
+                        }
+                    )
+                )
+            )
+        assert planner.transferred_trees == set()
+    finally:
+        planner.destroy_node()
+
+
 def test_ordinary_planner_progress_does_not_escalate(node, monkeypatch):
     # The planner publishes this topic for terminal outcomes, but the loop is
     # allowed to keep trying. Escalating on every status message would put a

@@ -129,6 +129,22 @@ class MissionPlannerNode(Node):
         # completed_trees above stays because pruning removes work by tree id,
         # which is the one place a tree id is genuinely the right key.
         self.succeeded_nodes: List[str] = []
+        # Trees a peer won from this robot at auction. Not "done" -- done
+        # somewhere else, which for planning purposes means the same thing:
+        # putting one back drives this robot to a tree another one is already
+        # driving to.
+        #
+        # Needed because the plan alone cannot say it. `remove_task` takes the
+        # transferred objective out of the XML, but the <Mission> text is a
+        # ratchet: absorbing a task extends it, transferring one deliberately
+        # leaves it alone (that asymmetry is what catches a plan quietly
+        # abandoning work). So after a hand-off the plan says "sample tree 26"
+        # while the mission still says "sample trees 20 and 26", and the next
+        # replan reads the mission, sees 20 missing, and restores it. Seen end
+        # to end: amiga3 gave tree 20 to amiga2, dropped it correctly for two
+        # plans, then re-added it -- and the two robots deadlocked in aisle 2,
+        # one of them standing on the waypoint the other needed.
+        self.transferred_trees: Set[str] = set()
         self.fault_constraints: List[Dict] = []
         self._last_status: Dict = {
             "mission_xml_received": False,
@@ -445,6 +461,7 @@ class MissionPlannerNode(Node):
         # A pseudo-event, so the retry counter, the memory and the rejection
         # loop all key off this the way they key off a failing node.
         cause = str(request.get("cause", "workload_changed"))
+        self._record_ownership_change(cause, request.get("target"))
         event = {
             "node": f"{cause}:{request.get('task_id')}",
             "reason": cause,
@@ -491,6 +508,33 @@ class MissionPlannerNode(Node):
             },
             daemon=True,
         ).start()
+
+    def _record_ownership_change(self, cause: str, target) -> None:
+        """Remember which trees stopped being this robot's, and which came back.
+
+        Only tree targets: an aisle or a GPS pair is not an objective anything
+        would re-add, and guessing which trees an aisle stood for would put
+        work nobody transferred out of reach.
+
+        Absorbing clears the mark rather than ignoring it, so a tree handed
+        away and later won back is plannable again -- the ledger tracks who
+        owns the work now, not what has ever left.
+        """
+        if not isinstance(target, dict) or str(target.get("kind")) != "tree":
+            return
+        tree_id = str(target.get("a") or "").strip()
+        if not tree_id:
+            return
+        with self._lock:
+            if cause == "task_transferred":
+                if tree_id not in self.transferred_trees:
+                    self.transferred_trees.add(tree_id)
+                    self.get_logger().info(
+                        f"Tree {tree_id} is a peer's now — excluding it from "
+                        "future replans"
+                    )
+            elif cause == "task_absorbed":
+                self.transferred_trees.discard(tree_id)
 
     def _on_rejection(self, msg: String):
         """Arbiter rejected our last candidate — retry with the reason as feedback,
@@ -698,6 +742,7 @@ class MissionPlannerNode(Node):
         with self._lock:
             completed = set(self.completed_trees)
             succeeded = list(self.succeeded_nodes)
+            transferred = set(self.transferred_trees)
             orchard_map = self.orchard
         try:
             active_doc = etree.fromstring(xml.encode("utf-8"))
@@ -796,6 +841,7 @@ class MissionPlannerNode(Node):
             orchard_facts=orchard_facts,
             known_aisles=known_aisles,
             completed_trees=sorted(completed),
+            transferred_trees=sorted(transferred),
             succeeded_nodes=succeeded,
             prior_fault_constraints=prior_fault_constraints,
             route_guidance=route_guidance,
@@ -805,7 +851,8 @@ class MissionPlannerNode(Node):
         self.get_logger().info(
             f"  Calling model ({llm.MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
-            f"completed_trees={sorted(completed)}, pruned={len(completed)}"
+            f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
+            f"transferred_trees={sorted(transferred)}"
         )
 
         # 7. Call LLM

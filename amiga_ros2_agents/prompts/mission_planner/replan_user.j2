@@ -35,6 +35,19 @@ No orchard layout has been received yet — do not invent an aisle id for any
 tree; only change what the failure event and world state actually justify.
 {% endif %}
 
+{% if transferred_trees %}
+## Handed to another robot — do NOT re-add these
+Trees {{ transferred_trees | join(", ") }} were won from this robot at auction
+and belong to a peer now. They are deliberately absent from the "Active mission
+XML" below, but the <Mission> line above still names them: a transfer removes
+the work without narrowing the stated mission, so the mission text is NOT
+evidence that this robot still owes these trees.
+
+Restoring one does not recover lost work — it sends this robot to a tree
+another robot is already driving to, and both then contend for the same
+approach waypoint.
+
+{% endif %}
 {% if completed_trees %}
 ## Already completed this mission — do NOT re-add these
 Trees {{ completed_trees | join(", ") }} have already been sampled
