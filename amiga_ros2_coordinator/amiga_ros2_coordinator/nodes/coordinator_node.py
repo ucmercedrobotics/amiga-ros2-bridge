@@ -614,11 +614,11 @@ class CoordinatorNode(Node):
         )
         self.declare_parameter(
             "note_timeout_sec",
-            15.0,
+            30.0,
             _describe(
                 "How long to wait for a revision. This has to stay under the "
                 "note-stretched bid backoff -- bid_max_backoff_sec x "
-                "note_backoff_multiplier, 20 s at the defaults -- because an "
+                "note_backoff_multiplier, 36 s at the defaults -- because an "
                 "answer that lands after the bid has gone out is counted "
                 "notes_too_late and changes nothing. Shorter than the triage "
                 "timeout for that reason, not because the model is faster."

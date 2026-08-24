@@ -439,7 +439,7 @@ and duplicate every send.
 | `triage_timeout_sec` | `45.0` | on a timeout the anomaly goes unanswered and the task stays put |
 | `use_note_agent` | `true` | ask the note agent what a peer's note means for our bid. `false` falls back to the injected interpreter, which defaults to changing nothing |
 | `note_service` | `/coordination/interpret_note` | the agent's service |
-| `note_timeout_sec` | `15.0` | **must stay under `bid_max_backoff_sec` × `note_backoff_multiplier`** (20 s at the defaults). An answer after that lands once the bid has gone and is counted `notes_too_late`; the node warns at startup if the two are set so that every answer would be. Shorter than the triage timeout for that reason, not because the model is faster |
+| `note_timeout_sec` | `30.0` | **must stay under `bid_max_backoff_sec` × `note_backoff_multiplier`** (36 s at the defaults). An answer after that lands once the bid has gone and is counted `notes_too_late`; the node warns at startup if the two are set so that every answer would be. Shorter than the triage timeout for that reason, not because the model is faster. Sized from a measured 21-22 s interpretation on a three-robot fleet sharing one endpoint |
 | `default_task_capabilities` | `[MoveToTreeID]` | assumed for a task the escalation names without describing. Only reached when the triage agent could not resolve the failing node to a subtree — an ordinary escalation carries the real action set |
 
 `node_id` and the retransmit settings belong to the in-process reliability node
