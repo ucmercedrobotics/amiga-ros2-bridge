@@ -91,6 +91,17 @@ MISSION_FIRST_TREES=(96 58 20)
 # is placed on the row waypoint of MISSION_FIRST_TREES[BLOCKED_ROBOT-1].
 BLOCKED_ROBOT="${BLOCKED_ROBOT:-3}"
 
+# What is in the way: a person, or a pickup parked across the lane. Two
+# different faults, not two dressings of one. A person blocks the goal pose and
+# leaves the lane open either side; a truck blocks the lane, so nothing further
+# down the aisle is reachable at all. Which one it is is a thing only the camera
+# can say, and what a plan should do about it differs.
+OBSTRUCTION="${OBSTRUCTION:-person}"
+case "$OBSTRUCTION" in
+    person|truck) ;;
+    *) echo "OBSTRUCTION must be 'person' or 'truck', got '$OBSTRUCTION'" >&2; exit 1 ;;
+esac
+
 # Must match sim_bringup.launch.py's robot_name_prefix, since that is what
 # names both the namespaces and the virtual radio's per-robot ptys.
 ROBOT_PREFIX="${ROBOT_PREFIX:-amiga}"
@@ -194,6 +205,8 @@ fi
 
 blocked_aisle="${MISSION_AISLES[$((BLOCKED_ROBOT - 1))]}"
 blocked_tree="${MISSION_FIRST_TREES[$((BLOCKED_ROBOT - 1))]}"
+person_tree=0; truck_tree=0
+[ "$OBSTRUCTION" = "person" ] && person_tree="$blocked_tree" || truck_tree="$blocked_tree"
 blocked_ns="$(namespace_for "$BLOCKED_ROBOT")"
 cat <<BANNER
 
@@ -201,15 +214,17 @@ cat <<BANNER
 BANNER
 for i in $(seq 1 "$ROBOT_COUNT"); do
     marker=""
-    [ "$i" -eq "$BLOCKED_ROBOT" ] && marker="   <-- the human stands in THIS aisle"
+    [ "$i" -eq "$BLOCKED_ROBOT" ] && marker="   <-- the ${OBSTRUCTION} is in THIS aisle"
     printf '    %s%-8s aisle %-3s %s%s\n' "" "$(namespace_for "$i")" \
         "${MISSION_AISLES[$((i - 1))]}" "$(basename "${MISSION_BINS[$((i - 1))]}")" "$marker"
 done
 cat <<BANNER
 
-  The human is spawned for you, standing on tree ${blocked_tree}'s row waypoint --
-  the spot ${blocked_ns} must reach before it can approach that tree. Nothing to
-  place by hand. To move them: scripts/../amiga_ros2_gazebo/scripts/spawn_person.py
+  The ${OBSTRUCTION} is spawned for you at tree ${blocked_tree}'s row waypoint -- the
+  spot ${blocked_ns} must reach before it can approach that tree. A person blocks
+  that pose and leaves the lane open; a truck lies across the lane, so nothing
+  further down the aisle is reachable either. OBSTRUCTION=person|truck picks.
+  To move it by hand: amiga_ros2_gazebo/scripts/spawn_${OBSTRUCTION}.py
 
   reasoning: ${AGENT_MODEL}
   vision:    ${VLM_URL}
@@ -233,7 +248,7 @@ tmux set -g history-limit 500000
 
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${blocked_tree} ltl_verification:=false objective_gating:=true 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${person_tree} spawn_truck:=${truck_tree} ltl_verification:=false objective_gating:=true 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"

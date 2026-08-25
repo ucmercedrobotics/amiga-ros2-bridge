@@ -187,6 +187,7 @@ def launch_setup(context, *args, **kwargs):
     # to the lidar approach, and the only spot in the aisle where one body is
     # enough to abort a goal rather than be driven around.
     spawn_person = int(LaunchConfiguration("spawn_person").perform(context))
+    spawn_truck = int(LaunchConfiguration("spawn_truck").perform(context))
     planner_host = LaunchConfiguration("planner_host").perform(context)
     broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
@@ -497,6 +498,20 @@ def launch_setup(context, *args, **kwargs):
             )
         )
 
+    if spawn_truck:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib", "amiga_ros2_gazebo", "spawn_truck.py",
+                    ),
+                    "--tree", str(spawn_truck), "--entrance",
+                ],
+                output="screen",
+            )
+        )
+
     return actions
 
 
@@ -581,6 +596,15 @@ def generate_launch_description():
                 "also switches the coordinators' use_triage_agent, so with this "
                 "false they fall back to the local stub interpreter rather than "
                 "waiting 45 s on a service nobody serves.",
+            ),
+            DeclareLaunchArgument(
+                "spawn_truck",
+                default_value="0",
+                description="Tree index whose lane to park a pickup across, or "
+                "0 for none. Placed at the mouth of that lane, so the row "
+                "cannot be entered at all -- unlike the person, who blocks one "
+                "goal pose and leaves the lane open either side. A different "
+                "fault to reason about, which is the reason for having both.",
             ),
             DeclareLaunchArgument(
                 "spawn_person",
