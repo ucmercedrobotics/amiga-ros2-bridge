@@ -723,6 +723,110 @@ def test_absorbing_work_keeps_a_plan_whose_trees_are_all_pending(arbiter):
     assert {"10", "60", "20"} <= approached
 
 
+def _tree_status(status):
+    from std_msgs.msg import String as _String
+
+    return _String(data=json.dumps({"node": "<tree>", "status": status, "reason": ""}))
+
+
+def _published(node):
+    """Everything the arbiter puts on /mission/xml. Returns a live list."""
+    sent = []
+    node.mission_pub.publish = lambda msg: sent.append(msg.data)
+    return sent
+
+
+def test_a_plan_accepted_mid_mission_waits_for_the_mission_to_end(arbiter):
+    """bt_runner cannot take a plan while it is running one.
+
+    Its tick loop only exits when the tree returns, so a plan published in the
+    middle of a mission does not start any sooner -- it sits in a single
+    pending slot, going stale, until the executor comes back for it. Holding it
+    here costs nothing for exactly that reason, and buys the chance to prune it
+    against what finished in the meantime.
+    """
+    sent = _published(arbiter)
+    arbiter._executor_busy = True
+
+    arbiter._deliver("<root>held</root>")
+    assert sent == [], "published into a mission that cannot adopt it"
+    assert arbiter._held_plan == "<root>held</root>"
+
+    arbiter._on_bt_status(_tree_status("SUCCESS"))
+    assert sent == ["<root>held</root>"], "not released when the mission ended"
+    assert arbiter._held_plan is None
+
+
+def test_a_held_plan_is_pruned_against_what_finished_while_it_waited(arbiter):
+    """The re-sampling this exists to stop.
+
+    amiga3's last plan was written at 09:44:08, when tree 26 was genuinely
+    still to do. Tree 26 was sampled at 09:45:39, and that same plan was
+    adopted in the same instant -- so the robot drove back and sampled it
+    again. The plan was correct when written and stale by the time it ran, and
+    nothing looked at it in between.
+    """
+    arbiter.orchard = real_orchard()
+    arbiter._executor_busy = True
+    sent = _published(arbiter)
+
+    arbiter._deliver(ACTIVE)
+    arbiter.completed_objectives = {"10"}  # finished while the plan waited
+    arbiter._on_bt_status(_tree_status("SUCCESS"))
+
+    assert len(sent) == 1
+    approached = {
+        el.get("id")
+        for el in etree.fromstring(sent[0].encode("utf-8")).iter("MoveToTreeID")
+        if (el.get("approach_tree") or "").lower() == "true"
+    }
+    assert "10" not in approached, "a finished tree survived into the running plan"
+    assert "60" in approached, "pending work must not go with it"
+
+
+def test_a_failed_mission_releases_the_hold_too(arbiter):
+    """FAILURE ends a mission exactly as SUCCESS does, and the executor comes
+    back for a plan either way. Only SUCCESS releasing it would strand every
+    plan written for a robot whose tree failed -- which is most of them."""
+    sent = _published(arbiter)
+    arbiter._executor_busy = True
+    arbiter._deliver("<root>held</root>")
+
+    arbiter._on_bt_status(_tree_status("FAILURE"))
+    assert sent == ["<root>held</root>"]
+
+
+def test_an_idle_robot_is_handed_its_plan_straight_away(arbiter):
+    """Nothing is deferred that does not need to be. With no mission running
+    there is nothing to wait for, and waiting would be the one way this could
+    leave a robot idle holding work."""
+    sent = _published(arbiter)
+    arbiter._executor_busy = False
+
+    arbiter._deliver("<root>now</root>")
+    assert sent == ["<root>now</root>"]
+    assert arbiter._held_plan is None
+
+
+def test_a_hold_nobody_ends_fails_open(arbiter):
+    """The mission-end signal is one message from one node, and nothing here
+    can prove it arrives. Timing out publishes the plan into the pending slot
+    it would have gone to anyway, so the failure mode is the behaviour this
+    replaced rather than a robot waiting forever."""
+    from amiga_ros2_agents.replanning import arbiter_node as mod
+
+    sent = _published(arbiter)
+    arbiter._executor_busy = True
+    arbiter._deliver("<root>held</root>")
+
+    arbiter._release_stale_hold()
+    assert sent == [], "released before the timeout"
+
+    arbiter._held_since -= mod.HOLD_TIMEOUT_SEC + 1
+    arbiter._release_stale_hold()
+    assert sent == ["<root>held</root>"]
+
+
 def test_completion_ledger_is_read_off_bt_status(arbiter):
     """Populated from the SUCCESS half of /bt/status_change, by the same
     binding the planner uses -- so the two agree by construction. A SampleLeaf

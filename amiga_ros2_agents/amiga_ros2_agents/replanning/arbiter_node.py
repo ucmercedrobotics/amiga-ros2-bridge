@@ -84,6 +84,12 @@ PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 DEFAULT_VIABILITY_BUDGET = 2  # fallback total-drop budget if the model call fails
 
+#: How long to hold an accepted plan before publishing it unheard-from. Longer
+#: than a mission normally takes to reach its next tree, short enough that a
+#: lost mission-end message is not a lost plan. Failing open is safe: see
+#: _release_stale_hold.
+HOLD_TIMEOUT_SEC = 600.0
+
 #: Where the orchard map arrives. Absolute, like the coordinator's: there is one
 #: orchard and every robot is in it. Only the *soft* half of the ontology needs
 #: it -- which aisle a tree is reached from -- so an arbiter that never receives
@@ -148,6 +154,24 @@ class ArbiterNode(Node):
         # transfer for "2 trees dropped ['20', '64'] exceeds viability budget
         # of 1" -- while robot 2 was standing at tree 20.
         self.transferred_objectives: set = set()
+
+        # Delivery of an accepted plan, deferred until the robot can take it.
+        #
+        # bt_runner cannot adopt a plan mid-mission -- its tick loop only exits
+        # when the tree returns SUCCESS or FAILURE -- so publishing early never
+        # made work start sooner. What it did do was leave the plan sitting in
+        # bt_runner's single pending slot going stale: a plan written before a
+        # tree was sampled, adopted ninety seconds after it was, still contains
+        # that tree, and the executor re-ticks from the root. Observed: amiga3
+        # sampled tree 26, then drove back and sampled it again.
+        #
+        # Holding costs nothing for the same reason it fixes something. The
+        # plan runs at exactly the moment it would have anyway; it is simply
+        # pruned against what is finished *then* rather than when it was
+        # written.
+        self._held_plan: Optional[str] = None
+        self._held_since = 0.0
+        self._executor_busy = False
         self.max_droppable: Optional[int] = None  # model-determined viability budget
         self._last_failure_reason: str = ""
         self._last_accept_time = 0.0
@@ -210,6 +234,9 @@ class ArbiterNode(Node):
         )
 
         self.status = StatusPublisher(self)
+        # Only ever fires when bt_runner has gone quiet on us; see
+        # _release_stale_hold.
+        self.create_timer(5.0, self._release_stale_hold)
         self.status.publish(self.get_status())
 
         self.get_logger().info("ArbiterNode started — gating /mission/candidate_xml")
@@ -247,6 +274,10 @@ class ArbiterNode(Node):
         with self._lock:
             if msg.data == self._published_xml:
                 return  # our own echo; _on_candidate already recorded this plan
+            # Somebody else put a plan on the topic -- the first mission arrives
+            # this way -- so the robot is running one and an accepted candidate
+            # has to wait its turn like any other.
+            self._executor_busy = True
             self.active_mission_xml = msg.data
             if self.original_objectives is None:
                 try:
@@ -505,6 +536,70 @@ class ArbiterNode(Node):
             edited = _extend_mission_text(edited, clause)
         return edited, clause, dropped
 
+    def _deliver(self, plan: str) -> None:
+        """Publish an accepted plan, or hold it until the robot can take it."""
+        with self._lock:
+            busy = self._executor_busy
+            if busy:
+                self._held_plan = plan
+                self._held_since = time.monotonic()
+        if busy:
+            self.get_logger().info(
+                "ACCEPTED candidate — held until the running mission ends"
+            )
+            return
+        self._publish_plan(plan)
+
+    def _publish_plan(self, plan: str) -> None:
+        """Put a plan on /mission/xml and note that the robot is now running it."""
+        with self._lock:
+            # Armed here rather than at accept time: the echo guard exists to
+            # recognise our own message coming back, and a held plan has not
+            # been sent yet.
+            self._published_xml = plan
+            self._held_plan = None
+            self._executor_busy = True
+        out = String()
+        out.data = plan
+        self.mission_pub.publish(out)
+        self.get_logger().info("ACCEPTED candidate — published to /mission/xml")
+
+    def _on_mission_ended(self) -> None:
+        """bt_runner finished a tree. Release whatever was waiting for it.
+
+        Pruned *now*, against the objectives finished during the mission that
+        just ended -- which is the whole point of having waited. The same plan
+        published when it was written would still name trees this robot
+        completed while it was held, and the executor rebuilds from the root.
+        """
+        with self._lock:
+            self._executor_busy = False
+            plan = self._held_plan
+        if plan is None:
+            return
+        self._publish_plan(self._without_completed(plan))
+
+    def _release_stale_hold(self) -> None:
+        """Send a plan that has been held too long, and give up on waiting.
+
+        The signal this waits for is one message from one node; nothing here
+        can prove it will arrive. Failing open costs only the freshness the
+        holding was for -- a plan published while the robot is busy sits in
+        bt_runner's pending slot exactly as every plan did before any of this,
+        so the worst case is the behaviour this replaced, never a robot idle
+        with work it was never handed.
+        """
+        with self._lock:
+            plan = self._held_plan
+            waited = time.monotonic() - self._held_since
+        if plan is None or waited < HOLD_TIMEOUT_SEC:
+            return
+        self.get_logger().warn(
+            f"held a plan for {waited:.0f}s with no mission-end from bt_runner "
+            "— publishing it anyway"
+        )
+        self._publish_plan(self._without_completed(plan))
+
     def _without_completed(self, xml: str) -> str:
         """``xml`` with the trees this robot already sampled taken out.
 
@@ -562,7 +657,6 @@ class ArbiterNode(Node):
             # Commit state before publishing, so the echo guard is already armed
             # when our own message comes back on /mission/xml.
             with self._lock:
-                self._published_xml = candidate
                 self.active_mission_xml = candidate
                 self._last_accept_time = time.monotonic()
                 self._awaiting_retry = False
@@ -575,10 +669,7 @@ class ArbiterNode(Node):
                         pass
                 self._last_status["accepted"] += 1
                 self._last_status["last_decision"] = "accepted"
-            out = String()
-            out.data = candidate
-            self.mission_pub.publish(out)
-            self.get_logger().info("ACCEPTED candidate — published to /mission/xml")
+            self._deliver(candidate)
 
         elif abort:
             with self._lock:
@@ -632,6 +723,11 @@ class ArbiterNode(Node):
             return
         if not isinstance(event, dict):
             return
+
+        # Either outcome ends the mission, and the FAILURE branch below returns
+        # early, so this has to come first.
+        if str(event.get("node") or "") == "<tree>":
+            self._on_mission_ended()
 
         status = str(event.get("status") or "FAILURE").upper()
         if status == "FAILURE":
