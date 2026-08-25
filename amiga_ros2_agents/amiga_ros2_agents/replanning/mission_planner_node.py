@@ -772,7 +772,7 @@ class MissionPlannerNode(Node):
         # concrete fact that was missing when a fault reason like "approach
         # tree 60 not via aisle 6" had nothing to contradict aisle 9 with.
         if orchard_map:
-            orchard_facts = orchard.facts_for_trees(orchard_map, pruned_tree_ids)
+            orchard_facts = orchard.sides_for_trees(orchard_map, pruned_tree_ids)
             known_aisles = sorted(orchard_map.aisles())
         else:
             orchard_facts = {}

@@ -23,13 +23,13 @@ win.
 
 ## Orchard layout (ground truth — the plan below must respect this)
 {% if orchard_facts %}
-{% for tree_id, aisle_id in orchard_facts.items() %}
-- tree {{ tree_id }} is reached from aisle {{ aisle_id if aisle_id is not none else "UNKNOWN" }}
+{% for tree_id, aisle_ids in orchard_facts.items() %}
+- tree {{ tree_id }} is reached from aisle {{ aisle_ids | join(" or ") if aisle_ids else "UNKNOWN" }}
 {% endfor %}
 Known aisles in this orchard: {{ known_aisles | join(", ") }}
-A <MoveToAisleHead> whose id is not one of these, or is not the tree's own
-aisle above, does not reach that tree — aisles run between rows of trees and
-cannot be crossed on foot or by rover to reach a different aisle's trees.
+A <MoveToAisleHead> whose id is not one of these, or is not one of the tree's
+own aisles above, does not reach that tree — aisles run between rows of trees
+and cannot be crossed on foot or by rover to reach a different aisle's trees.
 {% else %}
 No orchard layout has been received yet — do not invent an aisle id for any
 tree; only change what the failure event and world state actually justify.

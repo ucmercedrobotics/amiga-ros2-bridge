@@ -59,6 +59,10 @@ MODEL_NAME = "blocking_truck"
 #: Across the lane rather than along it. See the module docstring.
 YAW_ACROSS = math.pi / 2
 
+#: How much lane one truck covers, turned across it: the Fuel mesh is 5.66 m
+#: on its long axis.
+TRUCK_LENGTH = 5.66
+
 FUEL_URL = "https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pickup"
 #: Fortress keeps its cache under ~/.ignition, Garden and later under ~/.gz.
 CACHE_GLOBS = (
@@ -128,6 +132,15 @@ def main() -> int:
     where.add_argument("--tree", type=int, help="block the lane this tree is worked from")
     where.add_argument("--x", type=float, help="explicit world x (needs --y)")
     ap.add_argument("--y", type=float, help="explicit world y")
+    ap.add_argument("--span", action="store_true",
+                    help="block the whole lane width with a second vehicle. One "
+                         "truck leaves ~1.7 m either side: impassable for the "
+                         "robot, but only inflated rather than lethal in the "
+                         "global costmap, so the planner keeps routing through "
+                         "the gap and the controller keeps refusing it. That "
+                         "argument takes minutes to settle and never yields a "
+                         "clean 'no route'. Spanning the lane makes the planner "
+                         "fail outright, in seconds.")
     ap.add_argument("--entrance", action="store_true",
                     help="park it at the mouth of the lane rather than beside "
                          "the tree, so the row cannot be entered at all")
@@ -143,7 +156,9 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.remove:
-        return remove(args.world, args.name)
+        for name in (args.name, args.name + "_a", args.name + "_b"):
+            remove(args.world, name)
+        return 0
 
     if args.tree is not None:
         x, y = lane_of(args.tree, args.entrance)
@@ -157,9 +172,10 @@ def main() -> int:
         ap.error("give --tree N, or both --x and --y")
 
     across = abs(math.sin(args.yaw))
+    covered = TRUCK_LENGTH * across * (2 if args.span else 1)
     print(f"placing '{args.name}' at x={x:.2f} y={y:.2f} yaw={args.yaw:.2f} "
-          f"in world '{args.world}' — spanning {5.66 * across:.1f} m of the "
-          f"{DY:.0f} m lane")
+          f"in world '{args.world}' — covering {min(covered, DY):.1f} m of the "
+          f"{DY:.0f} m lane" + (" (two bodies)" if args.span else ""))
     if args.dry_run:
         return 0
 
@@ -168,11 +184,22 @@ def main() -> int:
 
     # Straight from the cache: the model is already static, and its mesh URIs
     # are relative to its own directory.
-    return subprocess.run(
-        ["ros2", "run", "ros_gz_sim", "create",
-         "-world", args.world, "-file", str(find_model()), "-name", args.name,
-         "-x", str(x), "-y", str(y), "-z", "0.0", "-Y", str(args.yaw)]
-    ).returncode
+    model = str(find_model())
+    # Two bodies far enough apart to reach both kerbs and close enough to leave
+    # no gap between them, or one centred on the lane.
+    offsets = ((-TRUCK_LENGTH / 2 + 0.2, "_a"), (TRUCK_LENGTH / 2 - 0.2, "_b"))
+    places = [(y + dy, args.name + tag) for dy, tag in offsets] if args.span \
+        else [(y, args.name)]
+
+    for place_y, name in places:
+        code = subprocess.run(
+            ["ros2", "run", "ros_gz_sim", "create",
+             "-world", args.world, "-file", model, "-name", name,
+             "-x", str(x), "-y", str(place_y), "-z", "0.0", "-Y", str(args.yaw)]
+        ).returncode
+        if code:
+            return code
+    return 0
 
 
 if __name__ == "__main__":

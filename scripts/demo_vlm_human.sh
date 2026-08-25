@@ -51,9 +51,20 @@
 #   export AGENT_MODEL=hosted_vllm/openai/gpt-oss-120b
 #   export AGENT_API_BASE=http://100.88.70.65:8000/v1
 #   export VLM_URL=http://100.88.70.65:8001/v1/chat/completions
-#   ./scripts/demo_vlm_human.sh
+#   ./scripts/demo_vlm_human.sh                   # a person in the aisle
+#   OBSTRUCTION=truck ./scripts/demo_vlm_human.sh  # a lane blocked by vehicles
 #
 #   ./scripts/demo_vlm_human.sh stop     # tear down, gz orphans included
+#
+# The two obstructions are two different faults, not one fault dressed twice.
+# A person stands on the row waypoint: that goal pose cannot be placed, the
+# approach aborts, and the lane either side of them is still open -- so the
+# work is reachable by a peer, or by this robot once they move. Vehicles across
+# the mouth of the lane leave nothing reachable down that lane at all, and the
+# answer is the other aisle: a row of trees has one on each side.
+#
+# Which it is, is a thing only the camera can say. The navigation logs read the
+# same either way.
 #
 # Everything runs in one tmux session ("vlm-demo"): a `sim` window, one `bt<i>`
 # per robot, an `agents` window showing only the decision story off /rosout

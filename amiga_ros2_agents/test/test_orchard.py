@@ -124,6 +124,51 @@ def test_aisles_are_the_ones_with_a_tree_in_them(orchard_map):
     assert {2, 4} <= orchard_map.aisles()
 
 
+def test_a_row_is_reachable_from_the_lane_on_either_side(orchard_map):
+    """The fact a blocked lane needs answering with.
+
+    A row of trees sits between two lanes and carries a waypoint on each side,
+    so row r is worked from aisle r or aisle r+1. Without this the orchard can
+    only name one lane, and a robot whose lane is blocked by something that
+    will not move has nothing left to say but "drop it" -- while the trees are
+    perfectly reachable from the other side.
+    """
+    assert orchard_map.aisles_of(20) == (2, 3)
+    assert orchard_map.aisles_of(58) == (4, 5)
+    assert orchard_map.aisles_of("20") == orchard_map.aisles_of(20)
+
+
+def test_the_outer_rows_have_a_lane_on_one_side_only(orchard_map):
+    """Open field on the other, so the choice this adds genuinely is not there
+    for them -- and saying so beats offering a lane that is off the block."""
+    assert orchard_map.aisles_of(1) == (2,)
+    assert orchard_map.aisles_of(144) == (8,)
+
+
+def test_the_recited_aisles_are_the_ones_that_reach_something(orchard_map):
+    """The prompt states both this set and each tree's lanes, and tells the
+    model an aisle outside it reaches nothing. The two have to agree, and they
+    did not: reading it off `aisle_of` listed the lowest row's own index, which
+    is a lane off the edge of the block, and omitted the lane the highest row
+    is worked from."""
+    reachable = {a for t in range(1, 145) for a in orchard_map.aisles_of(t)}
+    assert orchard_map.aisles() == reachable
+    assert 1 not in orchard_map.aisles()
+    assert 8 in orchard_map.aisles()
+
+
+def test_sides_falls_back_to_the_single_aisle_without_a_layout():
+    """A document with no rows to read leaves aisles_of empty, and a prompt
+    built on it is no worse off than one built on facts_for_trees."""
+    document = {
+        "traversal_axis": "row",
+        "aisle_to_entrance_indices": {"3": [1, 2]},
+        "trees": [{"tree_index": 7, "row": 3, "col": 1}],
+    }
+    parsed = orchard.parse(json.dumps(document))
+    assert orchard.sides_for_trees(parsed, [7])[7] == (3, 4)
+
+
 def test_facts_for_trees_is_scoped_to_what_was_asked(orchard_map):
     """A replan prompt should pay for the trees it has, not the whole orchard."""
     facts = orchard.facts_for_trees(orchard_map, ["20", "64"])

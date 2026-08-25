@@ -92,14 +92,18 @@ def test_the_planners_own_plans_break_no_precondition(name, orchard_map):
 def test_reaching_a_tree_expects_that_trees_aisle(name, orchard_map):
     """The relationship the whole design turns on.
 
-    Each ``MoveToTreeID`` expects to be in the aisle the orchard puts that tree
-    in, and each is preceded by the ``MoveToAisleHead`` that establishes it --
-    so nothing is reported missing. That agreement is not arranged here: the
-    aisle ids come from the orchard dump and the plan was written by a model
-    that never saw this table.
+    Each ``MoveToTreeID`` expects to be in an aisle that reaches that tree, and
+    each is preceded by the ``MoveToAisleHead`` that establishes it -- so
+    nothing is reported missing. That agreement is not arranged here: the aisle
+    ids come from the orchard dump and the plan was written by a model that
+    never saw this table.
+
+    A row sits between two lanes, so the expectation names both and the aisle
+    the planner picked has to be one of them. Pinning it to a single id would
+    say a plan that went round to the far side of a blocked row had got the
+    aisle wrong, which is the opposite of true.
     """
     state = ontology.State()
-    expectations = {}
     for element in ontology.actions_in(example(name)):
         step, state = ontology.advance(state, element, orchard_map)
         if step.proposition == ontology.OBJECTIVE:
@@ -108,8 +112,11 @@ def test_reaching_a_tree_expects_that_trees_aisle(name, orchard_map):
             assert need.strength == ontology.EXPECTED
             leaf = element.get("name")
             assert step.missing == (), f"{leaf} is missing {step.missing}"
-            expectations[element.get("id")] = need.arg
-    assert expectations == PLANNER_PLANS[name]
+            chosen = PLANNER_PLANS[name][element.get("id")]
+            assert chosen in need.arg, (
+                f"{leaf}: the planner entered aisle {chosen}, which does not "
+                f"reach tree {element.get('id')} ({need.arg})"
+            )
 
 
 def test_a_tree_move_without_its_aisle_move_is_allowed_but_noted(orchard_map):
@@ -239,7 +246,7 @@ def test_an_unknown_aisle_is_an_unknown_and_not_a_guess(orchard_map):
     without, _ = ontology.advance(ontology.State(), element)
     with_map, _ = ontology.advance(ontology.State(), element, orchard_map)
     assert without.needs[0].arg == ""
-    assert with_map.needs[0].arg == "4"
+    assert with_map.needs[0].arg == ("4", "5"), "both lanes that reach tree 60"
 
 
 def test_a_control_node_is_not_an_action():
@@ -275,6 +282,55 @@ def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
     names = [el.get("name") for el in plan.iter("SampleLeaf")]
     expected = dict(zip(names, PLANNER_PLANS["sample_20_64.xml"]))
     assert ontology.sample_leaf_trees(plan, orchard_map) == expected
+
+
+def test_either_lane_that_reaches_a_tree_satisfies_the_expectation(orchard_map):
+    """Going round to the far side of a blocked row is not an error.
+
+    Tree 20 is worked from aisle 2 or aisle 3. The orchard's default answer is
+    2, and a plan that enters 3 instead is answering something -- a lane
+    blocked by a vehicle that will not move -- rather than getting the aisle
+    wrong. Reporting it as unmet would feed the planner a finding telling it to
+    go back to the lane it just failed in.
+    """
+    for aisle in ("2", "3"):
+        plan = etree.fromstring(
+            b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+            b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence>"
+            b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="'
+            + aisle.encode() + b'"/>'
+            b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
+            b' id="20" approach_tree="true"/>'
+            b'<SampleLeaf name="s" action_name="segment_leaves"/>'
+            b"</Sequence></BehaviorTree></root>"
+        )
+        state = ontology.State()
+        noted = []
+        for element in ontology.actions_in(plan):
+            step, state = ontology.advance(state, element, orchard_map)
+            noted.extend(step.missing)
+        assert noted == [], f"entering aisle {aisle} was reported as missing {noted}"
+
+
+def test_a_lane_that_does_not_reach_the_tree_is_still_noted(orchard_map):
+    """The expectation naming two lanes is not the same as naming none. Aisle 5
+    does not run alongside row 2, so a plan entering it has not reached tree 20
+    by any route, and that is worth saying."""
+    plan = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence>"
+        b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="5"/>'
+        b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
+        b' id="20" approach_tree="true"/>'
+        b'<SampleLeaf name="s" action_name="segment_leaves"/>'
+        b"</Sequence></BehaviorTree></root>"
+    )
+    state = ontology.State()
+    noted = []
+    for element in ontology.actions_in(plan):
+        step, state = ontology.advance(state, element, orchard_map)
+        noted.extend(step.missing)
+    assert any(n.kind == ontology.IN_AISLE for n in noted)
 
 
 def test_pruning_nothing_returns_the_plan_unchanged():

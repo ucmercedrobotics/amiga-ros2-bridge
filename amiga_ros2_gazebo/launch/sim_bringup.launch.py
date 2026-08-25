@@ -506,7 +506,7 @@ def launch_setup(context, *args, **kwargs):
                         get_package_prefix("amiga_ros2_gazebo"),
                         "lib", "amiga_ros2_gazebo", "spawn_truck.py",
                     ),
-                    "--tree", str(spawn_truck), "--entrance",
+                    "--tree", str(spawn_truck), "--entrance", "--span",
                 ],
                 output="screen",
             )

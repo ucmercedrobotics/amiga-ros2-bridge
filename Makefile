@@ -241,6 +241,9 @@ llm-demo:
 vlm-demo:
 	./scripts/demo_vlm_human.sh
 
+truck-demo:
+	OBSTRUCTION=truck ./scripts/demo_vlm_human.sh
+
 vlm-demo-stop:
 	./scripts/demo_vlm_human.sh stop
 

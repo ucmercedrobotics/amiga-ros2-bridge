@@ -147,14 +147,25 @@ class Need:
 
     kind: str
     strength: str = REQUIRED
-    arg: str = ""
+    #: The binding required. A tuple means any of them will do, which is how a
+    #: tree that a robot can reach from either of two lanes says so: both are
+    #: correct, and a plan choosing the second is answering something -- a
+    #: blocked lane -- rather than getting the first one wrong.
+    arg: object = ""
 
     def met_by(self, fact: Fact) -> bool:
         """Whether ``fact`` satisfies this need."""
-        return fact.kind == self.kind and (not self.arg or fact.arg == self.arg)
+        if fact.kind != self.kind or not self.arg:
+            return fact.kind == self.kind
+        if isinstance(self.arg, tuple):
+            return fact.arg in self.arg
+        return fact.arg == self.arg
 
     def __str__(self) -> str:
-        return f"{self.kind}({self.arg})" if self.arg else f"{self.kind}(?)"
+        if not self.arg:
+            return f"{self.kind}(?)"
+        shown = " or ".join(self.arg) if isinstance(self.arg, tuple) else self.arg
+        return f"{self.kind}({shown})"
 
     @property
     def phrase(self) -> str:
@@ -280,6 +291,12 @@ def _move_to_tree(element, orchard, state) -> dict:
         return {"defect": f"<MoveToTreeID> '{_name(element)}' has no id"}
     approach = (element.get("approach_tree") or "").strip().lower() == "true"
     aisle = orchard.aisle_of(tree) if orchard is not None else None
+    # Either lane that reaches this tree satisfies the expectation. The default
+    # is only the nearer suggestion, and treating it as the sole right answer
+    # would report a plan that went round to the open side of a blocked row as
+    # having got the aisle wrong.
+    sides = orchard.aisles_of(tree) if orchard is not None else ()
+    wanted = tuple(str(a) for a in sides) if sides else ("" if aisle is None else str(aisle))
 
     here = Fact(AT_TREE if approach else AT_WAYPOINT, tree)
     establishes = (here,) if aisle is None else (here, Fact(IN_AISLE, str(aisle)))
@@ -289,7 +306,7 @@ def _move_to_tree(element, orchard, state) -> dict:
         # Every plan in examples/ omits it. What the expectation buys is the
         # *closure* -- the aisle move belongs to this tree's task -- and a
         # prerequisite worth emitting when the task is rebuilt elsewhere.
-        "needs": (Need(IN_AISLE, EXPECTED, "" if aisle is None else str(aisle)),),
+        "needs": (Need(IN_AISLE, EXPECTED, wanted),),
         "establishes": establishes,
         "clears": TRAVELS,
         "proposition": OBJECTIVE if approach else SILENT,
