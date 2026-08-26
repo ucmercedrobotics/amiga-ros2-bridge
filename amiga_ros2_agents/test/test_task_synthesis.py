@@ -263,6 +263,66 @@ def test_an_unrebuildable_step_is_dropped_and_named_rather_than_refused():
     assert 'id="35"' in rebuilt.xml
 
 
+def test_a_won_harvest_still_harvests(schema):
+    """The work has to travel with the task, not just the drive to the tree.
+
+    Regression, and the expensive kind: HarvestFruit was added to the schema,
+    the codec, the ontology and the executor, but not to ``synthesize``. A won
+    harvest rebuilt as an aisle move and an approach with *nothing at the end*
+    -- valid XML, a clean graft, and a robot that drove to the tree and did
+    nothing. The tree was never harvested, so the announcer re-delegated it,
+    and the same empty task went round the fleet until it ran out of peers.
+
+    ``dropped`` is the tell: it said ``['HarvestFruit']`` on every absorb.
+    """
+    task = announced(caps=(Capability.MOVE_TO_TREE_ID, Capability.HARVEST_FRUIT))
+    rebuilt = mission_tasks.synthesize(task, SCHEMA)
+
+    assert rebuilt is not None
+    assert rebuilt.dropped == [], "the harvest is rebuildable, so nothing is dropped"
+
+    doc = etree.fromstring(rebuilt.xml.encode())
+    harvests = doc.findall(".//HarvestFruit")
+    assert len(harvests) == 1, "a won harvest must still contain the harvest"
+    assert harvests[0].get("action_name") == "harvest_fruit"
+    assert schema.validate(
+        _grafted(rebuilt.xml)
+    ), "and the plan it is grafted into still has to validate"
+
+    # It binds to the tree it was announced for, the same way a sample does --
+    # without that, the completed-objectives ledger never sees it finish.
+    assert ontology.objective_trees(doc, None) == {
+        harvests[0].get("name"): "35"
+    }
+
+
+def test_a_won_sample_is_unchanged_by_the_harvest_table(schema):
+    """The table replaced a hardcoded branch; SampleLeaf must be untouched.
+
+    Pinned because the leaf *names* are load-bearing: /bt/status_change reports
+    a name, and the ledger resolves it back to a tree id.
+    """
+    rebuilt = mission_tasks.synthesize(announced(caps=SAMPLING), SCHEMA)
+    assert rebuilt is not None
+    assert rebuilt.dropped == []
+    doc = etree.fromstring(rebuilt.xml.encode())
+    samples = doc.findall(".//SampleLeaf")
+    assert len(samples) == 1
+    assert samples[0].get("name") == "task_7_sample_35"
+    assert samples[0].get("action_name") == "segment_leaves"
+
+
+def _grafted(fragment: str):
+    """``fragment`` inside the smallest plan the schema will accept."""
+    root = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence/>"
+        b"</BehaviorTree></root>"
+    )
+    root.find(".//Sequence").append(etree.fromstring(fragment.encode()))
+    return root
+
+
 def _orchard():
     """The real orchard, from the second frame of a real mission binary."""
     import struct
