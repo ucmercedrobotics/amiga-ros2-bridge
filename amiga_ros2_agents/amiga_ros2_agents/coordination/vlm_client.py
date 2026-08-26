@@ -111,6 +111,8 @@ DESCRIBE_QUESTION = (
     "Name the things in view and what each one is — people, animals, vehicles, "
     "machinery, trees, posts, buildings, ground, sky. Say what a thing is, not "
     "what it means.\n\n"
+    "The robot's own arm — white, jointed, often large in the foreground — may "
+    "be in view. you do not need to name it or describe it.\n\n"
     "If the image is blank, black, uniformly coloured, heavily blurred or "
     "washed out, say that instead of describing content.\n\n"
     "Report only what is visible. Do not estimate distances or bearings — the "
