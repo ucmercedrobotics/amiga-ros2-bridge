@@ -271,7 +271,7 @@ def test_a_choice_keeps_only_what_both_branches_establish():
 # ==========================================================================
 
 
-def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
+def test_objective_trees_binds_names_to_ids(orchard_map):
     """The names /bt/status_change actually reports, resolved to tree ids.
 
     The names are the planner's, not ours, and change whenever an example plan
@@ -281,7 +281,32 @@ def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
     plan = example("sample_20_64.xml")
     names = [el.get("name") for el in plan.iter("SampleLeaf")]
     expected = dict(zip(names, PLANNER_PLANS["sample_20_64.xml"]))
-    assert ontology.sample_leaf_trees(plan, orchard_map) == expected
+    assert ontology.objective_trees(plan, orchard_map) == expected
+
+
+def test_a_harvested_tree_counts_as_done(orchard_map):
+    """A harvest binds to its tree, and pruning removes it.
+
+    Regression: the binding matched ``SampleLeaf`` alone, so on a harvest
+    mission nothing ever entered the completed ledger. Every replan then
+    redeployed a plan still containing finished trees, and the executor --
+    which rebuilds from the root and re-ticks -- drove back and harvested them
+    again. Only a robot that faulted saw it, because only a fault triggers the
+    redeploy, which is what made it look robot-specific.
+    """
+    plan = example("harvest_aisle2.xml")
+
+    bound = ontology.objective_trees(plan, orchard_map)
+    harvests = [el.get("name") for el in plan.iter("HarvestFruit")]
+    assert harvests, "fixture has no HarvestFruit to bind"
+    assert set(bound) == set(harvests)
+
+    done = bound[harvests[0]]
+    pruned = ontology.prune_completed(plan, [done], orchard_map)
+    assert done not in ontology.objective_trees(pruned, orchard_map).values()
+    # The other tree is still there: pruning removes what is finished, not the
+    # rest of the mission.
+    assert len(list(pruned.iter("HarvestFruit"))) == len(harvests) - 1
 
 
 def test_either_lane_that_reaches_a_tree_satisfies_the_expectation(orchard_map):

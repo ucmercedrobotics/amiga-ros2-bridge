@@ -421,7 +421,7 @@ class MissionPlannerNode(Node):
             doc = etree.fromstring(xml.encode("utf-8"))
         except etree.XMLSyntaxError:
             return
-        tree_id = ontology.sample_leaf_trees(doc, orchard_map).get(name)
+        tree_id = ontology.objective_trees(doc, orchard_map).get(name)
         if tree_id is None:
             return
         with self._lock:

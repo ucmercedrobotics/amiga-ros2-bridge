@@ -19,6 +19,7 @@
 #include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/orient_robot_heading.hpp"
+#include "amiga_ros2_behavior_tree/actions/harvest_fruit.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/actions/follow_person.hpp"
 #include "amiga_ros2_behavior_tree/actions/arm_move_to.hpp"
@@ -69,6 +70,7 @@ int main(int argc, char **argv) {
                                                    ros_params);
   factory.registerNodeType<FollowPerson>("FollowPerson", ros_params);
   factory.registerNodeType<SampleLeaf>("SampleLeaf", ros_params);
+  factory.registerNodeType<HarvestFruit>("HarvestFruit", ros_params);
   factory.registerNodeType<MoveArmToPosition>("MoveArmToPosition", ros_params);
   factory.registerNodeType<DetectObject>("DetectObject");
   // conditional nodes

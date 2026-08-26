@@ -53,6 +53,7 @@
 #   export VLM_URL=http://100.88.70.65:8001/v1/chat/completions
 #   ./scripts/demo_vlm_human.sh                   # a person in the aisle
 #   OBSTRUCTION=truck ./scripts/demo_vlm_human.sh  # a lane blocked by vehicles
+#   MISSION=harvest ./scripts/demo_vlm_human.sh    # fruit, and some trees have none
 #
 #   ./scripts/demo_vlm_human.sh stop     # tear down, gz orphans included
 #
@@ -87,10 +88,27 @@ LOG_DIR="/tmp/vlm-demo-logs"
 # Descending: robots spawn at increasing y while aisle centrelines run the
 # other way, so index order would send them across the field past each other.
 EXAMPLES_DIR="amiga_ros2_behavior_tree/examples"
+
+# What the robots are out here to do. Same three aisles either way; what
+# changes is the work at each tree, and therefore what can go wrong with it.
+#
+#   sample    take a leaf. Every tree has leaves, so the only faults are about
+#             getting there -- which is what the person and the truck are for.
+#   harvest   pick the fruit. Some trees have none, and a robot standing at one
+#             of those has a fault nothing about navigation explains: it
+#             arrived, it reached, it got nothing. Whether that is worth
+#             another robot's time is the judgement, and an empty tree is empty
+#             for all of them.
+MISSION="${MISSION:-sample}"
+case "$MISSION" in
+    sample|harvest) ;;
+    *) echo "MISSION must be 'sample' or 'harvest', got '$MISSION'" >&2; exit 1 ;;
+esac
+
 MISSION_BINS=(
-    "${EXAMPLES_DIR}/sample_aisle6.bin"
-    "${EXAMPLES_DIR}/sample_aisle4.bin"
-    "${EXAMPLES_DIR}/sample_aisle2.bin"
+    "${EXAMPLES_DIR}/${MISSION}_aisle6.bin"
+    "${EXAMPLES_DIR}/${MISSION}_aisle4.bin"
+    "${EXAMPLES_DIR}/${MISSION}_aisle2.bin"
 )
 MISSION_AISLES=(6 4 2)
 # The first tree each mission visits, and so the one whose row waypoint the
@@ -109,8 +127,8 @@ BLOCKED_ROBOT="${BLOCKED_ROBOT:-3}"
 # can say, and what a plan should do about it differs.
 OBSTRUCTION="${OBSTRUCTION:-person}"
 case "$OBSTRUCTION" in
-    person|truck) ;;
-    *) echo "OBSTRUCTION must be 'person' or 'truck', got '$OBSTRUCTION'" >&2; exit 1 ;;
+    person|truck|none) ;;
+    *) echo "OBSTRUCTION must be 'person', 'truck' or 'none', got '$OBSTRUCTION'" >&2; exit 1 ;;
 esac
 
 # Must match sim_bringup.launch.py's robot_name_prefix, since that is what
@@ -217,7 +235,10 @@ fi
 blocked_aisle="${MISSION_AISLES[$((BLOCKED_ROBOT - 1))]}"
 blocked_tree="${MISSION_FIRST_TREES[$((BLOCKED_ROBOT - 1))]}"
 person_tree=0; truck_tree=0
-[ "$OBSTRUCTION" = "person" ] && person_tree="$blocked_tree" || truck_tree="$blocked_tree"
+case "$OBSTRUCTION" in
+    person) person_tree="$blocked_tree" ;;
+    truck)  truck_tree="$blocked_tree" ;;
+esac
 blocked_ns="$(namespace_for "$BLOCKED_ROBOT")"
 cat <<BANNER
 
@@ -225,17 +246,24 @@ cat <<BANNER
 BANNER
 for i in $(seq 1 "$ROBOT_COUNT"); do
     marker=""
-    [ "$i" -eq "$BLOCKED_ROBOT" ] && marker="   <-- the ${OBSTRUCTION} is in THIS aisle"
+    [ "$i" -eq "$BLOCKED_ROBOT" ] && [ "$OBSTRUCTION" != none ] \
+        && marker="   <-- the ${OBSTRUCTION} is in THIS aisle"
     printf '    %s%-8s aisle %-3s %s%s\n' "" "$(namespace_for "$i")" \
         "${MISSION_AISLES[$((i - 1))]}" "$(basename "${MISSION_BINS[$((i - 1))]}")" "$marker"
 done
+if [ "$OBSTRUCTION" != none ]; then
 cat <<BANNER
 
   The ${OBSTRUCTION} is spawned for you at tree ${blocked_tree}'s row waypoint -- the
   spot ${blocked_ns} must reach before it can approach that tree. A person blocks
   that pose and leaves the lane open; a truck lies across the lane, so nothing
-  further down the aisle is reachable either. OBSTRUCTION=person|truck picks.
+  further down the aisle is reachable either. OBSTRUCTION=person|truck|none picks.
   To move it by hand: amiga_ros2_gazebo/scripts/spawn_${OBSTRUCTION}.py
+BANNER
+fi
+cat <<BANNER
+
+  mission:   ${MISSION}
 
   reasoning: ${AGENT_MODEL}
   vision:    ${VLM_URL}

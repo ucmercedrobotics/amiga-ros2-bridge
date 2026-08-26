@@ -42,6 +42,7 @@ ALL_CAPABILITIES = [
     "OrientRobotHeading",
     "FollowPerson",
     "SampleLeaf",
+    "HarvestFruit",
     "MoveArmToPosition",
     "Wait",
 ]

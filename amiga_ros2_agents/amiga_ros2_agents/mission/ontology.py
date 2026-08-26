@@ -66,12 +66,27 @@ AT_GPS = "at_gps"
 IN_AISLE = "in_aisle"
 #: Tree ``t`` has been sampled. Latches.
 SAMPLED_TREE = "sampled_tree"
+#: Tree ``t`` has been harvested. Latches, and deliberately distinct from
+#: ``sampled_tree``: a mission that asked for fruit is not satisfied by a leaf.
+HARVESTED_TREE = "harvested_tree"
 #: The arm is at a commanded pose. Latches.
 ARM_POSITIONED = "arm_positioned"
 
 #: Facts that stay true once true. Having sampled a tree survives driving away
 #: from it; being at the tree does not.
-LATCHING = frozenset({SAMPLED_TREE, ARM_POSITIONED})
+LATCHING = frozenset({SAMPLED_TREE, HARVESTED_TREE, ARM_POSITIONED})
+
+#: The actions that finish a mission's work at a tree, and the fact each leaves
+#: behind. Both bind to the ``MoveToTreeID`` ahead of them and both are what a
+#: plan is *for*, so pruning and the completed-objectives ledger treat them
+#: alike -- see ``_objective_bindings``. An action missing from here is
+#: invisible to both: its tree never counts as done, so a redeployed plan still
+#: contains it and the executor, which rebuilds from the root every time, does
+#: the work again.
+OBJECTIVE_FACTS = {
+    "SampleLeaf": SAMPLED_TREE,
+    "HarvestFruit": HARVESTED_TREE,
+}
 
 #: Where the robot is. One at a time: establishing any of these retracts the
 #: others, which is what makes "sample where you last moved to" mean something.
@@ -343,6 +358,31 @@ def _sample_leaf(element, orchard, state) -> dict:
     }
 
 
+def _harvest_fruit(element, orchard, state) -> dict:
+    """HarvestFruit: SampleLeaf's shape, a different achievement.
+
+    Picks from whatever the robot is in front of, so it needs the same
+    ``at_tree`` and is refused in a state that does not say where that is.
+
+    What it establishes is its own fact rather than ``sampled_tree``. The two
+    are different work on the same object -- a plan that harvested a tree has
+    not sampled it -- and sharing the predicate would let a mission asking for
+    one be satisfied by the other, which is exactly the kind of quiet
+    substitution the objective gate exists to catch.
+
+    Picking nothing is not modelled here. An empty tree is a fact about the
+    orchard, not about the plan: the action reports what it got, and whether
+    that is worth another robot's time is a judgement made from the camera,
+    not from the schema.
+    """
+    at = state.holding(AT_TREE) if state is not None else None
+    return {
+        "needs": (Need(AT_TREE, REQUIRED),),
+        "establishes": () if at is None else (Fact(HARVESTED_TREE, at.arg),),
+        "proposition": ACHIEVEMENT,
+    }
+
+
 def _gps(element, orchard, state) -> dict:
     """MoveToGPSLocation / ApproachGPSWaypoint: a place named absolutely."""
     lat, lon = element.get("latitude"), element.get("longitude")
@@ -400,6 +440,7 @@ TABLE: Dict[str, object] = {
     "FollowPerson": _follow,
     "MoveArmToPosition": _arm,
     "SampleLeaf": _sample_leaf,
+    "HarvestFruit": _harvest_fruit,
     "Wait": _wait,
 }
 
@@ -663,28 +704,35 @@ def _drop_emptied_controls(root) -> None:
                 parent.remove(element)
 
 
-def sample_leaf_trees(root, orchard=None) -> Dict[str, str]:
-    """Every ``SampleLeaf``'s ``name`` -> the tree id it binds to.
+def objective_trees(root, orchard=None) -> Dict[str, str]:
+    """Every objective action's ``name`` -> the tree id it binds to.
 
     BT.CPP reports a leaf's *name* on status-change, not a tree id -- that
     attribute lives on the ``MoveToTreeID`` ahead of it, which is this
     schema's concept, not BT.CPP's. This is how a SUCCESS event's ``node``
     field (e.g. ``"sample_tree60"``) becomes a tree id for a completed-
     objectives ledger, using the same binding ``prune_completed`` removes by.
+
+    Covers every action in ``OBJECTIVE_FACTS``, so a harvest counts as done
+    the same way a sample does.
     """
     return {
-        (sample.get("name") or ""): tree_id
-        for _, sample, tree_id in _objective_bindings(root, orchard)
+        (objective.get("name") or ""): tree_id
+        for _, objective, tree_id in _objective_bindings(root, orchard)
     }
 
 
 def _objective_bindings(root, orchard=None):
-    """Every ``(MoveToTreeID, SampleLeaf, tree_id)`` triple in the plan.
+    """Every ``(MoveToTreeID, objective, tree_id)`` triple in the plan.
 
-    The binding ``advance`` computes -- which tree a sample lands on is a
+    The binding ``advance`` computes -- which tree the work lands on is a
     function of where the state says the robot is, not of anything on the
-    ``SampleLeaf`` element itself -- kept here instead of discarded, for
-    ``prune_completed`` and ``sample_leaf_trees`` to share.
+    objective element itself -- kept here instead of discarded, for
+    ``prune_completed`` and ``objective_trees`` to share.
+
+    Every action in ``OBJECTIVE_FACTS`` binds, not ``SampleLeaf`` alone: a
+    harvest is a mission's work in exactly the way a sample is, and a harvest
+    that did not bind would never be pruned from a redeployed plan.
     """
     state = State()
     last_move_for: Dict[str, object] = {}
@@ -696,12 +744,11 @@ def _objective_bindings(root, orchard=None):
         ):
             last_move_for[(element.get("id") or "").strip()] = element
         step, state = advance(state, element, orchard)
-        if element.tag == "SampleLeaf":
-            sampled = next(
-                (f for f in step.establishes if f.kind == SAMPLED_TREE), None
-            )
-            if sampled is not None and sampled.arg in last_move_for:
-                out.append((last_move_for[sampled.arg], element, sampled.arg))
+        kind = OBJECTIVE_FACTS.get(element.tag)
+        if kind is not None:
+            done = next((f for f in step.establishes if f.kind == kind), None)
+            if done is not None and done.arg in last_move_for:
+                out.append((last_move_for[done.arg], element, done.arg))
     return out
 
 

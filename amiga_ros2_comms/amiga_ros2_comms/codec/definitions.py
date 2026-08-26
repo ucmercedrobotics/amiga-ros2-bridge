@@ -114,6 +114,7 @@ class Capability(IntEnum):
     SAMPLE_LEAF = 7
     MOVE_ARM_TO_POSITION = 8
     WAIT = 9
+    HARVEST_FRUIT = 10
 
 
 #: Capability -> the XML element name it stands for. The mapping is explicit
@@ -130,6 +131,7 @@ XML_ELEMENT = {
     Capability.SAMPLE_LEAF: "SampleLeaf",
     Capability.MOVE_ARM_TO_POSITION: "MoveArmToPosition",
     Capability.WAIT: "Wait",
+    Capability.HARVEST_FRUIT: "HarvestFruit",
 }
 
 #: XML element name -> Capability. The direction the mission-XML side needs.

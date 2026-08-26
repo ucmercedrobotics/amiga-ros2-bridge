@@ -244,6 +244,9 @@ vlm-demo:
 truck-demo:
 	OBSTRUCTION=truck ./scripts/demo_vlm_human.sh
 
+harvest-demo:
+	MISSION=harvest OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
 vlm-demo-stop:
 	./scripts/demo_vlm_human.sh stop
 
