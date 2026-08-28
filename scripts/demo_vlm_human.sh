@@ -54,6 +54,7 @@
 #   ./scripts/demo_vlm_human.sh                   # a person in the aisle
 #   OBSTRUCTION=truck ./scripts/demo_vlm_human.sh  # a lane blocked by vehicles
 #   MISSION=harvest ./scripts/demo_vlm_human.sh    # fruit, and some trees have none
+#   BLINDED=1 OBSTRUCTION=none ./scripts/demo_vlm_human.sh   # sun-blinded leaf detector
 #
 #   ./scripts/demo_vlm_human.sh stop     # tear down, gz orphans included
 #
@@ -131,6 +132,27 @@ case "$OBSTRUCTION" in
     *) echo "OBSTRUCTION must be 'person', 'truck' or 'none', got '$OBSTRUCTION'" >&2; exit 1 ;;
 esac
 
+# BLINDED=1 breaks one robot's leaf detector the way low sun breaks it: the
+# action fails, the sensor is fine, and the branch is not bare. The other two
+# sampler failures already in the sim are the two WRONG answers to this one --
+# no_point_cloud is a dead camera and belongs to a peer, no_leaves is an empty
+# branch and belongs to nobody -- so the fleet has to tell three cases apart,
+# not two.
+#
+# It needs a picture to be diagnosed from, and Gazebo has none to give: a
+# directional light does not blow out a frame or throw flare across it, so the
+# camera would honestly report an ordinary orchard and the chain would have no
+# evidence in it. sunny.png is the real thing, taken by the arm on a day this
+# actually happened, and the VLM answers from it while the fault is staged.
+#
+# The camera also changes. Every other demo here shows the front Oak-D, which
+# is right when a person or a truck is in the aisle. This fault is in what the
+# ARM can see, and a front-camera description held against an arm-camera
+# failure is a comparison between two devices -- from which "the arm's sensor
+# must be dead" is the sound conclusion, and the wrong one.
+BLINDED="${BLINDED:-0}"
+
+
 # Must match sim_bringup.launch.py's robot_name_prefix, since that is what
 # names both the namespaces and the virtual radio's per-robot ptys.
 ROBOT_PREFIX="${ROBOT_PREFIX:-amiga}"
@@ -142,6 +164,25 @@ HEADLESS="${HEADLESS:-false}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_PATH="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+BLIND_IMAGE="${BLIND_IMAGE:-${PROJECT_PATH}/sunny.png}"
+if [ "$BLINDED" = "1" ]; then
+    if [ ! -f "$BLIND_IMAGE" ]; then
+        echo "BLINDED=1 needs an image at ${BLIND_IMAGE}" >&2; exit 1
+    fi
+    if [ "$MISSION" != "sample" ]; then
+        echo "BLINDED=1 is a leaf-sampling fault; use MISSION=sample" >&2; exit 1
+    fi
+    blind_args="broken_sampler_robot:=${BLOCKED_ROBOT} broken_sampler_mode:=no_masks"
+    blind_args="${blind_args} vlm_image_topic:=camera/color/image_raw"
+    blind_args="${blind_args} vlm_static_image:=${BLIND_IMAGE}"
+    # No apostrophe: this travels through a shell string, a tmux send-keys and
+    # a ros2 launch argument, and every one of them would need it escaped again.
+    blind_args="${blind_args} describe_frame:=true"
+    blind_args="${blind_args} camera_description:='the arm camera, the same one the failing step was looking through'"
+else
+    blind_args=""
+fi
 cd "$PROJECT_PATH" || exit 1
 
 # Both patterns are anchored, and that is not cosmetic: `pkill -f` matches the
@@ -287,7 +328,7 @@ tmux set -g history-limit 500000
 
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${person_tree} spawn_truck:=${truck_tree} ltl_verification:=false objective_gating:=true 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${person_tree} spawn_truck:=${truck_tree} ltl_verification:=false objective_gating:=true ${blind_args} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"

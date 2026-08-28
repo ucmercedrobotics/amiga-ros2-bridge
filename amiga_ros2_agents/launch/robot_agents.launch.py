@@ -176,6 +176,28 @@ def generate_launch_description() -> LaunchDescription:
                 "robot in a simulated fleet at robot 1's camera.",
             ),
             DeclareLaunchArgument(
+                "describe_frame",
+                default_value="false",
+                description="Have the camera describe the image itself -- "
+                "glare, washout -- as well as its contents. Off by default: it "
+                "also makes the robot's own arm much more likely to be "
+                "described, which reads as an obstruction.",
+            ),
+            DeclareLaunchArgument(
+                "camera_description",
+                default_value="the front camera",
+                description="How the routing prompt names the camera the "
+                "description came from. Change it with vlm_image_topic or the "
+                "prompt says the wrong device.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_static_image",
+                default_value="",
+                description="Answer camera questions from this file rather "
+                "than the live topic. For a fault the simulator cannot stage; "
+                "empty (default) uses the camera.",
+            ),
+            DeclareLaunchArgument(
                 "battery_percent",
                 default_value="100",
                 description="What the mission bridge reports to the coordinator. "
@@ -216,6 +238,13 @@ def generate_launch_description() -> LaunchDescription:
                             "use_vlm": ParameterValue(
                                 LaunchConfiguration("launch_vlm"), value_type=bool
                             ),
+                            "camera_description": LaunchConfiguration(
+                                "camera_description"
+                            ),
+                            "describe_frame": ParameterValue(
+                                LaunchConfiguration("describe_frame"),
+                                value_type=bool,
+                            ),
                         }
                     ],
                     **common,
@@ -244,9 +273,15 @@ def generate_launch_description() -> LaunchDescription:
                         "use_sim_time": use_sim_time,
                         "service_name": "vlm/ask",
                         "image_topic": LaunchConfiguration("vlm_image_topic"),
+                        "static_image_path": LaunchConfiguration("vlm_static_image"),
                         "vlm_url": LaunchConfiguration("vlm_url"),
-                        "system_prompt": "You are looking through the front "
-                        "camera of a robot working in a pistachio orchard. "
+                        # Deliberately says "a camera", not "the front camera":
+                        # which one it is depends on vlm_image_topic, and a
+                        # system prompt insisting on the front one while the
+                        # node subscribes to the wrist would put a falsehood in
+                        # front of the model on every single call.
+                        "system_prompt": "You are looking through a camera on "
+                        "a robot working in a pistachio orchard. "
                         "Describe only what is visible. Never guess at causes.",
                         # Well under triage's own 8 s deadline, so the far end
                         # gives up before the caller does and the log says the

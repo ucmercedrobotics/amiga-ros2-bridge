@@ -118,6 +118,10 @@ VALID_DISPOSITIONS = ("drop", "hold", "request_human")
 # happen to a fault: this robot's planner has another go, or the fleet is told.
 VALID_ROUTES = ("repair", "escalate")
 
+#: What the routing prompt calls the camera when nothing says otherwise. The
+#: front Oak-D, which is what every demo but the blinded-detector one shows.
+DEFAULT_CAMERA_DESCRIPTION = "the front camera"
+
 #: Where the verdict goes. The planner blocks on this before it opens a
 #: planning session, so the name is part of the contract between the two nodes.
 ROUTE_TOPIC = "/mission/fault_route"
@@ -171,6 +175,15 @@ class TriageNode(Node):
         )
         self.declare_parameter("vlm_service", vlm_client.DEFAULT_SERVICE)
         self.declare_parameter("vlm_timeout_sec", vlm_client.DEFAULT_TIMEOUT_SEC)
+        self.declare_parameter("describe_frame", False)
+        self.describe_frame = bool(
+            self.get_parameter("describe_frame").get_parameter_value().bool_value
+        )
+        self.declare_parameter("camera_description", DEFAULT_CAMERA_DESCRIPTION)
+        self.camera_description = str(
+            self.get_parameter("camera_description").get_parameter_value().string_value
+            or DEFAULT_CAMERA_DESCRIPTION
+        )
 
         self.log_buffer: deque = deque()
         self.world_state_frames: deque = deque(maxlen=WORLD_STATE_FRAMES)
@@ -336,7 +349,9 @@ class TriageNode(Node):
             return ""
 
         try:
-            answer = self.vlm.ask(vlm_client.DESCRIBE_QUESTION)
+            answer = self.vlm.ask(
+                vlm_client.describe_question(self.describe_frame)
+            )
         except Exception as exc:  # noqa: BLE001 - a service, a socket, a model
             self.get_logger().warn(f"the camera failed ({exc})")
             return "(the camera did not answer — decide from the rest)"
@@ -519,6 +534,7 @@ class TriageNode(Node):
             fault=json.dumps(event, indent=2),
             log_context=evidence["logs"] or "(no log lines in the window)",
             visual_context=evidence["visual"],
+            camera_description=self.camera_description,
             world_state=evidence["world"] or "(no world-state frame)",
             local_attempts=attempts or "(none)",
             mission_xml=mission_xml or "(no plan received yet)",

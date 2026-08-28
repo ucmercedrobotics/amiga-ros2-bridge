@@ -176,6 +176,10 @@ def launch_setup(context, *args, **kwargs):
     )
     launch_vlm = LaunchConfiguration("launch_vlm").perform(context).lower()
     vlm_url = LaunchConfiguration("vlm_url").perform(context)
+    vlm_image_topic = LaunchConfiguration("vlm_image_topic").perform(context)
+    vlm_static_image = LaunchConfiguration("vlm_static_image").perform(context)
+    camera_description = LaunchConfiguration("camera_description").perform(context)
+    describe_frame = LaunchConfiguration("describe_frame").perform(context)
     # 0 (default) means nobody: an ordinary sim run has no broken arm. Set it
     # to a robot index to give exactly that robot a camera fault, which is the
     # kind of failure a peer can take over -- unlike a missing tree, which no
@@ -481,7 +485,36 @@ def launch_setup(context, *args, **kwargs):
                     # the topic sim_hardware_shims republishes the Gazebo front
                     # camera on, so it is the same name the real Oak-D driver
                     # publishes and nothing below the shim layer changes.
-                    vlm_image_topic="oak0/rgb/image_raw",
+                    #
+                    # Both scoped to the broken robot, for the same reason
+                    # sampler_fail_goals is: the fault belongs to one robot, so
+                    # the evidence for it has to as well. A fleet-wide static
+                    # image would answer every OTHER robot's camera questions
+                    # with a photograph of a fault they do not have -- and a
+                    # healthy robot reasoning from a picture of somebody else's
+                    # glare is the same failure as a robot reading its own arm
+                    # as an obstruction.
+                    vlm_image_topic=(
+                        vlm_image_topic
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "oak0/rgb/image_raw"
+                    ),
+                    vlm_static_image=(
+                        vlm_static_image if i == broken_sampler_robot else ""
+                    ),
+                    # Follows the topic: the robots still on the front camera
+                    # must keep the front camera's sentence, or their routing
+                    # prompt describes a device they are not looking through.
+                    camera_description=(
+                        camera_description
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "the front camera"
+                    ),
+                    describe_frame=(
+                        describe_frame
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "false"
+                    ),
                 )
             )
 
@@ -574,9 +607,16 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "broken_sampler_mode",
                 default_value="no_point_cloud",
-                description="How that robot's sampler fails. no_point_cloud is "
-                "a fault in that robot (a peer with a working camera is the "
-                "right answer); no_leaves is permanent for everyone.",
+                description="How that robot's sampler fails, and each mode has "
+                "a different right answer. no_point_cloud is a fault in that "
+                "robot, so a peer with a working camera should take the work; "
+                "no_leaves is permanent for everyone, so it should be dropped; "
+                "no_masks is neither -- the sensor works and the branch is not "
+                "bare, the detector was simply defeated by the conditions, so "
+                "a different position or moment is what fixes it. That third "
+                "one needs the camera to show the conditions: pair it with "
+                "vlm_static_image, because Gazebo will not render a sun-blinded "
+                "frame.",
             ),
             DeclareLaunchArgument(
                 "launch_coordination",
@@ -624,6 +664,44 @@ def generate_launch_description():
                 "what asks -- and a vision model on vlm_url: a separate model "
                 "and endpoint from the one the agents reason with. Off by "
                 "default.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_image_topic",
+                # The front camera, which is what the obstruction demos want:
+                # a person or a vehicle in the aisle is in front of the rover,
+                # not in front of the arm. A fault in the ARM's own seeing
+                # wants the other one -- /camera/color/image_raw, the wrist
+                # RealSense the leaf segmenter reads -- because comparing a
+                # front-camera view against an arm-camera failure is comparing
+                # two different devices, and the honest conclusion from that is
+                # the one the reasoning model kept drawing: the arm's sensor
+                # must be dead.
+                default_value="oak0/rgb/image_raw",
+                description="Which camera the vlm_server describes. The front "
+                "Oak-D by default; use camera/color/image_raw for faults in "
+                "what the arm itself can see.",
+            ),
+            DeclareLaunchArgument(
+                "describe_frame",
+                default_value="false",
+                description="Camera reports the state of the image as well as "
+                "its contents. Off by default -- it also makes the robot's own "
+                "arm much more likely to be described.",
+            ),
+            DeclareLaunchArgument(
+                "camera_description",
+                default_value="the front camera",
+                description="How the routing prompt names the camera. Must "
+                "agree with vlm_image_topic.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_static_image",
+                default_value="",
+                description="Answer every camera question from this file "
+                "instead of the live topic. For faults the simulator cannot "
+                "stage -- Gazebo will not blow out a frame with low sun, so a "
+                "blinded detector has no picture to be diagnosed from. Empty "
+                "(default) uses the camera.",
             ),
             DeclareLaunchArgument(
                 "vlm_url",

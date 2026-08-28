@@ -120,3 +120,20 @@ DESCRIBE_QUESTION = (
     "way, whether a path is clear, whether the image is usable, or what the "
     "robot should do. Something else decides all of that from what you report."
 )
+
+
+DESCRIBE_FRAME_SENTENCE = "Describe the frame itself as well as what is in it."
+
+
+def describe_question(include_frame: bool = False) -> str:
+    """The question to put to the camera.
+
+    ``include_frame`` adds ``DESCRIBE_FRAME_SENTENCE`` after the list of things
+    to name, which is where it was measured -- the list stays, so a person is
+    still called a person.
+    """
+    if not include_frame:
+        return DESCRIBE_QUESTION
+    marker = "what it means.\n\n"
+    at = DESCRIBE_QUESTION.index(marker) + len(marker)
+    return DESCRIBE_QUESTION[:at] + DESCRIBE_FRAME_SENTENCE + "\n\n" + DESCRIBE_QUESTION[at:]

@@ -39,6 +39,15 @@ class VlmServer(Node):
         # whole VLM being down.
         self.declare_parameter("min_tokens", 0)
         self.declare_parameter("jpeg_quality", 85)
+        # A file to answer from instead of the live topic. Empty -- the default
+        # -- means the camera, which is what a robot and every ordinary sim run
+        # uses. It exists for the faults a simulator cannot stage: Gazebo's
+        # directional sun does not blow out a frame or throw lens flare, so a
+        # sun-blinded leaf detector has no picture to be diagnosed from and the
+        # camera honestly reports an ordinary orchard. The mocks already fake
+        # the failure; this fakes the one piece of evidence that explains it,
+        # from a photograph the arm actually took.
+        self.declare_parameter("static_image_path", "")
         # Generous for a hand-driven `ros2 service call` against a cold model.
         # Every automated caller overrides it downward -- the agent launch files
         # pass 6.0, because triage gives up at 8.0 and a reply nobody is still
@@ -52,6 +61,24 @@ class VlmServer(Node):
         self._max_tokens: int = int(self.get_parameter("max_tokens").value)
         self._min_tokens: int = int(self.get_parameter("min_tokens").value)
         self._jpeg_quality: int = int(self.get_parameter("jpeg_quality").value)
+        self._static_path: str = str(self.get_parameter("static_image_path").value or "")
+        self._static_bgr = None
+        if self._static_path:
+            self._static_bgr = cv2.imread(self._static_path)
+            if self._static_bgr is None:
+                # Loud, and then carry on with the camera. A demo that silently
+                # answered from the live topic would look like the model failing
+                # to see what it was shown.
+                self.get_logger().error(
+                    f"static_image_path={self._static_path} could not be read — "
+                    "falling back to the camera"
+                )
+            else:
+                h, w = self._static_bgr.shape[:2]
+                self.get_logger().warn(
+                    f"answering every question from {self._static_path} ({w}x{h}), "
+                    "NOT the camera"
+                )
         self._http_timeout: float = float(self.get_parameter("http_timeout_sec").value)
 
         self._bridge = CvBridge()
@@ -108,8 +135,11 @@ class VlmServer(Node):
             return response
 
         with self._infer_lock:
-            with self._frame_lock:
-                frame = None if self._latest_bgr is None else self._latest_bgr.copy()
+            if self._static_bgr is not None:
+                frame = self._static_bgr.copy()
+            else:
+                with self._frame_lock:
+                    frame = None if self._latest_bgr is None else self._latest_bgr.copy()
 
             if frame is None:
                 response.success = False
