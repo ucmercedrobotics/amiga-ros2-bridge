@@ -47,31 +47,28 @@ class Orchard:
     in agreement with ``nav_ports`` about the other four.
     """
 
-    def __init__(
-        self,
-        aisle_by_tree: Optional[Dict[int, int]] = None,
-        aisles_by_tree: Optional[Dict[int, tuple]] = None,
-    ):
-        self._aisle_by_tree = dict(aisle_by_tree or {})
+    def __init__(self, aisles_by_tree: Optional[Dict[int, tuple]] = None):
         self._aisles_by_tree = {k: tuple(v) for k, v in (aisles_by_tree or {}).items()}
 
     def __bool__(self) -> bool:
         """False when nothing is known, so ``orchard or None`` reads naturally."""
-        return bool(self._aisle_by_tree)
+        return bool(self._aisles_by_tree)
 
     def __len__(self) -> int:
-        return len(self._aisle_by_tree)
+        return len(self._aisles_by_tree)
 
     def aisle_of(self, tree) -> Optional[int]:
         """The aisle tree ``tree`` is reached from, or None if unknown.
 
+        The nearer of the two lanes that flank the tree's row, which is the
+        suggestion a prerequisite chain wants: one route, and ``aisles_of`` for
+        the case where that one is unusable.
+
         Accepts the string form too, because that is what an XML attribute is
         and every caller here is holding one.
         """
-        try:
-            return self._aisle_by_tree.get(int(tree))
-        except (TypeError, ValueError):
-            return None
+        sides = self.aisles_of(tree)
+        return sides[0] if sides else None
 
     def aisles_of(self, tree) -> tuple:
         """Every aisle tree ``tree`` can be worked from, lowest first.
@@ -104,14 +101,8 @@ class Orchard:
         and that absence is exactly what makes this set worth stating rather
         than assumed.
 
-        Taken from the two-sided map rather than from ``aisle_of``, because the
-        two disagree at the edges and only one of them is about what a plan can
-        say: the lowest row's own index names a lane that is off the block, and
-        the highest row is reached from a lane no row is numbered after.
         """
-        if self._aisles_by_tree:
-            return {a for sides in self._aisles_by_tree.values() for a in sides}
-        return set(self._aisle_by_tree.values())
+        return {a for sides in self._aisles_by_tree.values() for a in sides}
 
 
 def parse(payload) -> Orchard:
@@ -132,21 +123,7 @@ def parse(payload) -> Orchard:
     if field is None:
         return Orchard()
 
-    declared = _declared_aisles(data)
-    aisle_by_tree: Dict[int, int] = {}
-    for tree in data.get("trees") or []:
-        if not isinstance(tree, dict):
-            continue
-        index, aisle = tree.get("tree_index"), tree.get(field)
-        if not isinstance(index, int) or not isinstance(aisle, int):
-            continue
-        # An index the orchard does not list as an aisle is the outer column,
-        # which no MoveToAisleHead can name; see the module docstring.
-        if declared and aisle not in declared:
-            continue
-        aisle_by_tree[index] = aisle
-
-    return Orchard(aisle_by_tree, _aisles_by_row(data, field, declared))
+    return Orchard(_aisles_by_row(data, field, _declared_aisles(data)))
 
 
 def _aisles_by_row(data: dict, field: str, declared: set) -> Dict[int, tuple]:

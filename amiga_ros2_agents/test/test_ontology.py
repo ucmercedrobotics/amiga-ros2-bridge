@@ -524,7 +524,9 @@ def test_a_shared_aisle_head_survives_for_the_tree_still_pending():
         b'<MoveToAisleHead name="exit" id="6"/>'
         b"</Sequence>"
     )
-    orchard_map = orchard.Orchard({55: 6, 60: 6})
+    # Both trees on the same lane, and that lane the only one that reaches
+    # them: an edge row, where a tree has a lane on one side only.
+    orchard_map = orchard.Orchard({55: (6,), 60: (6,)})
     pruned = ontology.prune_completed(plan, {"55"}, orchard_map)
     remaining_ids = {
         el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"

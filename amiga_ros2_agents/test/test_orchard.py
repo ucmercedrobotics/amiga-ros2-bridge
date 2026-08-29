@@ -66,14 +66,18 @@ def test_an_attribute_string_answers_the_same_as_an_int(orchard_map):
     assert orchard_map.aisle_of("20") == orchard_map.aisle_of(20) == 2
 
 
-def test_the_outer_column_has_no_aisle_of_its_own(payload, orchard_map):
-    """One more row/column than there are aisles: the last index is not one.
+def test_the_outer_row_is_reached_from_one_side_only(payload, orchard_map):
+    """One more row/column than there are aisles, so the last one has a lane on
+    a single side and open field on the other.
 
-    Returning it anyway would look right and send a robot down a lane that does
-    not exist. Unknown is a suggestion nobody makes; wrong is a robot in the
-    wrong place. The field that carries the aisle is whichever one
-    ``traversal_axis`` names -- this fixture travels by row, so it is ``row``,
-    not ``col``.
+    It used to answer ``None`` here, on the reasoning that the outer index is
+    not itself an aisle -- true, and the wrong conclusion drawn from it. A row
+    is not unreachable because it is on the edge; it is reachable from the one
+    lane it still has. ``None`` cost the planner the only route there and cost
+    ``synthesize`` the aisle move for any task at one of those trees.
+
+    The field that carries the position is whichever one ``traversal_axis``
+    names -- this fixture travels by row, so it is ``row``, not ``col``.
     """
     data = json.loads(payload)
     field = orchard.AXIS_FIELD[data["traversal_axis"]]
@@ -85,7 +89,25 @@ def test_the_outer_column_has_no_aisle_of_its_own(payload, orchard_map):
     stranded = [t["tree_index"] for t in data["trees"] if t[field] == outer]
     assert stranded
     for tree in stranded:
-        assert orchard_map.aisle_of(tree) is None
+        sides = orchard_map.aisles_of(tree)
+        assert len(sides) == 1, f"tree {tree} is on the edge, so one lane only"
+        # And whatever that lane is, it has to be one a plan may name.
+        assert sides[0] in orchard_map.aisles()
+        assert orchard_map.aisle_of(tree) == sides[0]
+
+
+def test_the_two_accessors_cannot_disagree(orchard_map):
+    """``aisle_of`` is the first of ``aisles_of``, everywhere, by construction.
+
+    Regression: these were two stored maps built by different rules. They
+    matched for the 108 trees in the middle rows and diverged for the 36 in the
+    outermost two -- row 1 answering aisle 1, which is off the block, and row 8
+    answering None. Deriving one from the other is what makes that class of
+    disagreement unrepresentable rather than merely absent.
+    """
+    for tree in range(1, 145):
+        sides = orchard_map.aisles_of(tree)
+        assert orchard_map.aisle_of(tree) == (sides[0] if sides else None)
 
 
 def test_a_row_traversal_reads_the_other_index():
