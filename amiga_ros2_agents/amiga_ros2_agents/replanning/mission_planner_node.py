@@ -29,6 +29,7 @@ from collections import deque
 from threading import Condition, Lock, Thread
 from typing import Dict, List, Optional, Set
 
+from amiga_ros2_comms.codec import Target, TargetKind
 from lxml import etree
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
@@ -129,10 +130,10 @@ class MissionPlannerNode(Node):
         # completed_trees above stays because pruning removes work by tree id,
         # which is the one place a tree id is genuinely the right key.
         self.succeeded_nodes: List[str] = []
-        # Trees a peer won from this robot at auction. Not "done" -- done
+        # Targets a peer won from this robot at auction. Not "done" -- done
         # somewhere else, which for planning purposes means the same thing:
-        # putting one back drives this robot to a tree another one is already
-        # driving to.
+        # sending this robot there too puts it where another one is already
+        # going.
         #
         # Needed because the plan alone cannot say it. `remove_task` takes the
         # transferred objective out of the XML, but the <Mission> text is a
@@ -144,7 +145,7 @@ class MissionPlannerNode(Node):
         # to end: amiga3 gave tree 20 to amiga2, dropped it correctly for two
         # plans, then re-added it -- and the two robots deadlocked in aisle 2,
         # one of them standing on the waypoint the other needed.
-        self.transferred_trees: Set[str] = set()
+        self.transferred_targets: Set[Target] = set()
         self.fault_constraints: List[Dict] = []
         self._last_status: Dict = {
             "mission_xml_received": False,
@@ -510,31 +511,63 @@ class MissionPlannerNode(Node):
         ).start()
 
     def _record_ownership_change(self, cause: str, target) -> None:
-        """Remember which trees stopped being this robot's, and which came back.
+        """Remember which targets stopped being this robot's, and which came back.
 
-        Only tree targets: an aisle or a GPS pair is not an objective anything
-        would re-add, and guessing which trees an aisle stood for would put
-        work nobody transferred out of reach.
+        Every kind of target, not just trees -- an aisle or a GPS waypoint a
+        peer took is exactly as re-sendable-to as a tree is, so excluding them
+        left a hole this ledger exists to close.
 
-        Absorbing clears the mark rather than ignoring it, so a tree handed
+        Absorbing clears the mark rather than ignoring it, so a target handed
         away and later won back is plannable again -- the ledger tracks who
         owns the work now, not what has ever left.
         """
-        if not isinstance(target, dict) or str(target.get("kind")) != "tree":
+        if not isinstance(target, dict):
             return
-        tree_id = str(target.get("a") or "").strip()
-        if not tree_id:
+        try:
+            parsed = Target(
+                kind=TargetKind[str(target.get("kind", "none")).upper()],
+                a=int(target.get("a") or 0),
+                b=int(target.get("b") or 0),
+            )
+        except (KeyError, ValueError, TypeError):
+            return
+        if not parsed.placed:
             return
         with self._lock:
             if cause == "task_transferred":
-                if tree_id not in self.transferred_trees:
-                    self.transferred_trees.add(tree_id)
+                if parsed not in self.transferred_targets:
+                    self.transferred_targets.add(parsed)
                     self.get_logger().info(
-                        f"Tree {tree_id} is a peer's now — excluding it from "
+                        f"{parsed} is a peer's now — excluding it from "
                         "future replans"
                     )
             elif cause == "task_absorbed":
-                self.transferred_trees.discard(tree_id)
+                self.transferred_targets.discard(parsed)
+
+    def _strip_transferred(self, xml: str, transferred: "Set[Target]") -> Optional[str]:
+        """``xml`` with any task on a transferred target cut out.
+
+        The mission text still names transferred work, so a model asked not to
+        restore it can still do so by reading the <Mission> line rather than
+        the instruction. This is the check that catches it regardless: a
+        task's target survives an edit even when its element names do not, so
+        matching on target (not on task_id, which the edit can freely change)
+        is what makes this a backstop and not just another prompt.
+
+        Returns None if nothing is left to run.
+        """
+        for task in mission_tasks.tasks_in(xml):
+            if task.target not in transferred:
+                continue
+            stripped = mission_tasks.remove_task(xml, task.task_id)
+            if stripped is None:
+                continue
+            self.get_logger().warn(
+                f"  Edit re-added {task.target}, which belongs to a peer — "
+                "removing it before publishing"
+            )
+            xml = stripped
+        return xml if mission_tasks.tasks_in(xml) else None
 
     def _on_rejection(self, msg: String):
         """Arbiter rejected our last candidate — retry with the reason as feedback,
@@ -742,7 +775,7 @@ class MissionPlannerNode(Node):
         with self._lock:
             completed = set(self.completed_trees)
             succeeded = list(self.succeeded_nodes)
-            transferred = set(self.transferred_trees)
+            transferred = set(self.transferred_targets)
             orchard_map = self.orchard
         try:
             active_doc = etree.fromstring(xml.encode("utf-8"))
@@ -841,7 +874,7 @@ class MissionPlannerNode(Node):
             orchard_facts=orchard_facts,
             known_aisles=known_aisles,
             completed_trees=sorted(completed),
-            transferred_trees=sorted(transferred),
+            transferred_targets=sorted(str(t) for t in transferred),
             succeeded_nodes=succeeded,
             prior_fault_constraints=prior_fault_constraints,
             route_guidance=route_guidance,
@@ -852,7 +885,7 @@ class MissionPlannerNode(Node):
             f"  Calling model ({llm.MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
             f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
-            f"transferred_trees={sorted(transferred)}"
+            f"transferred_targets={sorted(str(t) for t in transferred)}"
         )
 
         # 7. Call LLM
@@ -875,6 +908,21 @@ class MissionPlannerNode(Node):
                 f"  Response preview: {edited_xml[:200]}"
             )
             return
+
+        # 8b. The mission text still names transferred work (see
+        # transferred_targets above), so a model reading it can restore what a
+        # peer already owns despite being told not to. The prompt is a
+        # courtesy; this is the backstop -- the same move as pruning completed
+        # work out before the call, done after instead, because the risk here
+        # is the model ADDING work back rather than leaving it in.
+        if transferred:
+            edited_xml = self._strip_transferred(edited_xml, transferred)
+            if edited_xml is None:
+                self.get_logger().warn(
+                    "  Edit had no work left after removing transferred "
+                    "targets — not publishing"
+                )
+                return
 
         # 9. Summarise what changed, against the pruned XML the model was
         # actually shown — not the raw active mission, which may still

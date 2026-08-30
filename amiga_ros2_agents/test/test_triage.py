@@ -972,7 +972,7 @@ def test_a_tree_won_by_a_peer_is_remembered_as_theirs(monkeypatch):
                 )
             )
         )
-        assert planner.transferred_trees == {"20"}
+        assert planner.transferred_targets == {Target.tree(20)}
 
         # Won back: the ledger says who owns the work now, not what has ever
         # left, so a tree that comes home is plannable again.
@@ -988,21 +988,48 @@ def test_a_tree_won_by_a_peer_is_remembered_as_theirs(monkeypatch):
                 )
             )
         )
-        assert planner.transferred_trees == set()
+        assert planner.transferred_targets == set()
     finally:
         planner.destroy_node()
 
 
-def test_only_tree_targets_are_recorded_as_transferred(monkeypatch):
-    """An aisle is not an objective anything would re-add, and expanding one
-    into the trees it holds would put work nobody transferred out of reach."""
+def test_an_aisle_won_by_a_peer_is_remembered_too(monkeypatch):
+    """Not just trees. An aisle or a GPS waypoint a peer took at auction is
+    exactly as re-sendable-to as a tree is -- a mission built from those
+    targets needs the same protection, or the aisle-2 deadlock recurs for any
+    non-tree task."""
     from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
 
     planner = MissionPlannerNode()
     try:
         monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
 
-        for target in ({"kind": "aisle", "a": 2, "b": 0}, None):
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_transferred",
+                        "task_id": 43808,
+                        "target": {"kind": "aisle", "a": 2, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_targets == {Target.aisle(2)}
+    finally:
+        planner.destroy_node()
+
+
+def test_an_unplaced_or_missing_target_is_not_recorded(monkeypatch):
+    """A NONE target names nowhere, so there is nothing to keep out of a plan."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        for target in ({"kind": "none", "a": 0, "b": 0}, None):
             planner._on_replan_request(
                 _string(
                     json.dumps(
@@ -1015,7 +1042,66 @@ def test_only_tree_targets_are_recorded_as_transferred(monkeypatch):
                     )
                 )
             )
-        assert planner.transferred_trees == set()
+        assert planner.transferred_targets == set()
+    finally:
+        planner.destroy_node()
+
+
+_TWO_TREE_MISSION = """<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>sample trees 20 and 64</Mission>
+  <BehaviorTree ID="SampleTrees20And64">
+    <Sequence name="SampleTreesMission">
+      <MoveToAisleHead name="EnterRow2" action_name="move_to_aisle_head" id="2"/>
+      <RetryUntilSuccessful name="SampleTree20WithRetry" num_attempts="3">
+        <Sequence name="SampleTree20">
+          <MoveToTreeID name="ApproachTree20" action_name="follow_tree_id_waypoint" id="20" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree20" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitRow2" action_name="move_to_aisle_head" id="2"/>
+      <MoveToAisleHead name="EnterRow4" action_name="move_to_aisle_head" id="4"/>
+      <RetryUntilSuccessful name="SampleTree64WithRetry" num_attempts="3">
+        <Sequence name="SampleTree64">
+          <MoveToTreeID name="ApproachTree64" action_name="follow_tree_id_waypoint" id="64" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree64" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitRow4" action_name="move_to_aisle_head" id="4"/>
+    </Sequence>
+  </BehaviorTree>
+</root>"""
+
+
+def test_strip_transferred_removes_a_target_the_model_restored():
+    """The prompt asked the model not to re-add tree 20; it did anyway,
+    reading the <Mission> line's "trees 20 and 64" rather than the
+    instruction. This is the backstop: it cuts the task by target, so it
+    catches the restoration however the model wrote the leaf names."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        result = planner._strip_transferred(
+            _TWO_TREE_MISSION, {Target.tree(20)}
+        )
+        assert result is not None
+        assert 'id="20"' not in result
+        assert 'id="64"' in result
+    finally:
+        planner.destroy_node()
+
+
+def test_strip_transferred_returns_none_when_nothing_is_left():
+    """Every tree in the mission belongs to a peer -- there is nothing this
+    robot could still publish, so the caller must not publish at all."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        result = planner._strip_transferred(
+            _TWO_TREE_MISSION, {Target.tree(20), Target.tree(64)}
+        )
+        assert result is None
     finally:
         planner.destroy_node()
 
