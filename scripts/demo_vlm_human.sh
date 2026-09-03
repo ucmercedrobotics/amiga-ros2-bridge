@@ -346,11 +346,19 @@ tmux new-window -t "$SESSION" -n agents
 tmux send-keys -t "$SESSION:agents" \
     "python3 ${PROJECT_PATH}/scripts/watch_agents.py 2>&1 | tee ${LOG_DIR}/agents.log" C-m
 
-# Two tiled windows, one pane per robot:
+# Three tiled windows, one pane per robot:
+#   watch        every LLM repair attempt -- /mission/candidate_xml. The VLM
+#                only feeds the planner a description of what the camera saw;
+#                the plan edits themselves are the same LLM loop the auction
+#                demo runs, so a rejected candidate is just as worth reading
+#                here. Without this the accepted plan (mission-xml) and the
+#                arbiter's verdict (agents) are visible but the attempt that
+#                lost is not.
 #   infeasible   fires only if a robot's local recovery gives up -- then the
 #                fleet auctions the aisle
 #   mission-xml  the accepted, currently-running plan. Started before any
 #                mission is fed, since the topic is not latched.
+tmux new-window -t "$SESSION" -n watch
 tmux new-window -t "$SESSION" -n infeasible
 tmux new-window -t "$SESSION" -n mission-xml
 for i in $(seq 1 "$ROBOT_COUNT"); do
@@ -367,13 +375,17 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     # (/coordination/infeasible) leaves no trace anywhere.
     wait_topic() { echo "until ros2 topic list 2>/dev/null | grep -qx '$1'; do sleep 2; done"; }
 
+    watch_cmd="echo '--- ${ns}: mission_planner candidates ---'; $(wait_topic "/${ns}/mission/candidate_xml"); ros2 topic echo --full-length /${ns}/mission/candidate_xml | tee -a '$LOG_DIR/${ns}_candidates.log'"
     infeasible_cmd="echo '--- ${ns}: coordination/infeasible ---'; $(wait_topic "/${ns}/coordination/infeasible"); ros2 topic echo --full-length /${ns}/coordination/infeasible | tee -a '$LOG_DIR/${ns}_infeasible.log'"
     mission_cmd="echo '--- ${ns}: mission/xml (accepted) ---'; $(wait_topic "/${ns}/mission/xml"); ros2 topic echo --full-length /${ns}/mission/xml | tee -a '$LOG_DIR/${ns}_mission_xml.log'"
 
     if [ "$i" -eq 1 ]; then
+        tmux send-keys -t "$SESSION:watch" "$watch_cmd" C-m
         tmux send-keys -t "$SESSION:infeasible" "$infeasible_cmd" C-m
         tmux send-keys -t "$SESSION:mission-xml" "$mission_cmd" C-m
     else
+        tmux split-window -t "$SESSION:watch" "$watch_cmd"
+        tmux select-layout -t "$SESSION:watch" tiled
         tmux split-window -t "$SESSION:infeasible" "$infeasible_cmd"
         tmux select-layout -t "$SESSION:infeasible" tiled
         tmux split-window -t "$SESSION:mission-xml" "$mission_cmd"
@@ -437,6 +449,7 @@ echo 'all missions fed. Robot ${BLOCKED_ROBOT} is the one heading for aisle ${bl
 echo
 echo 'watch:  agents      -- what the camera saw and what triage decided'
 echo '        bt<i>       -- each robot executing its tree'
+echo '        watch       -- every LLM repair attempt, accepted or not'
 echo '        infeasible  -- fires only if a robot gives up and the fleet bids'
 echo 'logs:   ${LOG_DIR}/'
 "
