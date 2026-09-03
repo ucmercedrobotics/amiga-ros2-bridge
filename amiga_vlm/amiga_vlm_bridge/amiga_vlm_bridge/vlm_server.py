@@ -61,7 +61,9 @@ class VlmServer(Node):
         self._max_tokens: int = int(self.get_parameter("max_tokens").value)
         self._min_tokens: int = int(self.get_parameter("min_tokens").value)
         self._jpeg_quality: int = int(self.get_parameter("jpeg_quality").value)
-        self._static_path: str = str(self.get_parameter("static_image_path").value or "")
+        self._static_path: str = str(
+            self.get_parameter("static_image_path").value or ""
+        )
         self._static_bgr = None
         if self._static_path:
             self._static_bgr = cv2.imread(self._static_path)
@@ -126,7 +128,9 @@ class VlmServer(Node):
         with self._frame_lock:
             self._latest_bgr = bgr
 
-    def _on_ask(self, request: VlmAsk.Request, response: VlmAsk.Response) -> VlmAsk.Response:
+    def _on_ask(
+        self, request: VlmAsk.Request, response: VlmAsk.Response
+    ) -> VlmAsk.Response:
         question = (request.question or "").strip()
         if not question:
             response.success = False
@@ -139,7 +143,9 @@ class VlmServer(Node):
                 frame = self._static_bgr.copy()
             else:
                 with self._frame_lock:
-                    frame = None if self._latest_bgr is None else self._latest_bgr.copy()
+                    frame = (
+                        None if self._latest_bgr is None else self._latest_bgr.copy()
+                    )
 
             if frame is None:
                 response.success = False
@@ -147,14 +153,18 @@ class VlmServer(Node):
                 response.error = "No image received yet"
                 return response
 
-            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality])
+            ok, buf = cv2.imencode(
+                ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
+            )
             if not ok:
                 response.success = False
                 response.answer = ""
                 response.error = "Failed to encode image"
                 return response
 
-            data_url = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("utf-8")
+            data_url = "data:image/jpeg;base64," + base64.b64encode(
+                buf.tobytes()
+            ).decode("utf-8")
 
             payload = {
                 "messages": [
@@ -173,7 +183,9 @@ class VlmServer(Node):
                 payload["min_tokens"] = self._min_tokens
 
             try:
-                r = requests.post(self._vlm_url, json=payload, timeout=self._http_timeout)
+                r = requests.post(
+                    self._vlm_url, json=payload, timeout=self._http_timeout
+                )
                 r.raise_for_status()
                 answer = r.json()["choices"][0]["message"]["content"]
                 response.success = True

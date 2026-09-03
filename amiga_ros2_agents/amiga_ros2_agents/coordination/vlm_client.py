@@ -136,4 +136,9 @@ def describe_question(include_frame: bool = False) -> str:
         return DESCRIBE_QUESTION
     marker = "what it means.\n\n"
     at = DESCRIBE_QUESTION.index(marker) + len(marker)
-    return DESCRIBE_QUESTION[:at] + DESCRIBE_FRAME_SENTENCE + "\n\n" + DESCRIBE_QUESTION[at:]
+    return (
+        DESCRIBE_QUESTION[:at]
+        + DESCRIBE_FRAME_SENTENCE
+        + "\n\n"
+        + DESCRIBE_QUESTION[at:]
+    )

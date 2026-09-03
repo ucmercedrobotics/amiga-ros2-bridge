@@ -321,9 +321,10 @@ def test_either_lane_that_reaches_a_tree_satisfies_the_expectation(orchard_map):
     for aisle in ("2", "3"):
         plan = etree.fromstring(
             b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
-            b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence>"
+            b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence>'
             b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="'
-            + aisle.encode() + b'"/>'
+            + aisle.encode()
+            + b'"/>'
             b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
             b' id="20" approach_tree="true"/>'
             b'<SampleLeaf name="s" action_name="segment_leaves"/>'
@@ -343,7 +344,7 @@ def test_a_lane_that_does_not_reach_the_tree_is_still_noted(orchard_map):
     by any route, and that is worth saying."""
     plan = etree.fromstring(
         b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
-        b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence>"
+        b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence>'
         b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="5"/>'
         b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
         b' id="20" approach_tree="true"/>'

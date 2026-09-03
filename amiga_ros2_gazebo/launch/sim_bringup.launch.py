@@ -524,9 +524,12 @@ def launch_setup(context, *args, **kwargs):
                 cmd=[
                     os.path.join(
                         get_package_prefix("amiga_ros2_gazebo"),
-                        "lib", "amiga_ros2_gazebo", "spawn_person.py",
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_person.py",
                     ),
-                    "--tree", str(spawn_person),
+                    "--tree",
+                    str(spawn_person),
                 ],
                 output="screen",
             )
@@ -538,9 +541,14 @@ def launch_setup(context, *args, **kwargs):
                 cmd=[
                     os.path.join(
                         get_package_prefix("amiga_ros2_gazebo"),
-                        "lib", "amiga_ros2_gazebo", "spawn_truck.py",
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_truck.py",
                     ),
-                    "--tree", str(spawn_truck), "--entrance", "--span",
+                    "--tree",
+                    str(spawn_truck),
+                    "--entrance",
+                    "--span",
                 ],
                 output="screen",
             )

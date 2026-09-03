@@ -311,7 +311,9 @@ def _move_to_tree(element, orchard, state) -> dict:
     # would report a plan that went round to the open side of a blocked row as
     # having got the aisle wrong.
     sides = orchard.aisles_of(tree) if orchard is not None else ()
-    wanted = tuple(str(a) for a in sides) if sides else ("" if aisle is None else str(aisle))
+    wanted = (
+        tuple(str(a) for a in sides) if sides else ("" if aisle is None else str(aisle))
+    )
 
     here = Fact(AT_TREE if approach else AT_WAYPOINT, tree)
     establishes = (here,) if aisle is None else (here, Fact(IN_AISLE, str(aisle)))

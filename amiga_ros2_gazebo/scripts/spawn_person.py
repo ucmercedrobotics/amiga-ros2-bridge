@@ -115,7 +115,12 @@ def staged_sdf(source: Path, name: str) -> str:
     the same cache, so the copy does not need to live beside the meshes.
     """
     sdf = source.read_text()
-    sdf = re.sub(r'<model name="[^"]*">', f'<model name="{name}">\n    <static>true</static>', sdf, count=1)
+    sdf = re.sub(
+        r'<model name="[^"]*">',
+        f'<model name="{name}">\n    <static>true</static>',
+        sdf,
+        count=1,
+    )
     tmp = tempfile.NamedTemporaryFile("w", suffix=".sdf", delete=False)
     tmp.write(sdf)
     tmp.close()
@@ -125,29 +130,47 @@ def staged_sdf(source: Path, name: str) -> str:
 def remove(world: str, name: str) -> int:
     req = f'name: "{name}", type: MODEL'
     return subprocess.run(
-        ["ign", "service", "-s", f"/world/{world}/remove",
-         "--reqtype", "ignition.msgs.Entity",
-         "--reptype", "ignition.msgs.Boolean",
-         "--timeout", "2000", "--req", req]
+        [
+            "ign",
+            "service",
+            "-s",
+            f"/world/{world}/remove",
+            "--reqtype",
+            "ignition.msgs.Entity",
+            "--reptype",
+            "ignition.msgs.Boolean",
+            "--timeout",
+            "2000",
+            "--req",
+            req,
+        ]
     ).returncode
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     where = ap.add_mutually_exclusive_group()
     where.add_argument("--tree", type=int, help="block the row waypoint of this tree")
     where.add_argument("--x", type=float, help="explicit world x (needs --y)")
     ap.add_argument("--y", type=float, help="explicit world y")
-    ap.add_argument("--yaw", type=float, default=3.14159,
-                    help="facing, radians. Robots enter from low x, so the "
-                         "default turns the person back down the aisle to face "
-                         "one. Flip to 0.0 to face away.")
+    ap.add_argument(
+        "--yaw",
+        type=float,
+        default=3.14159,
+        help="facing, radians. Robots enter from low x, so the "
+        "default turns the person back down the aisle to face "
+        "one. Flip to 0.0 to face away.",
+    )
     ap.add_argument("--name", default=MODEL_NAME, help="model name in the world")
     ap.add_argument("--world", default=WORLD)
     ap.add_argument("--remove", action="store_true", help="delete it again")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="print the pose and the geometry behind it, spawn nothing")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the pose and the geometry behind it, spawn nothing",
+    )
     args = ap.parse_args()
 
     if args.remove:
@@ -156,16 +179,20 @@ def main() -> int:
     if args.tree is not None:
         x, y = waypoint_of(args.tree)
         tx, ty, row = tree_pose(args.tree)
-        print(f"tree {args.tree} (row {row}) is at ({tx:.1f}, {ty:.1f}); "
-              f"the robot approaches it from aisle {row - 1}, stopping at "
-              f"({x:.1f}, {y:.1f}), {DY / 2:.2f} m out.")
+        print(
+            f"tree {args.tree} (row {row}) is at ({tx:.1f}, {ty:.1f}); "
+            f"the robot approaches it from aisle {row - 1}, stopping at "
+            f"({x:.1f}, {y:.1f}), {DY / 2:.2f} m out."
+        )
     elif args.x is not None and args.y is not None:
         x, y = args.x, args.y
     else:
         ap.error("give --tree N, or both --x and --y")
 
-    print(f"placing '{args.name}' at x={x:.2f} y={y:.2f} yaw={args.yaw:.2f} "
-          f"in world '{args.world}'")
+    print(
+        f"placing '{args.name}' at x={x:.2f} y={y:.2f} yaw={args.yaw:.2f} "
+        f"in world '{args.world}'"
+    )
     if args.dry_run:
         return 0
 
@@ -174,9 +201,26 @@ def main() -> int:
 
     path = staged_sdf(find_model(), args.name)
     return subprocess.run(
-        ["ros2", "run", "ros_gz_sim", "create",
-         "-world", args.world, "-file", path, "-name", args.name,
-         "-x", str(x), "-y", str(y), "-z", "0.0", "-Y", str(args.yaw)]
+        [
+            "ros2",
+            "run",
+            "ros_gz_sim",
+            "create",
+            "-world",
+            args.world,
+            "-file",
+            path,
+            "-name",
+            args.name,
+            "-x",
+            str(x),
+            "-y",
+            str(y),
+            "-z",
+            "0.0",
+            "-Y",
+            str(args.yaw),
+        ]
     ).returncode
 
 

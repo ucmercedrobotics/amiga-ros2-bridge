@@ -1081,9 +1081,7 @@ def test_strip_transferred_removes_a_target_the_model_restored():
 
     planner = MissionPlannerNode()
     try:
-        result = planner._strip_transferred(
-            _TWO_TREE_MISSION, {Target.tree(20)}
-        )
+        result = planner._strip_transferred(_TWO_TREE_MISSION, {Target.tree(20)})
         assert result is not None
         assert 'id="20"' not in result
         assert 'id="64"' in result
@@ -1399,9 +1397,7 @@ def test_a_talkative_camera_cannot_crowd_out_the_logs(node, monkeypatch):
 
     node._on_fault(_string(FAULT))
 
-    assert calls[0].count("tree.") <= (
-        tn.vlm_client.MAX_ANSWER_CHARS // len("tree. ")
-    )
+    assert calls[0].count("tree.") <= (tn.vlm_client.MAX_ANSWER_CHARS // len("tree. "))
 
 
 def test_the_camera_is_asked_to_describe_and_not_to_judge():
@@ -1415,9 +1411,9 @@ def test_the_camera_is_asked_to_describe_and_not_to_judge():
     question = tn.vlm_client.DESCRIBE_QUESTION.lower()
     before = question.split("do not say whether")[0]
     for judgement in ("passable", "usable", "in the way", "blocking", "safe"):
-        assert judgement not in before, (
-            f"the camera is being asked to judge {judgement!r}"
-        )
+        assert (
+            judgement not in before
+        ), f"the camera is being asked to judge {judgement!r}"
 
 
 def test_the_camera_is_not_asked_for_geometry():

@@ -291,9 +291,7 @@ def test_a_won_harvest_still_harvests(schema):
 
     # It binds to the tree it was announced for, the same way a sample does --
     # without that, the completed-objectives ledger never sees it finish.
-    assert ontology.objective_trees(doc, None) == {
-        harvests[0].get("name"): "35"
-    }
+    assert ontology.objective_trees(doc, None) == {harvests[0].get("name"): "35"}
 
 
 def test_a_won_sample_is_unchanged_by_the_harvest_table(schema):
@@ -316,7 +314,7 @@ def _grafted(fragment: str):
     """``fragment`` inside the smallest plan the schema will accept."""
     root = etree.fromstring(
         b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
-        b"<Mission>m</Mission><BehaviorTree ID=\"M\"><Sequence/>"
+        b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence/>'
         b"</BehaviorTree></root>"
     )
     root.find(".//Sequence").append(etree.fromstring(fragment.encode()))

@@ -325,8 +325,7 @@ class TriageNode(Node):
         with self._lock:
             self.log_buffer.append(entry)
             while (
-                self.log_buffer
-                and now - self.log_buffer[0]["stamp"] >= LOG_WINDOW_SEC
+                self.log_buffer and now - self.log_buffer[0]["stamp"] >= LOG_WINDOW_SEC
             ):
                 self.log_buffer.popleft()
 
@@ -349,9 +348,7 @@ class TriageNode(Node):
             return ""
 
         try:
-            answer = self.vlm.ask(
-                vlm_client.describe_question(self.describe_frame)
-            )
+            answer = self.vlm.ask(vlm_client.describe_question(self.describe_frame))
         except Exception as exc:  # noqa: BLE001 - a service, a socket, a model
             self.get_logger().warn(f"the camera failed ({exc})")
             return "(the camera did not answer — decide from the rest)"

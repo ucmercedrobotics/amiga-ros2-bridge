@@ -118,41 +118,67 @@ def find_model() -> Path:
 def remove(world: str, name: str) -> int:
     req = f'name: "{name}", type: MODEL'
     return subprocess.run(
-        ["ign", "service", "-s", f"/world/{world}/remove",
-         "--reqtype", "ignition.msgs.Entity",
-         "--reptype", "ignition.msgs.Boolean",
-         "--timeout", "2000", "--req", req]
+        [
+            "ign",
+            "service",
+            "-s",
+            f"/world/{world}/remove",
+            "--reqtype",
+            "ignition.msgs.Entity",
+            "--reptype",
+            "ignition.msgs.Boolean",
+            "--timeout",
+            "2000",
+            "--req",
+            req,
+        ]
     ).returncode
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     where = ap.add_mutually_exclusive_group()
-    where.add_argument("--tree", type=int, help="block the lane this tree is worked from")
+    where.add_argument(
+        "--tree", type=int, help="block the lane this tree is worked from"
+    )
     where.add_argument("--x", type=float, help="explicit world x (needs --y)")
     ap.add_argument("--y", type=float, help="explicit world y")
-    ap.add_argument("--span", action="store_true",
-                    help="block the whole lane width with a second vehicle. One "
-                         "truck leaves ~1.7 m either side: impassable for the "
-                         "robot, but only inflated rather than lethal in the "
-                         "global costmap, so the planner keeps routing through "
-                         "the gap and the controller keeps refusing it. That "
-                         "argument takes minutes to settle and never yields a "
-                         "clean 'no route'. Spanning the lane makes the planner "
-                         "fail outright, in seconds.")
-    ap.add_argument("--entrance", action="store_true",
-                    help="park it at the mouth of the lane rather than beside "
-                         "the tree, so the row cannot be entered at all")
-    ap.add_argument("--yaw", type=float, default=YAW_ACROSS,
-                    help="facing, radians. Defaults to across the lane, which "
-                         "is what makes it a block; 0.0 lies it lengthwise and "
-                         "leaves room to pass.")
+    ap.add_argument(
+        "--span",
+        action="store_true",
+        help="block the whole lane width with a second vehicle. One "
+        "truck leaves ~1.7 m either side: impassable for the "
+        "robot, but only inflated rather than lethal in the "
+        "global costmap, so the planner keeps routing through "
+        "the gap and the controller keeps refusing it. That "
+        "argument takes minutes to settle and never yields a "
+        "clean 'no route'. Spanning the lane makes the planner "
+        "fail outright, in seconds.",
+    )
+    ap.add_argument(
+        "--entrance",
+        action="store_true",
+        help="park it at the mouth of the lane rather than beside "
+        "the tree, so the row cannot be entered at all",
+    )
+    ap.add_argument(
+        "--yaw",
+        type=float,
+        default=YAW_ACROSS,
+        help="facing, radians. Defaults to across the lane, which "
+        "is what makes it a block; 0.0 lies it lengthwise and "
+        "leaves room to pass.",
+    )
     ap.add_argument("--name", default=MODEL_NAME, help="model name in the world")
     ap.add_argument("--world", default=WORLD)
     ap.add_argument("--remove", action="store_true", help="delete it again")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="print the pose and the geometry behind it, spawn nothing")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the pose and the geometry behind it, spawn nothing",
+    )
     args = ap.parse_args()
 
     if args.remove:
@@ -164,8 +190,10 @@ def main() -> int:
         x, y = lane_of(args.tree, args.entrance)
         tx, ty, row = tree_pose(args.tree)
         where = "the mouth of the lane" if args.entrance else "the lane beside it"
-        print(f"tree {args.tree} (row {row}) is at ({tx:.1f}, {ty:.1f}); blocking "
-              f"{where} at ({x:.1f}, {y:.1f}).")
+        print(
+            f"tree {args.tree} (row {row}) is at ({tx:.1f}, {ty:.1f}); blocking "
+            f"{where} at ({x:.1f}, {y:.1f})."
+        )
     elif args.x is not None and args.y is not None:
         x, y = args.x, args.y
     else:
@@ -173,9 +201,11 @@ def main() -> int:
 
     across = abs(math.sin(args.yaw))
     covered = TRUCK_LENGTH * across * (2 if args.span else 1)
-    print(f"placing '{args.name}' at x={x:.2f} y={y:.2f} yaw={args.yaw:.2f} "
-          f"in world '{args.world}' — covering {min(covered, DY):.1f} m of the "
-          f"{DY:.0f} m lane" + (" (two bodies)" if args.span else ""))
+    print(
+        f"placing '{args.name}' at x={x:.2f} y={y:.2f} yaw={args.yaw:.2f} "
+        f"in world '{args.world}' — covering {min(covered, DY):.1f} m of the "
+        f"{DY:.0f} m lane" + (" (two bodies)" if args.span else "")
+    )
     if args.dry_run:
         return 0
 
@@ -188,14 +218,34 @@ def main() -> int:
     # Two bodies far enough apart to reach both kerbs and close enough to leave
     # no gap between them, or one centred on the lane.
     offsets = ((-TRUCK_LENGTH / 2 + 0.2, "_a"), (TRUCK_LENGTH / 2 - 0.2, "_b"))
-    places = [(y + dy, args.name + tag) for dy, tag in offsets] if args.span \
+    places = (
+        [(y + dy, args.name + tag) for dy, tag in offsets]
+        if args.span
         else [(y, args.name)]
+    )
 
     for place_y, name in places:
         code = subprocess.run(
-            ["ros2", "run", "ros_gz_sim", "create",
-             "-world", args.world, "-file", model, "-name", name,
-             "-x", str(x), "-y", str(place_y), "-z", "0.0", "-Y", str(args.yaw)]
+            [
+                "ros2",
+                "run",
+                "ros_gz_sim",
+                "create",
+                "-world",
+                args.world,
+                "-file",
+                model,
+                "-name",
+                name,
+                "-x",
+                str(x),
+                "-y",
+                str(place_y),
+                "-z",
+                "0.0",
+                "-Y",
+                str(args.yaw),
+            ]
         ).returncode
         if code:
             return code
