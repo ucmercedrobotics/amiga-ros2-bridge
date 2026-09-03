@@ -1106,6 +1106,74 @@ def test_strip_transferred_returns_none_when_nothing_is_left():
         planner.destroy_node()
 
 
+def test_a_workload_change_session_edits_the_plan_its_own_commit_produced(monkeypatch):
+    """Not whatever this robot last had a chance to adopt.
+
+    ``current_mission_xml`` only updates when a plan is actually delivered on
+    /mission/xml, and a robot mid-mission gets nothing delivered until its own
+    mission ends -- which can be long after the arbiter committed this very
+    edit. Editing that stale copy meant re-deriving, from scratch, a unit the
+    commit had already built correctly: on a real run, a tree absorbed from a
+    different aisle than any the stale copy mentioned got rewritten with the
+    wrong aisle, because the right one was never in the document the model
+    was shown. The arbiter now sends the committed plan itself in the replan
+    request; this is that plan reaching the prompt instead of the stale one.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+    from amiga_ros2_agents.runtime import llm
+
+    planner = MissionPlannerNode()
+    try:
+        # Stale: this robot's last delivered plan, mentioning only aisles 2 and 4.
+        planner.current_mission_xml = _TWO_TREE_MISSION
+
+        # What the arbiter's own edit actually committed: _TWO_TREE_MISSION
+        # plus a correctly-grafted tree 96, entered via its real aisle, 6 --
+        # an aisle the stale copy never mentions at all.
+        committed = _TWO_TREE_MISSION.replace(
+            "    </Sequence>\n  </BehaviorTree>",
+            '      <Sequence name="task_10554">'
+            '<MoveToAisleHead name="task_10554_aisle_6" '
+            'action_name="move_to_aisle_head" id="6"/>'
+            '<MoveToTreeID name="task_10554_visit_96" '
+            'action_name="follow_tree_id_waypoint" id="96" approach_tree="true"/>'
+            '<SampleLeaf name="task_10554_sample_96" action_name="segment_leaves"/>'
+            "</Sequence>\n    </Sequence>\n  </BehaviorTree>",
+        )
+        assert committed != _TWO_TREE_MISSION and "task_10554_aisle_6" in committed
+
+        captured = {}
+
+        def fake_complete(system, user, **kw):
+            captured["user"] = user
+            return committed  # a no-op edit: hands the committed plan straight back
+
+        monkeypatch.setattr(llm, "complete", fake_complete)
+
+        planner._run_planner(
+            {"node": "task_absorbed:10554", "reason": "task_absorbed", "timestamp_ms": 0},
+            [],
+            template="mission_planner/replan_request_user.j2",
+            extra={
+                "request": {
+                    "cause": "task_absorbed",
+                    "task_id": 10554,
+                    "target": {"kind": "tree", "a": 96, "b": 0},
+                    "findings": [],
+                    "committed_mission_xml": committed,
+                }
+            },
+        )
+
+        assert "task_10554_aisle_6" in captured["user"], (
+            "the tree's real aisle, present only in the committed plan, "
+            "must reach the model"
+        )
+        assert "task_10554_visit_96" in captured["user"]
+    finally:
+        planner.destroy_node()
+
+
 def test_ordinary_planner_progress_does_not_escalate(node, monkeypatch):
     # The planner publishes this topic for terminal outcomes, but the loop is
     # allowed to keep trying. Escalating on every status message would put a

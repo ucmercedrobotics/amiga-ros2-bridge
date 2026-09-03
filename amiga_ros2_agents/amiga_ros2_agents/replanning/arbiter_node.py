@@ -376,28 +376,60 @@ class ArbiterNode(Node):
         )
 
         accepted = False
-        # Only meaningful while there is a formula for the text to be checked
-        # against; with verification off there is nothing to grant permission to.
-        if self.ltl_verification:
-            self._ltl_gate.allow_mission_text(appendix)
-        with self._lock:
-            self.justified_drops |= departing
-            self.transferred_objectives |= departing
-        try:
-            accepted, verified, reason = self._decide(candidate)
-        finally:
-            # One candidate only. Leaving it armed would let the planner's next
-            # edit inherit the coordinator's permission to change the mission
-            # text, which is the whole thing that rule prevents.
+        verified = False
+        reason = ""
+
+        # A removal that empties the plan has no candidate the normal gate
+        # can pass: a control node needs a child, so there is no valid XML
+        # for "this robot now has nothing to do", and _decide would XSD-
+        # reject it. That is what left a shed task looking rejected while the
+        # auction had already handed it to a peer -- the removal never
+        # actually landed, so this robot kept driving to a tree that was
+        # someone else's, failed on it again, and the fleet auctioned the
+        # same task a second time.
+        #
+        # The removal itself is not in question -- request.removing said so,
+        # and departing is computed either way -- only whether there is a
+        # document left to check. There is nothing to publish here, so
+        # nothing downstream ever sees the empty candidate: no XSD check
+        # needed, no document written.
+        if request.removing and not mission_tasks.tasks_in(candidate):
+            with self._lock:
+                self.active_mission_xml = candidate
+                self._awaiting_retry = False
+                self.justified_drops |= departing
+                self.transferred_objectives |= departing
+                self._last_status["accepted"] += 1
+                self._last_status["last_decision"] = "accepted"
+            accepted = True
+            reason = "removal leaves no work — accepted with nothing to publish"
+            self.get_logger().info(f"ACCEPTED coordinator edit — {reason}")
+            self.status.publish(self.get_status())
+        else:
+            # Only meaningful while there is a formula for the text to be
+            # checked against; with verification off there is nothing to
+            # grant permission to.
             if self.ltl_verification:
-                self._ltl_gate.allow_mission_text("")
-            if not accepted:
-                # The edit did not go through, so nothing was handed over.
-                # Leaving the drop justified would licence the planner to drop
-                # that objective later for free.
-                with self._lock:
-                    self.justified_drops -= departing
-                    self.transferred_objectives -= departing
+                self._ltl_gate.allow_mission_text(appendix)
+            with self._lock:
+                self.justified_drops |= departing
+                self.transferred_objectives |= departing
+            try:
+                accepted, verified, reason = self._decide(candidate)
+            finally:
+                # One candidate only. Leaving it armed would let the
+                # planner's next edit inherit the coordinator's permission to
+                # change the mission text, which is the whole thing that
+                # rule prevents.
+                if self.ltl_verification:
+                    self._ltl_gate.allow_mission_text("")
+                if not accepted:
+                    # The edit did not go through, so nothing was handed
+                    # over. Leaving the drop justified would licence the
+                    # planner to drop that objective later for free.
+                    with self._lock:
+                        self.justified_drops -= departing
+                        self.transferred_objectives -= departing
 
         if accepted:
             self._request_replan(request, candidate, dropped)
@@ -452,6 +484,16 @@ class ArbiterNode(Node):
             # The one piece of the request no amount of structure could derive.
             "note": str(getattr(request, "note", "") or ""),
             "timestamp_ms": int(time.time() * 1000),
+            # The plan the edit above actually produced -- not a reference to
+            # it, the text itself. /mission/xml only carries a plan once the
+            # robot is free to adopt it, so a robot already mid-mission has no
+            # other way to see this: its own copy of "the current plan" is
+            # whatever was last delivered, which can predate this commit by
+            # as long as the mission runs. Without this, the planner's next
+            # session edits that stale copy from scratch, rebuilding a unit
+            # this commit already wrote correctly and losing whatever the
+            # rebuild leaves out.
+            "committed_mission_xml": committed,
         }
         message = String()
         message.data = json.dumps(payload)
@@ -571,13 +613,30 @@ class ArbiterNode(Node):
         just ended -- which is the whole point of having waited. The same plan
         published when it was written would still name trees this robot
         completed while it was held, and the executor rebuilds from the root.
+
+        Pruning can remove everything the held plan had -- it was written for
+        a robot with some tree left to visit, and every one of those finished
+        while it waited. There is no valid document for "nothing left to do"
+        (a control node needs a child; see ``mission_tasks._prune_empty``), so
+        this does not try to write one. ``_executor_busy`` is already False
+        above, which is the only thing a plan with no work would have been
+        for -- publishing an empty one bought nothing and cost bt_runner a
+        schema error it could not recover from.
         """
         with self._lock:
             self._executor_busy = False
             plan = self._held_plan
+            self._held_plan = None
         if plan is None:
             return
-        self._publish_plan(self._without_completed(plan))
+        pruned = self._without_completed(plan)
+        if not mission_tasks.tasks_in(pruned):
+            self.get_logger().info(
+                "held plan is empty after pruning finished work -- nothing "
+                "left to publish"
+            )
+            return
+        self._publish_plan(pruned)
 
     def _release_stale_hold(self) -> None:
         """Send a plan that has been held too long, and give up on waiting.
@@ -588,20 +647,38 @@ class ArbiterNode(Node):
         bt_runner's pending slot exactly as every plan did before any of this,
         so the worst case is the behaviour this replaced, never a robot idle
         with work it was never handed.
+
+        Same pruning as ``_on_mission_ended``, and the same reason it can come
+        back with nothing: whatever the held plan was for may have finished by
+        other means while this waited. There is still no valid document for
+        that, so this still does not publish one -- discarding a stale hold
+        that turned out to be empty is strictly better than handing bt_runner
+        XML it cannot run.
         """
         with self._lock:
             plan = self._held_plan
             waited = time.monotonic() - self._held_since
         if plan is None or waited < HOLD_TIMEOUT_SEC:
             return
+        pruned = self._without_completed(plan)
+        if not mission_tasks.tasks_in(pruned):
+            self.get_logger().warn(
+                f"held plan for {waited:.0f}s with no mission-end from "
+                "bt_runner, and it is empty after pruning -- discarding it "
+                "rather than publishing nothing runnable"
+            )
+            with self._lock:
+                self._held_plan = None
+            return
         self.get_logger().warn(
             f"held a plan for {waited:.0f}s with no mission-end from bt_runner "
             "— publishing it anyway"
         )
-        self._publish_plan(self._without_completed(plan))
+        self._publish_plan(pruned)
 
     def _without_completed(self, xml: str) -> str:
-        """``xml`` with the trees this robot already sampled taken out.
+        """``xml`` with work this robot no longer owns taken out -- sampled by
+        it, or handed to a peer.
 
         bt_runner has no resume point -- it builds a fresh tree from every plan
         published to /mission/xml and ticks it from the root -- so a task
@@ -611,6 +688,15 @@ class ArbiterNode(Node):
         at auction, drove back to 58 and 64 and re-sampled both before setting
         off for 20.
 
+        Transferred trees are the same shape of problem from the other
+        direction: a plan held while a robot was mid-mission can be published
+        after that robot has since given the tree away, and pruning only what
+        it *sampled* would send it right back to a tree a peer is already
+        working. ``transferred_objectives`` is that ledger -- the same one
+        ``_check_objective_preserved`` reads to keep a justified drop from
+        being mistaken for an abandoned one -- so a tree gone for either reason
+        comes out here the same way.
+
         The planner already prunes for exactly this reason before it shows the
         model a plan. The arbiter is the *other* writer of /mission/xml and was
         the one path that did not, which is why absorbing work re-ran it.
@@ -618,28 +704,28 @@ class ArbiterNode(Node):
         Unlike the planner's copy of this step there is no bail-out when
         everything prunes away: an empty plan is the right answer for a robot
         whose own aisle is finished, because a task is about to be appended to
-        it. ``completed_objectives`` is the same ledger
-        ``_check_objective_preserved`` subtracts, so a plan short of these trees
-        is not read as dropping them.
+        it. Both ledgers this subtracts are the same ones
+        ``_check_objective_preserved`` subtracts, so a plan short of these
+        trees is not read as dropping them.
         """
         with self._lock:
-            completed = set(self.completed_objectives)
+            stale = set(self.completed_objectives) | set(self.transferred_objectives)
             orchard_map = self.orchard
         # No orchard means no way to tell which aisle heads the *remaining*
         # trees still need, and prune_completed drops every one it cannot
         # justify -- which would leave the surviving objectives with no route
-        # into their aisle. Re-driving a sampled tree is waste; publishing a
+        # into their aisle. Re-driving a stale tree is waste; publishing a
         # plan that cannot reach the trees it kept is worse.
-        if not completed or orchard_map is None:
+        if not stale or orchard_map is None:
             return xml
         try:
             doc = etree.fromstring(xml.encode("utf-8"))
         except etree.XMLSyntaxError:
             return xml
-        pruned = ontology.prune_completed(doc, completed, orchard_map)
+        pruned = ontology.prune_completed(doc, stale, orchard_map)
         self.get_logger().info(
-            f"pruned {sorted(completed)} from the plan before grafting — "
-            "already sampled this session"
+            f"pruned {sorted(stale)} from the plan before grafting — already "
+            "sampled or handed to a peer this session"
         )
         return etree.tostring(pruned, encoding="unicode")
 

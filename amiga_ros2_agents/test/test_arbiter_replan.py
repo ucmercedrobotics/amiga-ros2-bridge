@@ -46,6 +46,14 @@ with open(os.path.join(EXAMPLES, "sample_leafs.xml")) as _handle:
 
 MISSION = "sample leaves from trees 10 and 60"
 
+#: Two trees and nothing else -- ACTIVE also has two headland transit moves
+#: that neither tree's removal touches, so pruning or removing both objectives
+#: out of ACTIVE still leaves those behind and the plan is never actually
+#: empty. This one has no such leftovers: finishing both trees really does
+#: leave zero tasks, which is the shape the empty-plan tests need.
+with open(os.path.join(EXAMPLES, "sample_aisle6.xml")) as _handle:
+    TWO_TREES_ONLY = _handle.read()
+
 
 @pytest.fixture
 def arbiter(request):
@@ -233,6 +241,54 @@ def test_transfer_justifies_the_drop_it_causes(arbiter):
     assert "60" in arbiter.justified_drops
 
 
+def test_removing_the_last_task_leaves_nothing_to_publish(arbiter):
+    """Shedding a robot's only remaining task ends with no plan at all.
+
+    A control node needs a child, so there is no valid document for "this
+    robot now has nothing to do" -- the removal that gets here is real
+    regardless, and there is nothing wrong with it that a schema could name.
+    Refusing it (the old behaviour, because the empty candidate failed XSD)
+    left the task sitting in this robot's plan while the auction had already
+    handed it to a peer: the robot kept driving to it, failed on it again, and
+    the fleet auctioned the same task a second time.
+    """
+    from amiga_ros2_agents.mission import mission_tasks
+
+    arbiter.ltl_verification = False  # the empty-plan path is what's tested
+    arbiter.active_mission_xml = TWO_TREES_ONLY
+    arbiter.original_objectives = {"96", "102"}
+    sent = _published(arbiter)
+
+    tree96 = _task_id_of(TWO_TREES_ONLY, "ApproachTree96")
+    tree102 = _task_id_of(TWO_TREES_ONLY, "ApproachTree102")
+    assert call(arbiter, request_for(task_id=tree96, removing=True)).accepted
+    assert len(sent) == 1, "tree 102 was still pending -- a real plan to publish"
+
+    response = call(arbiter, request_for(task_id=tree102, removing=True))
+    assert response.accepted, response.reason
+    assert len(sent) == 1, "no valid document exists for zero tasks -- nothing sent"
+    assert "102" in arbiter.transferred_objectives, "the removal still counts"
+    assert not mission_tasks.tasks_in(arbiter.active_mission_xml)
+
+
+def test_a_replan_is_still_requested_after_the_last_task_leaves(arbiter):
+    """The peer's absorption needs the same downstream replan a normal
+    transfer gets -- findings, dropped steps, the works -- even though this
+    side published nothing."""
+    arbiter.ltl_verification = False
+    arbiter.active_mission_xml = TWO_TREES_ONLY
+    arbiter.original_objectives = {"96", "102"}
+    requested = replan_requests(arbiter)
+
+    tree96 = _task_id_of(TWO_TREES_ONLY, "ApproachTree96")
+    tree102 = _task_id_of(TWO_TREES_ONLY, "ApproachTree102")
+    call(arbiter, request_for(task_id=tree96, removing=True))
+    call(arbiter, request_for(task_id=tree102, removing=True))
+
+    assert [r["task_id"] for r in requested] == [tree96, tree102]
+    assert requested[-1]["cause"] == "task_transferred"
+
+
 @needs_spin
 @pytest.mark.parametrize("arbiter", ["<>sampled_tree_10"], indirect=True)
 def test_a_transferred_tree_does_not_spend_the_viability_budget(arbiter):
@@ -380,6 +436,27 @@ def test_absorbing_a_task_asks_this_robots_planner_to_replan(arbiter):
     assert asked[0]["cause"] == "task_absorbed"
     assert asked[0]["task_id"] == 4210
     assert asked[0]["target"] == {"kind": "tree", "a": 35, "b": 0}
+
+
+@needs_spin
+def test_the_request_carries_the_plan_the_commit_actually_produced(arbiter):
+    """Not a reference to it -- the planner has no other way to see it.
+
+    /mission/xml only carries a plan once this robot is free to adopt it, so a
+    robot already mid-mission has no other way to learn what this edit just
+    committed: its own copy of "the current plan" is whatever was last
+    delivered, which can predate this commit by as long as the mission runs.
+    Observed on a real run: a tree absorbed from a different aisle than the
+    stale copy mentioned got rewritten with the wrong aisle, because the
+    edit that already built it correctly was never visible to the model that
+    replaced it.
+    """
+    asked = replan_requests(arbiter)
+    assert call(arbiter, request_for(tree=35)).accepted
+
+    committed = asked[0]["committed_mission_xml"]
+    assert 'id="35"' in committed
+    assert committed == arbiter.active_mission_xml
 
 
 @needs_spin
@@ -748,12 +825,12 @@ def test_a_plan_accepted_mid_mission_waits_for_the_mission_to_end(arbiter):
     sent = _published(arbiter)
     arbiter._executor_busy = True
 
-    arbiter._deliver("<root>held</root>")
+    arbiter._deliver(ACTIVE)
     assert sent == [], "published into a mission that cannot adopt it"
-    assert arbiter._held_plan == "<root>held</root>"
+    assert arbiter._held_plan == ACTIVE
 
     arbiter._on_bt_status(_tree_status("SUCCESS"))
-    assert sent == ["<root>held</root>"], "not released when the mission ended"
+    assert sent == [ACTIVE], "not released when the mission ended"
     assert arbiter._held_plan is None
 
 
@@ -784,16 +861,68 @@ def test_a_held_plan_is_pruned_against_what_finished_while_it_waited(arbiter):
     assert "60" in approached, "pending work must not go with it"
 
 
+def test_a_held_plan_is_pruned_against_what_was_given_away_while_it_waited(arbiter):
+    """Sampled and transferred are different reasons but the same fact: this
+    robot does not own that tree by the time the held plan is finally
+    released.
+
+    A plan accepted mid-mission is written against what this robot owned at
+    that moment. If tree 10 leaves for a peer before the running mission
+    ends, releasing the held plan unchanged sends this robot straight back to
+    a tree someone else is already working -- the same collision transferred
+    work always causes when a plan that predates the handoff outlives it.
+    """
+    arbiter.orchard = real_orchard()
+    arbiter._executor_busy = True
+    sent = _published(arbiter)
+
+    arbiter._deliver(ACTIVE)
+    arbiter.transferred_objectives = {"10"}  # given away while the plan waited
+    arbiter._on_bt_status(_tree_status("SUCCESS"))
+
+    assert len(sent) == 1
+    approached = {
+        el.get("id")
+        for el in etree.fromstring(sent[0].encode("utf-8")).iter("MoveToTreeID")
+        if (el.get("approach_tree") or "").lower() == "true"
+    }
+    assert "10" not in approached, "a transferred tree survived into the running plan"
+    assert "60" in approached, "pending work must not go with it"
+
+
+def test_a_held_plan_pruned_to_nothing_is_not_published(arbiter):
+    """Every tree the held plan named finished while it waited.
+
+    Pruning both out leaves a control node with no children -- not a
+    schema-valid plan, and nothing this robot needs anyway, since there is no
+    work left to hand it. Publishing that document is what crashed bt_runner
+    on a real run and left it silent for good: no mission-end ever came back,
+    so the arbiter believed the robot was still busy and every later plan
+    queued up behind one that would never run.
+    """
+    arbiter.orchard = real_orchard()
+    arbiter._executor_busy = True
+    sent = _published(arbiter)
+
+    arbiter._deliver(TWO_TREES_ONLY)
+    arbiter.completed_objectives = {"96", "102"}  # both finished while it waited
+    arbiter._on_bt_status(_tree_status("SUCCESS"))
+
+    assert sent == [], "no valid document exists for zero tasks -- nothing to send"
+    assert arbiter._held_plan is None, "a plan with nothing left in it is not kept"
+    assert arbiter._executor_busy is False, "the mission that ended still ended"
+
+
 def test_a_failed_mission_releases_the_hold_too(arbiter):
     """FAILURE ends a mission exactly as SUCCESS does, and the executor comes
     back for a plan either way. Only SUCCESS releasing it would strand every
     plan written for a robot whose tree failed -- which is most of them."""
     sent = _published(arbiter)
     arbiter._executor_busy = True
-    arbiter._deliver("<root>held</root>")
+    arbiter._deliver(ACTIVE)
 
     arbiter._on_bt_status(_tree_status("FAILURE"))
-    assert sent == ["<root>held</root>"]
+    assert sent == [ACTIVE]
 
 
 def test_an_idle_robot_is_handed_its_plan_straight_away(arbiter):
@@ -817,14 +946,35 @@ def test_a_hold_nobody_ends_fails_open(arbiter):
 
     sent = _published(arbiter)
     arbiter._executor_busy = True
-    arbiter._deliver("<root>held</root>")
+    arbiter._deliver(ACTIVE)
 
     arbiter._release_stale_hold()
     assert sent == [], "released before the timeout"
 
     arbiter._held_since -= mod.HOLD_TIMEOUT_SEC + 1
     arbiter._release_stale_hold()
-    assert sent == ["<root>held</root>"]
+    assert sent == [ACTIVE]
+
+
+def test_a_stale_hold_pruned_to_nothing_is_discarded_not_published(arbiter):
+    """The watchdog's job is to stop waiting, not to publish whatever it was
+    waiting to send. If every tree the held plan named finished by some other
+    route while it waited, publishing it anyway hands bt_runner the same
+    childless control node that crashed it on a real run -- discarding a
+    stale, empty hold is strictly better than that."""
+    from amiga_ros2_agents.replanning import arbiter_node as mod
+
+    arbiter.orchard = real_orchard()
+    sent = _published(arbiter)
+    arbiter._executor_busy = True
+    arbiter._deliver(TWO_TREES_ONLY)
+    arbiter.completed_objectives = {"96", "102"}
+
+    arbiter._held_since -= mod.HOLD_TIMEOUT_SEC + 1
+    arbiter._release_stale_hold()
+
+    assert sent == [], "no valid document exists for zero tasks -- nothing to send"
+    assert arbiter._held_plan is None, "a stale empty hold is dropped, not kept"
 
 
 def test_completion_ledger_is_read_off_bt_status(arbiter):

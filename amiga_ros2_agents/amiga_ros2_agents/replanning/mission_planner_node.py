@@ -729,6 +729,21 @@ class MissionPlannerNode(Node):
             sessions_done = self._last_status["sessions"]
             aborted = self._mission_aborted
 
+        # A workload-change session carries the plan its own edit actually
+        # committed, not just a request to write one -- see arbiter_node.py's
+        # _request_replan. current_mission_xml is this robot's copy of the
+        # last plan it was free to adopt, and /mission/xml only ever carries
+        # one while the robot is idle, so a robot still mid-mission can be
+        # sitting on a copy that predates this commit by as long as the
+        # mission runs. Editing that stale copy re-derives, from scratch,
+        # a unit the commit already built correctly -- observed live: a
+        # tree absorbed from a different aisle than the one in the stale
+        # copy got rewritten with the wrong aisle, because the right one
+        # was never in the document the model was shown.
+        committed = ((extra or {}).get("request") or {}).get("committed_mission_xml")
+        if committed:
+            xml = committed
+
         if aborted:
             return
 
