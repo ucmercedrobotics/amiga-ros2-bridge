@@ -1149,7 +1149,11 @@ def test_a_workload_change_session_edits_the_plan_its_own_commit_produced(monkey
         monkeypatch.setattr(llm, "complete", fake_complete)
 
         planner._run_planner(
-            {"node": "task_absorbed:10554", "reason": "task_absorbed", "timestamp_ms": 0},
+            {
+                "node": "task_absorbed:10554",
+                "reason": "task_absorbed",
+                "timestamp_ms": 0,
+            },
             [],
             template="mission_planner/replan_request_user.j2",
             extra={

@@ -115,8 +115,11 @@ def main() -> None:
         )
 
     node.create_subscription(Log, "/rosout", on_log, qos)
-    print(f"watching /rosout for {'every agent line' if args.all else 'the decision story'}",
-          file=sys.stderr, flush=True)
+    print(
+        f"watching /rosout for {'every agent line' if args.all else 'the decision story'}",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException, SystemExit):
