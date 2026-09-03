@@ -1,0 +1,21 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>sample trees 20 and 26 in aisle 2</Mission>
+  <BehaviorTree ID="SampleAisle2">
+    <Sequence name="SampleAisle2Mission">
+      <MoveToAisleHead name="EnterAisle2" action_name="move_to_aisle_head" id="2"/>
+      <RetryUntilSuccessful name="SampleTree20WithRetry" num_attempts="3">
+        <Sequence name="SampleTree20">
+          <MoveToTreeID name="ApproachTree20" action_name="follow_tree_id_waypoint" id="20" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree20" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <RetryUntilSuccessful name="SampleTree26WithRetry" num_attempts="3">
+        <Sequence name="SampleTree26">
+          <MoveToTreeID name="ApproachTree26" action_name="follow_tree_id_waypoint" id="26" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree26" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitAisle2" action_name="move_to_aisle_head" id="2"/>
+    </Sequence>
+  </BehaviorTree>
+</root>
