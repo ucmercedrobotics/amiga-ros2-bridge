@@ -15,8 +15,7 @@ Three rules, and each is a claim made in ``amiga_ros2_agents/__init__.py``:
    and services; an agent that imports another agent has quietly become one
    process with two names.
 3. ``mission`` and the verification libraries hold no rclpy. That is the whole
-   reason ``test_verify.py`` can run a model checker with no robot in the loop,
-   and it is load-bearing for the verification claim rather than tidiness.
+   reason ``test_promela.py`` can compile a plan with no robot in the loop.
 """
 
 import ast

@@ -123,26 +123,13 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument(
-                "ltl_verification",
-                default_value="true",
-                description="False makes the arbiter gate on whether a plan "
-                "will RUN -- well-formed XML, the XSD, and the ontology's "
-                "required preconditions -- and skip the checks that decide "
-                "whether it is still the mission that was asked for: no "
-                "formula, no SPIN, no viability budget, no edit-size or rate "
-                "limit. For bringing the coordination loop up end to end. "
-                "Every accept is then reported unverified.",
-            ),
-            DeclareLaunchArgument(
                 "objective_gating",
                 default_value="true",
                 description="Whether the arbiter checks that a candidate still "
                 "contains the mission's objectives, and aborts when too few "
                 "survive. This is the only check that can publish "
                 "/mission/abort, which is what ends the local repair loop and "
-                "escalates to the coordinator -- so a fleet run wants it on "
-                "even when ltl_verification is off. False only to study the "
-                "formal gate on its own.",
+                "escalates to the coordinator.",
             ),
             DeclareLaunchArgument(
                 "launch_mission_bridge",
@@ -205,12 +192,6 @@ def generate_launch_description() -> LaunchDescription:
                 "simulation, and it is the cheapest way to make a fleet bid "
                 "asymmetrically without moving anyone.",
             ),
-            # ltl_gen is deliberately absent. The arbiter runs the same gate
-            # in-process (ltl_gate.py, sharing ltl.py), because a formula is
-            # needed *inside* the decision that publishes /mission/xml and a
-            # service call from there would make the gate depend on another node
-            # being up. ltl_gen exposes that translation to outside callers, and
-            # a fleet does not need one per robot.
             *(
                 Node(
                     package=PACKAGE,
@@ -218,14 +199,10 @@ def generate_launch_description() -> LaunchDescription:
                     parameters=[
                         {
                             "use_sim_time": use_sim_time,
-                            # Only the arbiter declares these; a parameter a node
-                            # never declares is ignored, so passing them to all
-                            # of them keeps this a one-line table entry rather
-                            # than a special case in the loop.
-                            "ltl_verification": ParameterValue(
-                                LaunchConfiguration("ltl_verification"),
-                                value_type=bool,
-                            ),
+                            # Only the arbiter declares this; a parameter a node
+                            # never declares is ignored, so passing it to all of
+                            # them keeps this a one-line table entry rather than
+                            # a special case in the loop.
                             "objective_gating": ParameterValue(
                                 LaunchConfiguration("objective_gating"),
                                 value_type=bool,

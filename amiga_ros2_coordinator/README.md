@@ -75,7 +75,7 @@ default now.
 | --- | --- | --- |
 | `interpret_anomaly(context)` | the **triage agent** in `amiga_ros2_agents` — an LLM over the BT fault, the `/rosout` window around it, the world state and the live peers | `ScriptedInterpreter` |
 | `interpret_note(context)` | the **note agent** in `amiga_ros2_agents` — reads a peer's sentence about work it is offering and says whether it changes our bid | `ScriptedNoteInterpreter`, `IgnoreNotes` |
-| `replan_and_verify(delta)` | `VerifyingReplanner`, which hands the delta to the arbiter's `/mission/verify_replan` and runs it through the same LTL gate a local replan gets — **not a reasoning point itself** | `AcceptEverything` |
+| `replan_and_verify(delta)` | `VerifyingReplanner`, which hands the delta to the arbiter's `/mission/verify_replan` and runs it through the same gate a local replan gets — **not a reasoning point itself** | `AcceptEverything` |
 
 `interpret_anomaly` returns one of exactly three typed actions — `ReDelegate`,
 `AddTask`, `DropTask` — and **never free text**. `interpret_note` is closed the
@@ -159,8 +159,8 @@ test in the suite would notice the day it does.
 **Coordination decisions.** No transport (that is the reliability layer), no
 fragmentation, no reasoning in the state machine, and no navigation or mission
 implementation. If a change is about getting bytes there it belongs one layer
-down; if it needs a language model or the LTL backend it goes behind one of the
-two reasoning interfaces.
+down; if it needs a language model it goes behind one of the two reasoning
+interfaces.
 
 ## Tests
 

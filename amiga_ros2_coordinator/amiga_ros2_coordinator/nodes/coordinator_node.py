@@ -372,7 +372,7 @@ class CoordinatorNode(Node):
         if not bool(self.get_parameter("verify_replans").value):
             self.get_logger().warn(
                 "verify_replans is false — mission changes will be accepted "
-                "without being checked against the mission's LTL specification"
+                "without being checked against the arbiter's gate"
             )
             return AcceptEverything()
 
@@ -408,10 +408,10 @@ class CoordinatorNode(Node):
             True,
             _describe(
                 "Send every mission change to the arbiter's "
-                "/mission/verify_replan to be re-verified against the mission's "
-                "LTL specification before it is committed. Turning this off "
-                "makes replan-and-verify a no-op that accepts everything, which "
-                "is a coordinator whose transfers nothing checks."
+                "/mission/verify_replan to be gated before it is committed. "
+                "Turning this off makes replan-and-verify a no-op that accepts "
+                "everything, which is a coordinator whose transfers nothing "
+                "checks."
             ),
         )
         self.declare_parameter(

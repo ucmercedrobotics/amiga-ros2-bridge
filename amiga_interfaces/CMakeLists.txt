@@ -7,7 +7,6 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/LoRaFrame.msg
   srv/GetTreeInfo.srv
-  srv/GenerateLTL.srv
   srv/InterpretAnomaly.srv
   srv/InterpretNote.srv
   srv/VerifyReplan.srv

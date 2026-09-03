@@ -40,9 +40,8 @@
 # Two real LLM replans, on two different robots' XML, off one real fault.
 #
 # NOTE the arbiter must be able to ABORT for the loop above to terminate,
-# which is `objective_gating` (on by default) and NOT `ltl_verification`.
-# This runs with ltl_verification:=false -- no formula, no SPIN -- and the
-# objective/viability checks still on, which is what ends local recovery.
+# which is `objective_gating` (on by default) -- the check that ends local
+# recovery.
 #
 # Usage:
 #   export AGENT_MODEL=hosted_vllm/openai/gpt-oss-120b
@@ -252,7 +251,7 @@ tmux set -g mouse on
 tmux set -g history-limit 500000
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true ltl_verification:=false objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"

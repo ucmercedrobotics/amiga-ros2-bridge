@@ -177,9 +177,8 @@ def facts_for_trees(orchard: Orchard, tree_ids) -> Dict[int, Optional[int]]:
     """``tree_id -> aisle_of(tree_id)`` for exactly the trees asked about.
 
     Scoped rather than the whole map so a prompt pays only for the trees an
-    active mission actually references -- a replanner and, later, the LTL
-    arbiter both want this same slice, which is why it lives here rather than
-    inlined in either caller.
+    active mission actually references -- more than one caller wants this same
+    slice, which is why it lives here rather than inlined in either.
     """
     out: Dict[int, Optional[int]] = {}
     for t in tree_ids:

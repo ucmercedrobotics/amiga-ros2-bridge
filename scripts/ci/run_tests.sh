@@ -76,14 +76,6 @@ if [[ "${SKIP_UNDERLAY:-0}" != "1" ]]; then
     scripts/ci/build_underlay.sh
 fi
 
-# amiga_ros2_agents' verification tests shell out to SPIN. They skip when it is
-# absent, so without this the checks that prove a bad replan gets rejected would
-# quietly stop running and CI would still be green -- the one failure mode the
-# verification work exists to rule out.
-if [[ "${SKIP_SPIN:-0}" != "1" ]]; then
-    scripts/ci/install_spin.sh
-fi
-
 # Sourced whether or not this run built it, so SKIP_UNDERLAY=1 still works
 # against an underlay a previous run left behind.
 if [[ -f "$UNDERLAY_WS/install/setup.bash" ]]; then

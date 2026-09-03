@@ -5,12 +5,10 @@ Like ``test_mission_tasks``, these run on the files in
 A model built from a mission nobody flies proves nothing about the missions the
 robots actually carry.
 
-The claims worth pinning here are the two that make verification non-vacuous:
-propositions are named from the mission's subject matter and not from the
-position of an action in the tree, and a plan defines exactly the propositions
-it establishes -- no more, so a formula asking for something the plan skips is
-caught, and no fewer, so a plan cannot quietly satisfy a formula by declaring
-everything.
+The claim worth pinning here: propositions are named from the mission's
+subject matter -- ``at_tree_10``, ``sampled_tree_10`` -- and not from the
+position of an action in the tree, so they survive a replan reordering or
+dropping tasks.
 """
 
 import os
@@ -205,38 +203,3 @@ def test_unknown_element_is_refused():
     """
     with pytest.raises(promela.PromelaError, match="Bogus"):
         promela.compile_mission(plan("<Bogus/>"), SCHEMA)
-
-
-# ---------------------------------------------------------------------------
-# Coverage — the cross-check between the two agents
-# ---------------------------------------------------------------------------
-
-
-def test_coverage_accepts_a_formula_the_plan_covers():
-    model = promela.compile_mission(plan(visit(10), SAMPLE), SCHEMA)
-    ok, _ = promela.coverage_gap("<>(at_tree_10 && <>sampled_tree_10)", model)
-    assert ok
-
-
-def test_coverage_names_the_missing_proposition():
-    """The rejection has to say which fact is missing, or nobody can fix it."""
-    model = promela.compile_mission(plan(visit(10), SAMPLE), SCHEMA)
-    ok, reason = promela.coverage_gap("<>sampled_tree_35", model)
-    assert not ok
-    assert "sampled_tree_35" in reason
-
-
-def test_coverage_ignores_operators_and_literals():
-    """`U`, `X` and `true` are syntax, not propositions to look up."""
-    model = promela.compile_mission(plan(visit(10), SAMPLE), SCHEMA)
-    ok, reason = promela.coverage_gap(
-        "[](true -> (at_tree_10 U sampled_tree_10)) && X true", model
-    )
-    assert ok, reason
-
-
-def test_formula_aps_extraction():
-    assert promela.formula_aps("<>(at_tree_1 && X sampled_tree_2)") == {
-        "at_tree_1",
-        "sampled_tree_2",
-    }

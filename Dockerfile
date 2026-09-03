@@ -19,14 +19,7 @@ RUN apt-get update && apt-get install -y git wget curl python3-full python3-pip 
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-diagnostic-updater \
     tmux \
-    rhash librhash-dev \
-    byacc flex
-
-# The SPIN model checker, used by amiga_ros2_agents/verification/verify.py to re-verify a
-# replanned mission. Same script CI runs, so both environments get the same
-# checker; see the header there for why it is a source build.
-COPY scripts/ci/install_spin.sh /tmp/install_spin.sh
-RUN SKIP_APT=1 /tmp/install_spin.sh && rm /tmp/install_spin.sh
+    rhash librhash-dev
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
 COPY requirements.txt /requirements.txt

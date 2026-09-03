@@ -194,14 +194,6 @@ COORDINATION ?= true
 # amiga_ros2_agents/README.md. It also switches the coordinators over to asking
 # those agents instead of their local stubs.
 AGENTS ?= false
-# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
-# they will RUN -- well-formed XML, the XSD, and the ontology's required
-# preconditions -- but not for whether they still satisfy the mission: no
-# formula, no SPIN, no viability budget, no edit-size or rate limit. For
-# bringing the coordination loop up end to end, where the question is whether a
-# task crosses robots and comes back as executable XML. Every accept is then
-# reported unverified, in the service response and in the arbiter's status.
-LTL ?= true
 # VLM=true gives each robot a vlm_server, so its triage agent can ask what the
 # camera sees. Needs AGENTS=true, since triage is the only caller, and a vision
 # model on VLM_URL -- a different model and endpoint from AGENT_API_BASE, which
@@ -217,7 +209,6 @@ sim:
 		launch_vlm:=$(VLM) \
 		vlm_url:=$(VLM_URL) \
 		spawn_person:=$(PERSON) \
-		ltl_verification:=$(LTL) \
 		lora_spreading_factor:=$(LORA_SF)
 
 # One command, one working demo: a simulated fleet, a real LLM behind both

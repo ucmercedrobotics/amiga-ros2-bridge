@@ -13,11 +13,8 @@ For each candidate (from /mission/candidate_xml) it checks, in order:
          - each NEW dropped tree must be justified (permanent failure)
          - total dropped trees must stay within a model-determined viability
            budget; exceeding it ABORTS the mission instead of retrying
-    5. LTL verification (formal): the mission text is unchanged, the plan
-       establishes every proposition the mission's formula refers to, and SPIN
-       agrees the plan satisfies it. See ltl_gate.py.
-    6. Edit-size limit (candidate must not rewrite the whole plan)
-    7. Rate limit (min interval between ACCEPTED plans; skipped mid-retry)
+    5. Edit-size limit (candidate must not rewrite the whole plan)
+    6. Rate limit (min interval between ACCEPTED plans; skipped mid-retry)
 
 Outcomes:
     - ACCEPTED  -> published to /mission/xml (sole writer)
@@ -34,24 +31,14 @@ Parameters:
         the *only* check that can ABORT, so it is also the only thing that
         ends the local repair loop — with it off, a plan that quietly drops
         every objective is accepted, the planner never gives up, and nothing
-        is ever escalated to the fleet. Off is for testing check 5 in
-        isolation, never for a run that has to reach a coordinator.
+        is ever escalated to the fleet. Defaults on: a robot whose arbiter
+        cannot abort has no way to reach its own coordinator.
 
-    ltl_verification (bool, default True)
-        Checks 5-7. The formal claim (a formula, and SPIN agreeing the plan
-        satisfies it) plus the two churn policies that ride with it. Off,
-        every accept is reported unverified — `verified` in the service
-        response, `ltl_unverified` in the status — so a run with the gate down
-        can never be mistaken for one without.
-
-The two are independent on purpose. They used to be one flag, and because
-check 4 sat on the LTL side of it, turning SPIN off to bring the coordination
-loop up also turned off the abort that the coordination loop is triggered by:
-no viability budget, no /mission/abort, no escalation, no auction. Checks 6-7
-are policy about plan churn rather than about meaning and do not really belong
-under `ltl_verification` either; they are left there for now because moving
-them changes when a candidate is rejected, and that is a separate decision from
-this one.
+This used to run a formal LTL check here too — a specification generated from
+the mission text, verified against the plan with SPIN — gated by a second flag
+(`ltl_verification`). That check has been removed; this pipeline does not use
+LTL. Checks 1-4 above ask whether the plan will run and whether it is still
+the mission, and always hold.
 """
 
 import json
@@ -71,7 +58,6 @@ from std_msgs.msg import String
 from ..mission import mission_tasks, ontology, orchard, xsd
 from ..runtime import llm, prompts, spin
 from ..runtime.status import StatusPublisher
-from ..verification import ltl_gate
 
 # ---------------------------------------------------------------------------
 # Arbiter policy limits
@@ -104,30 +90,10 @@ class ArbiterNode(Node):
         super().__init__("arbiter")
         self._lock = Lock()
 
-        #: With verification off, checks 5-7 do not run: no LTL formula, no SPIN,
-        #: no edit-size or rate limit. What survives is the part that decides
-        #: whether a plan will *run* -- well-formed XML, the XSD, and the
-        #: ontology's required preconditions -- plus check 4, which decides
-        #: whether the plan still contains the mission's work.
-        #:
-        #: For bringing the coordination loop up end to end, where the question
-        #: is whether a task crosses robots and comes back as executable XML,
-        #: and the formal argument is a separate claim made separately. Never a
-        #: default: an unverified accept must not be indistinguishable from a
-        #: verified one, which is also why it is logged at startup and counted
-        #: as ``ltl_unverified``.
-        self.declare_parameter("ltl_verification", True)
-        self.ltl_verification = bool(
-            self.get_parameter("ltl_verification").get_parameter_value().bool_value
-        )
-
-        #: Check 4, and separate from the flag above because it answers a
-        #: different question and has a different consequence. LTL verification
-        #: is a claim *about* an accepted plan; this is the only check that can
-        #: declare the mission dead, and /mission/abort is what tells triage the
-        #: local loop is finished. A robot whose arbiter cannot abort has no way
-        #: to reach its own coordinator, so this defaults on even in the runs
-        #: that switch the formal gate off.
+        #: The only check that can declare the mission dead: /mission/abort is
+        #: what tells triage the local loop is finished. A robot whose arbiter
+        #: cannot abort has no way to reach its own coordinator, so this
+        #: defaults on.
         self.declare_parameter("objective_gating", True)
         self.objective_gating = bool(
             self.get_parameter("objective_gating").get_parameter_value().bool_value
@@ -182,26 +148,14 @@ class ArbiterNode(Node):
         # cannot work here — publish() returns long before the message completes
         # the DDS round trip, so the flag is always back to False by then.
         self._published_xml: Optional[str] = None
-        #: Did a formal check actually run on the candidate _evaluate last saw?
-        #: Kept here rather than returned, so _evaluate's signature stays what
-        #: the existing tests call.
-        self._last_gate_verified: bool = False
         self._last_status: Dict = {
             "accepted": 0,
             "rejected": 0,
             "last_rejection_reason": None,
             "last_decision": None,
-            # Counted separately from accept/reject: "accepted" and "verified"
-            # are different claims, and a run where the checker never fired has
-            # to be visible as such rather than hiding inside the accept count.
-            "ltl_checked": 0,
-            "ltl_rejected": 0,
-            "ltl_unverified": 0,
-            "ltl_last_reason": None,
         }
 
         self.xsd_schema = xsd.load_schema(self.get_logger())
-        self._ltl_gate = ltl_gate.LtlGate(xsd.resolve_path(self.get_logger()))
 
         #: The tree -> aisle map, once the orchard arrives. None until then, and
         #: the ontology reads that as "the aisle is unknown" rather than as a
@@ -223,9 +177,9 @@ class ArbiterNode(Node):
         )
 
         # The coordinator's entry point. Reentrant plus the multithreaded
-        # executor in main(): the gate runs a model call and a SPIN process, and
-        # blocking the single-threaded executor here would stall the
-        # /mission/candidate_xml subscription this same node depends on.
+        # executor in main(): blocking the single-threaded executor here would
+        # stall the /mission/candidate_xml subscription this same node depends
+        # on.
         self.create_service(
             VerifyReplan,
             "/mission/verify_replan",
@@ -240,13 +194,6 @@ class ArbiterNode(Node):
         self.status.publish(self.get_status())
 
         self.get_logger().info("ArbiterNode started — gating /mission/candidate_xml")
-        if not self.ltl_verification:
-            self.get_logger().warn(
-                "ltl_verification=false — plans are checked for whether they RUN "
-                "(XSD + preconditions) and for whether they still contain the "
-                "mission's work (objective_gating), but no formula is generated "
-                "and SPIN never runs. Every accept will be reported unverified."
-            )
         if not self.objective_gating:
             self.get_logger().warn(
                 "objective_gating=false — a candidate may drop any or all of the "
@@ -291,24 +238,10 @@ class ArbiterNode(Node):
                 self.get_logger().info(
                     f"Captured original mission objectives: trees {trees}"
                 )
-                # One thread per check, started independently: the budget is
-                # check 4's input and the formula is check 5's, and the two
-                # checks are switched separately.
                 if self.objective_gating:
                     Thread(
                         target=self._compute_viability_budget,
                         args=(mission_text, trees),
-                        daemon=True,
-                    ).start()
-                if self.ltl_verification:
-                    # Translate the mission to LTL now, while nothing is waiting
-                    # on it. The gate needs a formula for every candidate, and
-                    # the model call is the slow part of it; done here, a replan
-                    # pays only for SPIN. Also surfaces an unusable mission
-                    # statement at mission start rather than at the first fault.
-                    Thread(
-                        target=self._ltl_gate.warm,
-                        args=(mission_text,),
                         daemon=True,
                     ).start()
 
@@ -346,7 +279,6 @@ class ArbiterNode(Node):
         would mean the guarantee only covers whichever path was tested.
         """
         response.accepted = False
-        response.verified = False
 
         with self._lock:
             active = self.active_mission_xml
@@ -358,7 +290,7 @@ class ArbiterNode(Node):
             return response
 
         try:
-            candidate, appendix, dropped = self._apply_task_edit(request, active)
+            candidate, dropped = self._apply_task_edit(request, active)
         except ValueError as exc:
             response.reason = str(exc)
             self.get_logger().warn(f"REJECTED coordinator edit — {exc}")
@@ -376,7 +308,6 @@ class ArbiterNode(Node):
         )
 
         accepted = False
-        verified = False
         reason = ""
 
         # A removal that empties the plan has no candidate the normal gate
@@ -406,23 +337,12 @@ class ArbiterNode(Node):
             self.get_logger().info(f"ACCEPTED coordinator edit — {reason}")
             self.status.publish(self.get_status())
         else:
-            # Only meaningful while there is a formula for the text to be
-            # checked against; with verification off there is nothing to
-            # grant permission to.
-            if self.ltl_verification:
-                self._ltl_gate.allow_mission_text(appendix)
             with self._lock:
                 self.justified_drops |= departing
                 self.transferred_objectives |= departing
             try:
-                accepted, verified, reason = self._decide(candidate)
+                accepted, reason = self._decide(candidate)
             finally:
-                # One candidate only. Leaving it armed would let the
-                # planner's next edit inherit the coordinator's permission to
-                # change the mission text, which is the whole thing that
-                # rule prevents.
-                if self.ltl_verification:
-                    self._ltl_gate.allow_mission_text("")
                 if not accepted:
                     # The edit did not go through, so nothing was handed
                     # over. Leaving the drop justified would licence the
@@ -435,7 +355,6 @@ class ArbiterNode(Node):
             self._request_replan(request, candidate, dropped)
 
         response.accepted = accepted
-        response.verified = verified
         response.reason = reason
         return response
 
@@ -514,9 +433,9 @@ class ArbiterNode(Node):
             return set()
         return before - after
 
-    def _apply_task_edit(self, request, active: str) -> Tuple[str, str, List[str]]:
-        """The plan with the task added or removed, the sanctioned text, and
-        whatever the rebuild could not supply.
+    def _apply_task_edit(self, request, active: str) -> Tuple[str, List[str]]:
+        """The plan with the task added or removed, and whatever the rebuild
+        could not supply.
 
         Raises ValueError with a reason the coordinator can log and act on.
         """
@@ -527,9 +446,8 @@ class ArbiterNode(Node):
             if edited is None:
                 raise ValueError(f"task {task_id} is not in the active plan")
             # Losing work never widens what the mission claims to do, so the
-            # text stands and the formula with it -- which is exactly how a plan
-            # that quietly drops an objective gets caught.
-            return edited, "", []
+            # text stands unchanged.
+            return edited, []
 
         task = mission_tasks.MissionTask(
             task_id=task_id,
@@ -569,14 +487,15 @@ class ArbiterNode(Node):
         if edited is None:
             raise ValueError(f"could not graft task {task_id} into the active plan")
 
-        # The mission text has to grow with the work. Without this the formula
-        # still describes the old mission, the absorbed task is outside
-        # everything it talks about, and the new work runs unverified while the
-        # plan reports a clean check.
+        # The mission text has to grow with the work. The replanning LLM sees
+        # the whole plan XML, <Mission> element included, as its context for
+        # what the mission still needs -- without extending it here, a later
+        # replan has no way to know the absorbed objective is part of the
+        # mission rather than something safe to drop.
         clause = _mission_clause(task)
         if clause:
             edited = _extend_mission_text(edited, clause)
-        return edited, clause, dropped
+        return edited, dropped
 
     def _deliver(self, plan: str) -> None:
         """Publish an accepted plan, or hold it until the robot can take it."""
@@ -729,15 +648,12 @@ class ArbiterNode(Node):
         )
         return etree.tostring(pruned, encoding="unicode")
 
-    def _decide(self, candidate: str) -> Tuple[bool, bool, str]:
+    def _decide(self, candidate: str) -> Tuple[bool, str]:
         """Evaluate a candidate, act on the verdict, and report it.
 
-        Returns (accepted, verified, reason). ``verified`` is not implied by
-        ``accepted``: a plan can be accepted with no formal check behind it.
+        Returns (accepted, reason).
         """
         verdict, reason, abort = self._evaluate(candidate)
-        with self._lock:
-            verified = self._last_gate_verified
 
         if verdict:
             # Commit state before publishing, so the echo guard is already armed
@@ -783,7 +699,7 @@ class ArbiterNode(Node):
             self.rejection_pub.publish(rej)
 
         self.status.publish(self.get_status())
-        return verdict, verified, reason
+        return verdict, reason
 
     def _on_bt_status(self, msg: String):
         """Both halves of /bt/status_change, for two different questions.
@@ -886,12 +802,6 @@ class ArbiterNode(Node):
         """Returns (accepted, reason_if_not, abort). abort=True means the mission
         is no longer viable and replanning should stop, not retry."""
 
-        # Cleared up front: the structural checks below can return before the
-        # gate runs, and inheriting the previous candidate's answer would report
-        # an unchecked plan as verified.
-        with self._lock:
-            self._last_gate_verified = False
-
         # 1. Well-formed XML
         try:
             doc = etree.fromstring(candidate.encode("utf-8"))
@@ -907,52 +817,18 @@ class ArbiterNode(Node):
         if not ok:
             return False, reason, False
 
-        # 4. Semantic: objective preservation / viability. Before the
-        # verification flag is consulted, not after: this is the check that
-        # decides whether the mission is still worth running, and it is the only
-        # one that can abort. A run with the formal gate down still needs the
-        # local loop to be able to finish.
+        # 4. Semantic: objective preservation / viability. This is the only
+        # check that can abort, so it is also the only thing that ends the
+        # local repair loop.
         if self.objective_gating:
             ok, reason, abort = self._check_objective_preserved(doc)
             if not ok:
                 return False, reason, abort
 
-        # Everything below is the formal claim and the two churn policies that
-        # ride with it. That is the question this flag turns off; checks 1-4
-        # above ask whether the plan will run and whether it is still the
-        # mission, and always hold.
-        if not self.ltl_verification:
-            with self._lock:
-                self._last_status["ltl_unverified"] += 1
-                self._last_status["ltl_last_reason"] = "verification disabled"
-            return True, "", False
-
         with self._lock:
             active = self.active_mission_xml
 
-        # 5. LTL verification. After the cheap structural checks, because it
-        #    costs a model call and a SPIN run; before the edit-size and rate
-        #    limits, because those are policy and this is correctness -- a plan
-        #    that violates the mission should be reported as violating it, not
-        #    as too large.
-        gate = self._ltl_gate.evaluate(candidate, active)
-        with self._lock:
-            self._last_gate_verified = gate.verified
-            self._last_status["ltl_last_reason"] = gate.reason
-            if gate.verified:
-                self._last_status["ltl_checked"] += 1
-            else:
-                self._last_status["ltl_unverified"] += 1
-        if not gate.accepted:
-            with self._lock:
-                self._last_status["ltl_rejected"] += 1
-            return False, gate.reason, False
-        if not gate.verified:
-            # Loud on purpose. A mission that runs to completion having never
-            # been checked must not look, in a log, like one that passed.
-            self.get_logger().warn(f"Plan accepted without verification: {gate.reason}")
-
-        # 6. Edit-size limit (only when we know the active plan)
+        # 5. Edit-size limit (only when we know the active plan)
         if active is not None:
             ratio = self._changed_line_ratio(active, candidate)
             if ratio > MAX_CHANGED_LINE_RATIO:
@@ -965,7 +841,7 @@ class ArbiterNode(Node):
                     False,
                 )
 
-        # 7. Rate limit — skipped while in a reject→retry cycle
+        # 6. Rate limit — skipped while in a reject→retry cycle
         with self._lock:
             since = time.monotonic() - self._last_accept_time
             awaiting_retry = self._awaiting_retry
@@ -1098,12 +974,7 @@ class ArbiterNode(Node):
 
 
 def _extend_mission_text(mission_xml: str, clause: str) -> str:
-    """Append ``clause`` to the plan's <Mission>, the one sanctioned edit.
-
-    Must agree exactly with ``ltl_gate._extend``, which is what checks it: the
-    two differing by so much as a separator would reject every transfer as an
-    attempt to rewrite the specification.
-    """
+    """Append ``clause`` to the plan's <Mission> text."""
     doc = etree.fromstring(mission_xml.encode("utf-8"))
     element = doc.find("Mission")
     if element is None:
@@ -1116,11 +987,9 @@ def _extend_mission_text(mission_xml: str, clause: str) -> str:
 def _mission_clause(task) -> str:
     """How an absorbed task is described in the plan's <Mission> text.
 
-    Short and mechanical on purpose. This is the text the LTL agent reads, so it
-    has to name the objective in the vocabulary the naming scheme keys on --
-    "tree 35" is what yields ``sampled_tree_35``. It is generated from the wire
-    fields rather than written by a model precisely so that no model can widen
-    the specification it is about to be checked against.
+    Short and mechanical on purpose, and generated from the wire fields rather
+    than written by a model -- this is the line the replanning LLM reads to
+    know the objective is part of the mission.
     """
     if task.target.kind != TargetKind.TREE:
         return ""
@@ -1132,11 +1001,9 @@ def _mission_clause(task) -> str:
 
 
 def main():
-    # Multithreaded because the verification gate blocks: an LLM call for the
-    # formula and a SPIN process for the check. On a single-threaded executor
-    # the coordinator's /mission/verify_replan call would stall the
-    # /mission/candidate_xml subscription for the duration, so the planner and
-    # the coordinator would contend for the gate they both have to pass.
+    # Multithreaded so a slow /mission/verify_replan call from the coordinator
+    # cannot stall the /mission/candidate_xml subscription this same node
+    # depends on.
     spin.run(ArbiterNode, multithreaded=True)
 
 

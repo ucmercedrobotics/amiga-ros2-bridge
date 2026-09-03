@@ -1,7 +1,6 @@
 """Launch every agent in this package.
 
     ros2 launch amiga_ros2_agents agents.launch.py
-    ros2 launch amiga_ros2_agents agents.launch.py ap_vocabulary:="[at_tree_1, sampled_tree_1]"
     ros2 launch amiga_ros2_agents agents.launch.py launch_vlm:=true \\
         vlm_url:=http://localhost:8001/v1/chat/completions
 
@@ -10,8 +9,6 @@ under a namespace, for a simulated fleet. The two are kept in step by hand, so
 an agent or a flag added to one belongs in the other -- `launch_vlm` below
 mirrors the block there.
 """
-
-from typing import List
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -30,11 +27,6 @@ AGENTS = ["world_state", "arbiter", "mission_planner", "triage", "note"]
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "ap_vocabulary",
-                default_value="[]",
-                description="Atomic propositions ltl_gen may use. Empty = model invents them.",
-            ),
             DeclareLaunchArgument(
                 "launch_vlm",
                 default_value="false",
@@ -97,18 +89,6 @@ def generate_launch_description() -> LaunchDescription:
                         # up before the caller does and the log says the model
                         # was slow rather than that the service vanished.
                         "http_timeout_sec": 6.0,
-                    }
-                ],
-            ),
-            Node(
-                package=PACKAGE,
-                executable="ltl_gen",
-                output="screen",
-                parameters=[
-                    {
-                        "ap_vocabulary": ParameterValue(
-                            LaunchConfiguration("ap_vocabulary"), value_type=List[str]
-                        )
                     }
                 ],
             ),

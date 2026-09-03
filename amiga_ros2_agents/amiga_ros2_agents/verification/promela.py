@@ -1,33 +1,31 @@
-"""Mission XML -> Promela. The model half of the verification pair.
+"""Mission XML -> Promela. A behaviour tree, compiled to a model.
 
-``ltl_gen`` turns the mission's English into a temporal formula; this turns the
-behaviour tree into a model SPIN can check that formula against. The two never
-see each other's output -- the LTL agent is given the ``<Mission>`` text and
-nothing else -- so agreement between them is evidence, not construction. That
-decoupling is the whole point, and it is easy to destroy by accident: derive the
-atomic propositions from the tree and the tree satisfies them by definition.
+This turns a behaviour tree into a Promela model and the set of atomic
+propositions it establishes. It used to be the model half of a verification
+pair -- checked against a temporal formula generated from the mission text,
+with SPIN deciding whether the model satisfied the formula -- but that check
+has been removed. What's left is used directly: ``action_pool`` names, from
+the XSD's ``ActionGroup``, what the compiler knows how to represent, and
+``test_ontology.py`` checks the ontology table against it to catch schema
+drift; ``test_task_synthesis.py`` compiles a synthesized task to check it is
+structurally sound.
 
 **Atomic propositions are named by content.** ``MoveToTreeID id="10"
 approach_tree="true"`` defines ``at_tree_10``; the ``SampleLeaf`` that follows
 it defines ``sampled_tree_10``. The names are a function of the mission's
-subject matter -- which trees, which actions -- and the same convention is
-written into ``prompts/ltl_gen/system.j2``, so the two sides land on the same
-identifier without ever consulting each other.
+subject matter -- which trees, which actions.
 
 The alternative, binding the *i*-th proposition to the *i*-th action by
 position, does not survive a replan: drop one task and every proposition after
-it silently rebinds to the wrong action. Since replanning is the only reason
-this module exists, position is not available to us.
+it silently rebinds to the wrong action.
 
 **The trace.** Each action leaf becomes one ``d_step`` -- one indivisible
 transition, so each leaf is exactly one observable state and no intermediate
 state exists where the step has advanced but its parameters have not. A plan is
-therefore a straight line, and SPIN is being used as an LTL-over-finite-trace
-checker rather than a state-space explorer. That is not a limitation we chose:
-``amiga_btcpp.xsd`` has every condition node commented out, so a conforming tree
-has nothing to branch on. ``Fallback`` is emitted as a nondeterministic choice
-anyway, because the XSD does allow it and a silently ignored branch is worse
-than a modelled one.
+therefore a straight line: ``amiga_btcpp.xsd`` has every condition node
+commented out, so a conforming tree has nothing to branch on. ``Fallback`` is
+emitted as a nondeterministic choice anyway, because the XSD does allow it and
+a silently ignored branch is worse than a modelled one.
 
 **Achievement latches, position does not.** ``sampled_tree_10`` stays true once
 true, so ``<>(sampled_tree_1 && <>sampled_tree_2)`` means what its author
@@ -40,7 +38,7 @@ files in ``amiga_ros2_behavior_tree/examples/``.
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set
 
 from lxml import etree
 
@@ -65,11 +63,9 @@ class PromelaError(ValueError):
 class Model:
     """A Promela model of one behaviour tree, plus what it can talk about.
 
-    ``defined_aps`` is the contract with the formula: any proposition the LTL
-    agent used that is not in here is not something this plan establishes, and
-    SPIN would reject the combination as an undeclared variable rather than as
-    a property violation. Callers check coverage first so the failure arrives
-    as "the plan never samples tree 35" instead of a parser error.
+    ``defined_aps`` is what this plan establishes -- read by
+    ``test_ontology.py`` and ``test_task_synthesis.py`` to check a plan
+    actually does what it claims to.
     """
 
     source: str
@@ -285,37 +281,3 @@ def _render(actions: List[str], em: "_Emitter") -> str:
     lines.append(f"    step = {IDLE};")
     lines.append("}")
     return "\n".join(lines) + "\n"
-
-
-def formula_aps(formula: str) -> Set[str]:
-    """The atomic propositions a formula refers to.
-
-    Every bare identifier that is not an operator. Deliberately syntactic: the
-    point is to catch a proposition the plan never defines *before* SPIN sees
-    it, because SPIN reports that as an undeclared variable at parse time --
-    indistinguishable, in the output, from a broken model.
-    """
-    reserved = {"true", "false", "U", "V", "W", "X", "R"}
-    return {
-        tok
-        for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula)
-        if tok not in reserved
-    }
-
-
-def coverage_gap(formula: str, model: Model) -> Tuple[bool, str]:
-    """Does the plan define everything the formula talks about?
-
-    Returns (ok, reason). A gap means the two agents disagree about the mission:
-    either the plan omits something the mission asked for, or the LTL agent
-    invented a fact. Both are rejections, and naming the proposition is what
-    makes the rejection actionable by the planner.
-    """
-    missing = formula_aps(formula) - model.defined_aps
-    if not missing:
-        return True, ""
-    known = ", ".join(sorted(model.defined_aps)) or "none"
-    return False, (
-        f"plan does not establish {sorted(missing)}; "
-        f"propositions this plan defines: {known}"
-    )

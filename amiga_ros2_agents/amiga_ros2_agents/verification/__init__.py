@@ -1,23 +1,14 @@
-"""Formal verification: the LTL specification, the model, and the checker.
+"""Mission model compiler.
 
-The two halves are produced independently and that separation is the whole
-point -- ``ltl`` sees the ``<Mission>`` text and never the tree, ``promela``
-compiles the tree and never sees the formula. Neither can be bent to fit the
-other, so their agreement is evidence rather than construction. They meet in
-``ltl_gate``, which is the ordered set of checks the arbiter runs before any
-plan is committed.
+``promela.py`` compiles a behaviour tree into a Promela model and the set of
+propositions it establishes -- ``action_pool`` names, per the XSD's
+``ActionGroup``, what the compiler knows how to represent. This module used
+to feed a formal LTL check (a specification generated from the mission text,
+verified against this model with SPIN); that check has been removed. What's
+left is used directly by tests: ``test_ontology.py`` checks the ontology
+table against ``action_pool`` to catch schema drift, and
+``test_task_synthesis.py`` compiles a synthesized task to check it is
+structurally sound.
 
-    ltl.py        mission text -> LTL formula        (the specification)
-    promela.py    behaviour tree -> Promela model    (the implementation)
-    verify.py     SPIN, and the three-way verdict
-    ltl_gate.py   the checks, in order, cheapest first
-
-``ltl_gen_node`` exposes the first of those over ROS for callers that want a
-formula on its own, and is the only agent in this directory. The arbiter
-deliberately does not go through it -- see that module's docstring.
-
-Of the four libraries only ``ltl`` reaches a model, and none of them import
-rclpy. The rest is mechanical and testable with no ROS, no network and no LLM,
-which is the reason ``test_verify.py`` can run SPIN for real instead of mocking
-the one component whose behaviour is the entire claim.
+No rclpy here, no LLM, no network -- mechanical and testable on its own.
 """

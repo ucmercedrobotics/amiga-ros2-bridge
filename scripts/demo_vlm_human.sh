@@ -328,7 +328,7 @@ tmux set -g history-limit 500000
 
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${person_tree} spawn_truck:=${truck_tree} ltl_verification:=false objective_gating:=true ${blind_args} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true launch_vlm:=true vlm_url:=${VLM_URL} spawn_person:=${person_tree} spawn_truck:=${truck_tree} objective_gating:=true ${blind_args} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"

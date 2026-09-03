@@ -1,6 +1,7 @@
 """Launch the replanning loop: world state -> mission planner -> arbiter -> triage.
 
-This is the research stack — `agents.launch.py` adds ltl_gen on top of it.
+This is the research stack — `agents.launch.py` adds the note agent and the
+VLM bridge on top of it.
 
 world_state starts first so the planner's /world_state window has frames in it by
 the time the first BT failure arrives.

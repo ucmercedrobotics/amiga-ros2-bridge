@@ -169,7 +169,6 @@ def launch_setup(context, *args, **kwargs):
     launch_coordination = (
         LaunchConfiguration("launch_coordination").perform(context).lower() == "true"
     )
-    ltl_verification = LaunchConfiguration("ltl_verification").perform(context).lower()
     objective_gating = LaunchConfiguration("objective_gating").perform(context).lower()
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
@@ -476,7 +475,6 @@ def launch_setup(context, *args, **kwargs):
                     use_sim_time="true",
                     launch_mission_bridge="false",
                     battery_percent=str(batteries[i - 1]),
-                    ltl_verification=ltl_verification,
                     objective_gating=objective_gating,
                     launch_vlm=launch_vlm,
                     vlm_url=vlm_url,
@@ -732,25 +730,14 @@ def generate_launch_description():
                 "to make a fleet bid asymmetrically without moving anyone.",
             ),
             DeclareLaunchArgument(
-                "ltl_verification",
-                default_value="true",
-                description="False drops the arbiter's formal gate: no formula "
-                "is generated and SPIN never runs. Plans are still checked for "
-                "whether they RUN (XSD + the ontology's required "
-                "preconditions) and for whether they still contain the "
-                "mission's work (see objective_gating). For bringing the "
-                "coordination loop up end to end; every accept is then "
-                "reported unverified.",
-            ),
-            DeclareLaunchArgument(
                 "objective_gating",
                 default_value="true",
                 description="The arbiter's objective-preservation and "
                 "viability checks, and with them its ability to ABORT. "
                 "/mission/abort is what ends the local repair loop and hands "
-                "the fault to the coordinator, so a fleet run needs this on "
-                "regardless of ltl_verification. False makes the local loop "
-                "endless and nothing is ever auctioned.",
+                "the fault to the coordinator, so a fleet run needs this on. "
+                "False makes the local loop endless and nothing is ever "
+                "auctioned.",
             ),
             DeclareLaunchArgument(
                 "lora_spreading_factor",

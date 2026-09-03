@@ -1,13 +1,13 @@
 """The coordinator's half of the verification seam.
 
-Two things are being pinned, and neither is "does SPIN work" -- that is
-``amiga_ros2_agents/test/test_verify.py``'s job.
+Two things are being pinned, and neither is "does the arbiter's gate work" --
+that is ``amiga_ros2_agents/test/test_arbiter_replan.py``'s job.
 
 First, that verification never blocks the coordinator. ``replan_and_verify`` is
-called from inside the lock ``tick`` and ``on_message`` need, and one round trip
-costs a C compile (~1.4 s measured) before any model call. A synchronous client
-would stall heartbeats, auctions and bids for the duration, so the contract is
-that this returns immediately and the verdict arrives later.
+called from inside the lock ``tick`` and ``on_message`` need, and it is a ROS
+service round trip to another process. A synchronous client would stall
+heartbeats, auctions and bids for the duration, so the contract is that this
+returns immediately and the verdict arrives later.
 
 Second, that a late rejection still ends up where a synchronous one would: back
 on the anomaly path. The behaviour ``_take_on`` implements inline has to survive
@@ -68,9 +68,8 @@ class FakeFuture:
 
 
 class FakeResponse:
-    def __init__(self, accepted=True, verified=True, reason=""):
+    def __init__(self, accepted=True, reason=""):
         self.accepted = accepted
-        self.verified = verified
         self.reason = reason
 
 
@@ -206,7 +205,7 @@ def test_rejection_goes_to_the_anomaly_path():
     """What ``_take_on`` does inline, only later."""
     handled = []
     replanner, _, _ = make(
-        FakeClient(FakeResponse(accepted=False, verified=True, reason="LTL violation")),
+        FakeClient(FakeResponse(accepted=False, reason="objective violation")),
         on_rejected=lambda task, reason: handled.append((task, reason)),
     )
     replanner.replan_and_verify(MissionDelta(added=[TASK]))
@@ -215,7 +214,7 @@ def test_rejection_goes_to_the_anomaly_path():
     assert len(handled) == 1
     task, reason = handled[0]
     assert task.task_id == TASK.task_id
-    assert "LTL violation" in reason
+    assert "objective violation" in reason
 
 
 def test_rejected_removal_is_not_handed_back():
@@ -230,25 +229,12 @@ def test_rejected_removal_is_not_handed_back():
     assert handled == []
 
 
-def test_accepted_and_verified_is_recorded_as_such():
-    replanner, _, _ = make(FakeClient(FakeResponse(True, True, "verified against `f`")))
+def test_accepted_is_recorded_as_such():
+    replanner, _, _ = make(FakeClient(FakeResponse(True, "accepted")))
     replanner.replan_and_verify(MissionDelta(added=[TASK]))
     (result,) = settled(replanner)
     assert result.accepted
     assert "unverified" not in result.reason
-
-
-def test_accepted_without_verification_says_so():
-    """Accepted and verified are different claims and must read differently."""
-    replanner, _, node = make(
-        FakeClient(FakeResponse(True, False, "unverified: spin not installed"))
-    )
-    replanner.replan_and_verify(MissionDelta(added=[TASK]))
-    (result,) = settled(replanner)
-
-    assert result.accepted
-    assert "unverified" in result.reason
-    assert any("without verification" in m for _, m in node._logger.messages)
 
 
 # ---------------------------------------------------------------------------
