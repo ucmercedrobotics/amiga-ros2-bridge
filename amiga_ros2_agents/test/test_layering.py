@@ -1,21 +1,21 @@
 """The directory layout, enforced.
 
-Splitting this package into ``runtime`` / ``mission`` / ``verification`` /
-``replanning`` / ``coordination`` only means something if the boundaries hold.
-They are the kind of thing that decays silently: one convenient import from an
-agent into another agent, and the next reader has no way to tell the structure
-is a lie. Nothing else in the suite would notice, so this file does.
+Splitting this package into ``runtime`` / ``mission`` / ``replanning`` /
+``coordination`` only means something if the boundaries hold. They are the
+kind of thing that decays silently: one convenient import from an agent into
+another agent, and the next reader has no way to tell the structure is a lie.
+Nothing else in the suite would notice, so this file does.
 
 Three rules, and each is a claim made in ``amiga_ros2_agents/__init__.py``:
 
 1. Imports run *down* the layer list, never back up. This is what keeps the
    libraries testable on their own -- the moment ``mission`` reaches into
-   ``replanning`` for something, verifying a plan needs a ROS node.
+   ``replanning`` for something, checking a plan needs a ROS node.
 2. No module imports another subpackage's agent. Agents talk over ROS topics
    and services; an agent that imports another agent has quietly become one
    process with two names.
-3. ``mission`` and the verification libraries hold no rclpy. That is the whole
-   reason ``test_promela.py`` can compile a plan with no robot in the loop.
+3. ``mission`` holds no rclpy. That is the whole reason ``test_ontology.py``
+   and ``test_mission_tasks.py`` can exercise a plan with no robot in the loop.
 """
 
 import ast
@@ -31,11 +31,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(os.path.dirname(HERE), PACKAGE)
 
 #: Ordered. A subpackage may import from those before it and no others.
-LAYERS = ["runtime", "mission", "verification", "replanning", "coordination"]
+LAYERS = ["runtime", "mission", "replanning", "coordination"]
 
 #: rclpy is legitimate in ``runtime`` (it *is* the ROS wiring) and in the
 #: agents. Everywhere else it would mean a library grew a node.
-ROS_FREE = ["mission", "verification"]
+ROS_FREE = ["mission"]
 
 
 def _modules():
@@ -125,7 +125,7 @@ def test_no_agent_imports_another_packages_agent(layer, dotted, path):
     ids=[m[1] for m in ALL if m[0] in ROS_FREE and not _is_agent(m[1])],
 )
 def test_libraries_hold_no_ros(layer, dotted, path):
-    """``verification`` earns its claim by being runnable without a robot."""
+    """``mission`` earns its claim by being runnable without a robot."""
     tree = ast.parse(open(path).read())
     for node in ast.walk(tree):
         names = []

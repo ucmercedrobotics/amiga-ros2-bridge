@@ -20,7 +20,6 @@ from lxml import etree
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from amiga_ros2_agents.mission import mission_tasks, ontology, orchard  # noqa: E402
-from amiga_ros2_agents.verification import promela  # noqa: E402
 from amiga_ros2_comms.codec import Capability, Target, cap_mask  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -74,21 +73,23 @@ def test_rebuilt_task_validates_against_the_schema(schema):
     assert schema.validate(etree.fromstring(merged.encode())), schema.error_log
 
 
-def test_rebuilt_task_establishes_its_propositions():
-    """The point of rebuilding it: the mission's formula can see the work.
+def test_rebuilt_task_actually_samples_the_tree():
+    """The point of rebuilding it: the tree gets approached and sampled, not
+    just referenced.
 
     A subtree that navigated to the tree without ``approach_tree="true"`` would
-    satisfy the schema and quietly establish nothing, so the absorbing robot's
-    mission would fail verification with no visible cause.
+    satisfy the schema and quietly sample nowhere, so an absorbed task would
+    leave the tree unsampled with no visible cause -- the same rule the
+    arbiter's precondition check enforces, read here off the same ontology.
     """
     xml = mission_tasks.synthesize(announced(tree=35, caps=SAMPLING), SCHEMA).xml
-    wrapped = (
-        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
-        f'<BehaviorTree ID="T">{xml}</BehaviorTree></root>'
-    )
-    model = promela.compile_mission(wrapped, SCHEMA)
-    assert "at_tree_35" in model.defined_aps
-    assert "sampled_tree_35" in model.defined_aps
+    doc = etree.fromstring(xml.encode())
+    assert ontology.violations(doc) == []
+
+    state = ontology.State()
+    for element in ontology.actions_in(doc):
+        _, state = ontology.advance(state, element)
+    assert ontology.Fact(ontology.SAMPLED_TREE, "35") in state.facts
 
 
 def test_a_rebuilt_task_reads_back_as_the_task_it_was(schema):

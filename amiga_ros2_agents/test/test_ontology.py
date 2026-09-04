@@ -21,8 +21,7 @@ from lxml import etree
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from amiga_ros2_agents.mission import ontology, orchard  # noqa: E402
-from amiga_ros2_agents.verification import promela  # noqa: E402
+from amiga_ros2_agents.mission import mission_tasks, ontology, orchard  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXAMPLES = os.path.join(REPO, "amiga_ros2_behavior_tree", "examples")
@@ -61,14 +60,25 @@ def test_the_table_describes_exactly_the_schemas_actions():
     would verify vacuously. A row with no schema action is a rule about
     something that cannot appear in a plan, which the next reader will believe.
     """
-    ok, reason = ontology.covers(promela.action_pool(SCHEMA))
+    ok, reason = ontology.covers(_action_pool(SCHEMA))
     assert ok, reason
 
 
 def test_every_action_leaf_can_be_advanced():
     """No element of the vocabulary raises when a walk reaches it."""
-    for tag in promela.action_pool(SCHEMA):
+    for tag in _action_pool(SCHEMA):
         assert tag in ontology.TABLE
+
+
+def _action_pool(xsd_path: str):
+    """Every element name in the schema's ``ActionGroup``.
+
+    Not ``action_names``: that reads the ROS ``action_name`` a leaf dispatches
+    to, and ``Wait`` has none -- it is a local BT node, not an action-server
+    call. This is the full vocabulary a plan may contain, ROS-backed or not,
+    which is what the table needs to be closed against.
+    """
+    return [row["tag"] for row in mission_tasks.action_grammar(xsd_path)]
 
 
 # ==========================================================================
@@ -198,7 +208,7 @@ def test_lining_up_at_a_tree_is_not_leaving_it():
 
 
 def test_having_sampled_a_tree_survives_driving_away():
-    """Achievement latches; position does not. Same asymmetry promela encodes."""
+    """Achievement latches; position does not."""
     plan = etree.fromstring(
         b'<Sequence><MoveToTreeID name="v" id="60" approach_tree="true"/>'
         b'<SampleLeaf name="s"/><MoveToAisleHead name="out" id="6"/></Sequence>'

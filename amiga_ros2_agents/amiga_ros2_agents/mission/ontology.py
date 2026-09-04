@@ -6,14 +6,12 @@ the only part anybody names. Every piece of this system that reasons about a
 plan needs that chain, and until this module existed each of them had its own
 partial copy of it:
 
-    promela._Emitter._at            a SampleLeaf samples the tree the walk last
-                                    moved to
     arbiter._check_no_orphan_sample the same rule, scoped to one Sequence
     mission_tasks._split_by_objective   a unit is a movement plus the work after
 
-None of the three knew that reaching a tree expects entering its aisle, so no
-unit ever contained its aisle move -- and a task handed to another robot
-arrived without the part that gets the robot there. That is the gap this closes.
+Neither knew that reaching a tree expects entering its aisle, so no unit ever
+contained its aisle move -- and a task handed to another robot arrived without
+the part that gets the robot there. That is the gap this closes.
 
 **Two strengths of precondition, and the distinction is load-bearing.**
 
@@ -29,15 +27,14 @@ only reject what is genuinely wrong) and planning (which wants the whole chain).
 
 **The table is closed against the schema.** One row per element of the XSD's
 ``<xs:group name="ActionGroup">``; ``covers`` checks that against
-``promela.action_pool`` so a new action in the schema is a loud test failure
-rather than a leaf that silently means nothing. The vocabulary a row is written
-in is small on purpose -- five fact kinds -- because a predicate nobody can
-establish is a predicate that only ever blocks a plan.
+``mission_tasks.action_grammar`` so a new action in the schema is a loud test
+failure rather than a leaf that silently means nothing. The vocabulary a row is
+written in is small on purpose -- five fact kinds -- because a predicate nobody
+can establish is a predicate that only ever blocks a plan.
 
 **Position is exclusive; achievement latches.** A robot is at one place and in
 one aisle at a time, so a move retracts where it used to be. Having sampled a
-tree is permanent. That asymmetry is the same one ``promela`` encodes in its
-macros and its latches, and it is why a state here is a set of facts rather
+tree is permanent. That asymmetry is why a state here is a set of facts rather
 than a list of things that happened.
 
 No ROS, no lxml beyond element inspection, so this is testable against real
@@ -101,9 +98,9 @@ TRAVELS = WHERE | AISLE
 REQUIRED = "required"
 EXPECTED = "expected"
 
-#: How an action shows up in the verification model's vocabulary. Named here
-#: rather than in ``promela`` so the emitter is a lookup with no tag literals
-#: in it, which is what stopped the two drifting apart in the first place.
+#: What kind of fact an action's completion represents. Objective/achievement
+#: facts are the work itself, never a leftover; ``dangling`` reads this to
+#: skip them when looking for orphaned setup steps.
 OBJECTIVE = "objective"  # somewhere the mission wanted the robot to be
 ACHIEVEMENT = "achievement"  # something the mission wanted done, latching
 DONE = "done"  # ran; nothing else to say about it

@@ -888,8 +888,8 @@ def action_grammar(xsd_path: str) -> "List[dict]":
     two-element list -- ``MoveToTreeID`` and ``SampleLeaf``. ``MoveToAisleHead``
     was not in it, so the replanner could not emit an aisle move even when the
     plan it was editing was full of them, and every replan quietly flattened the
-    prerequisite chain. That is exactly the drift ``promela.action_pool``'s
-    docstring was written about, in a second place.
+    prerequisite chain. That is exactly the drift ``action_names`` above exists
+    to prevent, in a second place.
 
     Read out of the schema for the same reason ``action_names`` is: a list that
     cannot drift cannot describe a grammar the validator will then reject.

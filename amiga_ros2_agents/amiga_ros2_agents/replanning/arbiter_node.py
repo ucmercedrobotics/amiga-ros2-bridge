@@ -866,13 +866,12 @@ class ArbiterNode(Node):
 
         One rule today — a ``SampleLeaf`` needs the robot to be at a tree, or it
         samples wherever it happens to be standing — but asked of
-        ``mission.ontology`` rather than restated here, because ``promela``
-        refuses the same plans for the same reason and two copies of a rule
-        disagree eventually. These did: this check used to scan only the
-        ``SampleLeaf``'s own siblings, so a plan that approaches the tree in one
-        ``RetryUntilSuccessful`` and samples it in the next was rejected even
-        though nothing was wrong with it — and that is how the mission planner
-        writes a retried sample.
+        ``mission.ontology`` rather than restated here, because a second copy
+        of a rule disagrees with the first eventually. It already has: this
+        check used to scan only the ``SampleLeaf``'s own siblings, so a plan
+        that approaches the tree in one ``RetryUntilSuccessful`` and samples it
+        in the next was rejected even though nothing was wrong with it — and
+        that is how the mission planner writes a retried sample.
 
         Soft preconditions (a tree move expects its aisle move first) are not
         checked here. They are advice for a planner, not grounds for refusal;

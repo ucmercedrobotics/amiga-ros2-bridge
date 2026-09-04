@@ -7,22 +7,20 @@ a DDS participant is the whole story.
 
 ## Layout
 
-Five directories, and what separates them is what each part is allowed to know.
+Four directories, and what separates them is what each part is allowed to know.
 The dependency direction runs down this list and never back up.
 
 | Directory | What lives there |
 | --- | --- |
 | `runtime/` | How an agent is wired, with nothing about what it decides. |
 | `mission/` | The plan document: its schema, and the tasks inside it. |
-| `verification/` | The mission model compiler. |
 | `replanning/` | The self-correction loop — the agents that repair a plan in flight. |
 | `coordination/` | Where this stack meets the fleet. |
 
-`runtime/` knows nothing about missions. `mission/` and `verification/` are
-libraries with no rclpy in them, so they unit-test with no ROS and no network.
-Only `replanning/` and `coordination/` hold a ROS node. When an agent needs
-something a sibling agent also needs, it imports the library, never the other
-agent.
+`runtime/` knows nothing about missions. `mission/` is a library with no
+rclpy in it, so it unit-tests with no ROS and no network. Only `replanning/`
+and `coordination/` hold a ROS node. When an agent needs something a sibling
+agent also needs, it imports the library, never the other agent.
 
 | File | What it is |
 | --- | --- |
@@ -32,7 +30,6 @@ agent.
 | `runtime/spin.py` | `run()` — the init/spin/shutdown every agent's `main()` delegates to. |
 | `mission/xsd.py` | BT.CPP mission schema loading, shared by the arbiter and the planner. |
 | `mission/mission_tasks.py` | The only module that turns plan XML into task records and back. |
-| `verification/promela.py` | Behaviour tree → Promela model, and the propositions it establishes. Used directly by tests, not by any agent. |
 | `replanning/mission_planner_node.py` | **Mission planner** — minimally edits the BT.CPP XML plan on failure. |
 | `replanning/arbiter_node.py` | **Arbiter** — gates candidate edits; sole writer of `/mission/xml`. |
 | `replanning/world_state_node.py` | **World state** — aggregates action feedback into `/world_state`. |
@@ -223,12 +220,9 @@ docstring for the exact order.
 
 This pipeline used to include a fifth, formal step here — a temporal-logic
 specification generated once from the pristine mission text, checked against
-each candidate with SPIN — gated behind an `ltl_verification` flag. That check
-has been removed; this pipeline does not use LTL. `verification/promela.py`
-survives as the mission model compiler two test suites still use
-(`test_ontology.py` to catch the ontology table drifting from the schema,
-`test_task_synthesis.py` to check a synthesized task compiles), but nothing in
-the runtime path calls it.
+each candidate with SPIN — gated behind an `ltl_verification` flag. That check,
+and the Promela model compiler it verified the plan against, have both been
+removed; this pipeline does not use LTL.
 
 ## ROS interfaces
 
