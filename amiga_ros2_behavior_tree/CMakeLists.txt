@@ -18,6 +18,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -42,7 +43,9 @@ add_executable(bt_runner
   src/actions/move_to_relative_location.cpp
   src/actions/detect_object.cpp
   src/actions/sample_leaf.cpp
+  src/actions/harvest_fruit.cpp
   src/actions/check_value.cpp
+  src/actions/wait.cpp
   src/actions/assert_true.cpp
   src/actions/follow_person.cpp
   src/actions/orient_robot_heading.cpp
@@ -56,6 +59,7 @@ add_executable(dummy_nav2_ntp_server src/mocks/dummy_nav2_ntp_server.cpp)
 add_executable(dummy_segment_leaves_server src/mocks/dummy_segment_leaves_server.cpp)
 
 add_executable(sim_segment_leaves_server src/mocks/sim_segment_leaves_server.cpp)
+add_executable(sim_harvest_fruit_server src/mocks/sim_harvest_fruit_server.cpp)
 
 add_executable(dummy_tree_id_server src/mocks/dummy_tree_id_server.cpp)
 add_executable(mission_publisher src/mocks/mission_publisher.cpp)
@@ -108,6 +112,17 @@ ament_target_dependencies(sim_segment_leaves_server
   kortex_interfaces
   trajectory_msgs
 )
+
+ament_target_dependencies(sim_harvest_fruit_server
+  rclcpp
+  rclcpp_action
+  kortex_interfaces
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  trajectory_msgs
+)
+target_link_libraries(sim_harvest_fruit_server nlohmann_json::nlohmann_json)
 
 ament_target_dependencies(dummy_tree_id_server
   rclcpp
@@ -171,6 +186,9 @@ install(TARGETS dummy_nav2_ntp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS dummy_segment_leaves_server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS sim_harvest_fruit_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS sim_segment_leaves_server

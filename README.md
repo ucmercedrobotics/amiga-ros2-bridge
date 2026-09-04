@@ -204,8 +204,8 @@ Once a mission is running, three in-tree packages take over from there:
 [`amiga_ros2_comms`](amiga_ros2_comms/README.md) (LoRa transport, a coordination
 message codec, and a reliability layer for a multi-robot radio link),
 [`amiga_ros2_agents`](amiga_ros2_agents/README.md) (LLM agents that repair a
-plan in flight, verify it against an LTL specification, and decide what to do
-with work a robot cannot finish), and
+plan in flight, gate it against the mission schema and ontology, and decide
+what to do with work a robot cannot finish), and
 [`amiga_ros2_coordinator`](amiga_ros2_coordinator/README.md) (the contract-net
 auction that lets a fleet shed and absorb tasks). See
 [`amiga_ros2_coordinator/docs/coordinator.md`](amiga_ros2_coordinator/docs/coordinator.md)

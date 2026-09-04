@@ -23,18 +23,30 @@ win.
 
 ## Orchard layout (ground truth — the plan below must respect this)
 {% if orchard_facts %}
-{% for tree_id, aisle_id in orchard_facts.items() %}
-- tree {{ tree_id }} is reached from aisle {{ aisle_id if aisle_id is not none else "UNKNOWN" }}
+{% for tree_id, aisle_ids in orchard_facts.items() %}
+- tree {{ tree_id }} is reached from aisle {{ aisle_ids | join(" or ") if aisle_ids else "UNKNOWN" }}
 {% endfor %}
 Known aisles in this orchard: {{ known_aisles | join(", ") }}
-A <MoveToAisleHead> whose id is not one of these, or is not the tree's own
-aisle above, does not reach that tree — aisles run between rows of trees and
-cannot be crossed on foot or by rover to reach a different aisle's trees.
+A <MoveToAisleHead> whose id is not one of these, or is not one of the tree's
+own aisles above, does not reach that tree — aisles run between rows of trees
+and cannot be crossed on foot or by rover to reach a different aisle's trees.
 {% else %}
 No orchard layout has been received yet — do not invent an aisle id for any
 tree; only change what the failure event and world state actually justify.
 {% endif %}
 
+{% if transferred_targets %}
+## Handed to another robot — do NOT re-add these
+{{ transferred_targets | join(", ") }} were won from this robot at auction
+and belong to a peer now. They are deliberately absent from the "Active mission
+XML" below, but the <Mission> line above still names them: a transfer removes
+the work without narrowing the stated mission, so the mission text is NOT
+evidence that this robot still owes these.
+
+Restoring one does not recover lost work — it sends this robot where another
+robot is already going, and both then contend for the same approach waypoint.
+
+{% endif %}
 {% if completed_trees %}
 ## Already completed this mission — do NOT re-add these
 Trees {{ completed_trees | join(", ") }} have already been sampled

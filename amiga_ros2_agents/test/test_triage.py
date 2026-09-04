@@ -939,6 +939,243 @@ def test_shedding_a_task_restores_the_planning_budget(monkeypatch):
         planner.destroy_node()
 
 
+def test_a_tree_won_by_a_peer_is_remembered_as_theirs(monkeypatch):
+    """The deadlock in aisle 2.
+
+    amiga3 gave tree 20 to amiga2 at auction. ``remove_task`` took it out of
+    the plan correctly and two published plans went out without it. Then the
+    next fault replan put it back, because the <Mission> line still read
+    "sample trees 20 and 26": a transfer removes the work but deliberately
+    does not narrow the stated mission, so the model read the mission, saw an
+    objective missing from the plan, and restored it. Both robots then drove
+    at the same tree and one ended up parked on the approach waypoint the
+    other needed.
+
+    The plan cannot carry this fact and the mission text actively contradicts
+    it, so the planner has to hold it the way it already holds completed work.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_transferred",
+                        "task_id": 43808,
+                        "target": {"kind": "tree", "a": 20, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_targets == {Target.tree(20)}
+
+        # Won back: the ledger says who owns the work now, not what has ever
+        # left, so a tree that comes home is plannable again.
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_absorbed",
+                        "task_id": 43808,
+                        "target": {"kind": "tree", "a": 20, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_targets == set()
+    finally:
+        planner.destroy_node()
+
+
+def test_an_aisle_won_by_a_peer_is_remembered_too(monkeypatch):
+    """Not just trees. An aisle or a GPS waypoint a peer took at auction is
+    exactly as re-sendable-to as a tree is -- a mission built from those
+    targets needs the same protection, or the aisle-2 deadlock recurs for any
+    non-tree task."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        planner._on_replan_request(
+            _string(
+                json.dumps(
+                    {
+                        "cause": "task_transferred",
+                        "task_id": 43808,
+                        "target": {"kind": "aisle", "a": 2, "b": 0},
+                        "findings": [],
+                    }
+                )
+            )
+        )
+        assert planner.transferred_targets == {Target.aisle(2)}
+    finally:
+        planner.destroy_node()
+
+
+def test_an_unplaced_or_missing_target_is_not_recorded(monkeypatch):
+    """A NONE target names nowhere, so there is nothing to keep out of a plan."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        monkeypatch.setattr(planner, "_run_planner", lambda *a, **kw: None)
+
+        for target in ({"kind": "none", "a": 0, "b": 0}, None):
+            planner._on_replan_request(
+                _string(
+                    json.dumps(
+                        {
+                            "cause": "task_transferred",
+                            "task_id": 43808,
+                            "target": target,
+                            "findings": [],
+                        }
+                    )
+                )
+            )
+        assert planner.transferred_targets == set()
+    finally:
+        planner.destroy_node()
+
+
+_TWO_TREE_MISSION = """<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>sample trees 20 and 64</Mission>
+  <BehaviorTree ID="SampleTrees20And64">
+    <Sequence name="SampleTreesMission">
+      <MoveToAisleHead name="EnterRow2" action_name="move_to_aisle_head" id="2"/>
+      <RetryUntilSuccessful name="SampleTree20WithRetry" num_attempts="3">
+        <Sequence name="SampleTree20">
+          <MoveToTreeID name="ApproachTree20" action_name="follow_tree_id_waypoint" id="20" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree20" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitRow2" action_name="move_to_aisle_head" id="2"/>
+      <MoveToAisleHead name="EnterRow4" action_name="move_to_aisle_head" id="4"/>
+      <RetryUntilSuccessful name="SampleTree64WithRetry" num_attempts="3">
+        <Sequence name="SampleTree64">
+          <MoveToTreeID name="ApproachTree64" action_name="follow_tree_id_waypoint" id="64" approach_tree="true"/>
+          <SampleLeaf name="SampleLeafTree64" action_name="segment_leaves"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitRow4" action_name="move_to_aisle_head" id="4"/>
+    </Sequence>
+  </BehaviorTree>
+</root>"""
+
+
+def test_strip_transferred_removes_a_target_the_model_restored():
+    """The prompt asked the model not to re-add tree 20; it did anyway,
+    reading the <Mission> line's "trees 20 and 64" rather than the
+    instruction. This is the backstop: it cuts the task by target, so it
+    catches the restoration however the model wrote the leaf names."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        result = planner._strip_transferred(_TWO_TREE_MISSION, {Target.tree(20)})
+        assert result is not None
+        assert 'id="20"' not in result
+        assert 'id="64"' in result
+    finally:
+        planner.destroy_node()
+
+
+def test_strip_transferred_returns_none_when_nothing_is_left():
+    """Every tree in the mission belongs to a peer -- there is nothing this
+    robot could still publish, so the caller must not publish at all."""
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+
+    planner = MissionPlannerNode()
+    try:
+        result = planner._strip_transferred(
+            _TWO_TREE_MISSION, {Target.tree(20), Target.tree(64)}
+        )
+        assert result is None
+    finally:
+        planner.destroy_node()
+
+
+def test_a_workload_change_session_edits_the_plan_its_own_commit_produced(monkeypatch):
+    """Not whatever this robot last had a chance to adopt.
+
+    ``current_mission_xml`` only updates when a plan is actually delivered on
+    /mission/xml, and a robot mid-mission gets nothing delivered until its own
+    mission ends -- which can be long after the arbiter committed this very
+    edit. Editing that stale copy meant re-deriving, from scratch, a unit the
+    commit had already built correctly: on a real run, a tree absorbed from a
+    different aisle than any the stale copy mentioned got rewritten with the
+    wrong aisle, because the right one was never in the document the model
+    was shown. The arbiter now sends the committed plan itself in the replan
+    request; this is that plan reaching the prompt instead of the stale one.
+    """
+    from amiga_ros2_agents.replanning.mission_planner_node import MissionPlannerNode
+    from amiga_ros2_agents.runtime import llm
+
+    planner = MissionPlannerNode()
+    try:
+        # Stale: this robot's last delivered plan, mentioning only aisles 2 and 4.
+        planner.current_mission_xml = _TWO_TREE_MISSION
+
+        # What the arbiter's own edit actually committed: _TWO_TREE_MISSION
+        # plus a correctly-grafted tree 96, entered via its real aisle, 6 --
+        # an aisle the stale copy never mentions at all.
+        committed = _TWO_TREE_MISSION.replace(
+            "    </Sequence>\n  </BehaviorTree>",
+            '      <Sequence name="task_10554">'
+            '<MoveToAisleHead name="task_10554_aisle_6" '
+            'action_name="move_to_aisle_head" id="6"/>'
+            '<MoveToTreeID name="task_10554_visit_96" '
+            'action_name="follow_tree_id_waypoint" id="96" approach_tree="true"/>'
+            '<SampleLeaf name="task_10554_sample_96" action_name="segment_leaves"/>'
+            "</Sequence>\n    </Sequence>\n  </BehaviorTree>",
+        )
+        assert committed != _TWO_TREE_MISSION and "task_10554_aisle_6" in committed
+
+        captured = {}
+
+        def fake_complete(system, user, **kw):
+            captured["user"] = user
+            return committed  # a no-op edit: hands the committed plan straight back
+
+        monkeypatch.setattr(llm, "complete", fake_complete)
+
+        planner._run_planner(
+            {
+                "node": "task_absorbed:10554",
+                "reason": "task_absorbed",
+                "timestamp_ms": 0,
+            },
+            [],
+            template="mission_planner/replan_request_user.j2",
+            extra={
+                "request": {
+                    "cause": "task_absorbed",
+                    "task_id": 10554,
+                    "target": {"kind": "tree", "a": 96, "b": 0},
+                    "findings": [],
+                    "committed_mission_xml": committed,
+                }
+            },
+        )
+
+        assert "task_10554_aisle_6" in captured["user"], (
+            "the tree's real aisle, present only in the committed plan, "
+            "must reach the model"
+        )
+        assert "task_10554_visit_96" in captured["user"]
+    finally:
+        planner.destroy_node()
+
+
 def test_ordinary_planner_progress_does_not_escalate(node, monkeypatch):
     # The planner publishes this topic for terminal outcomes, but the loop is
     # allowed to keep trying. Escalating on every status message would put a
@@ -1018,10 +1255,12 @@ def test_a_model_that_raises_does_not_take_the_service_down(node, monkeypatch):
 
 def test_the_prompt_carries_the_evidence_the_node_gathered(node, monkeypatch):
     node._on_mission(_string(MISSION_XML))
+    # World state before the fault, which is the real ordering: it publishes at
+    # 1 Hz and the fault latches whichever frame was current.
+    node._on_world_state(_string('{"battery": 9, "row": 4}'))
     node._on_fault(
         _string(json.dumps({"node": "Visit_Tree_60", "timestamp_ms": 0, "uid": 3}))
     )
-    node._on_world_state(_string('{"battery": 9, "row": 4}'))
 
     seen = {}
 
@@ -1040,6 +1279,230 @@ def test_the_prompt_carries_the_evidence_the_node_gathered(node, monkeypatch):
     assert "Peers alive right now" in seen["user"]
     for action in tn.VALID_ACTIONS:
         assert action in seen["system"]
+
+
+# ==========================================================================
+# The camera: always in the context of a fault
+# ==========================================================================
+#
+# The description is fetched on every fault, not when the model asks for it.
+# The decision is made from all the evidence at once, so what is worth pinning
+# is that the description reaches the prompt, and that a camera which is
+# absent, slow or broken never stops a verdict coming out -- the mission
+# planner replans anyway after ROUTE_TIMEOUT_SEC.
+
+
+class _FakeVlm:
+    """Stands in for VlmClient. Only ``ask`` and ``service_name`` are used."""
+
+    service_name = "/vlm/ask"
+
+    def __init__(self, answer="a tree fills the frame", raises=None):
+        self._answer = answer
+        self._raises = raises
+        self.questions = []
+
+    def ask(self, question):
+        self.questions.append(question)
+        if self._raises is not None:
+            raise self._raises
+        return self._answer
+
+
+def test_without_a_camera_the_prompt_has_no_camera_section(node, monkeypatch):
+    """The default: one model call, and nothing about a camera in the prompt."""
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    assert node.vlm is None
+    node._on_fault(_string(FAULT))
+
+    assert len(calls) == 1
+    assert "What the camera can see" not in calls[0]
+    assert published[0]["route"] == "repair"
+    assert node.get_status()["vlm_looks"] == 0
+
+
+def test_the_description_is_in_the_decision_prompt(node, monkeypatch):
+    node.vlm = _FakeVlm(answer="A person is visible, wearing a white shirt.")
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert node.vlm.questions == [tn.vlm_client.DESCRIBE_QUESTION]
+    assert "What the camera can see" in calls[0]
+    assert "A person is visible, wearing a white shirt." in calls[0]
+    assert node.get_status()["vlm_looks"] == 1
+    assert published[0]["route"] == "repair"
+
+
+def test_every_fault_costs_one_camera_call(node, monkeypatch):
+    """No gate, so the count is the number of faults and nothing else."""
+    node.vlm = _FakeVlm()
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    for name in ("Visit_Tree_10", "Sample_Leaves_Tree_10", "Visit_Tree_60"):
+        node._on_fault(_string(json.dumps({**json.loads(FAULT), "node": name})))
+
+    assert len(node.vlm.questions) == 3
+    assert node.get_status()["vlm_looks"] == 3
+
+
+def test_a_repeat_of_the_same_leaf_does_not_look_again(node, monkeypatch):
+    """The per-node route cache still holds: a dead leaf re-ticking under its
+    own retry decorator republishes the cached verdict and asks nothing."""
+    node.vlm = _FakeVlm()
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+    node._on_fault(_string(FAULT))
+    node._on_fault(_string(FAULT))
+
+    assert len(node.vlm.questions) == 1
+
+
+@pytest.mark.parametrize(
+    "vlm",
+    [
+        _FakeVlm(answer=None),  # timed out, or the server declined
+        _FakeVlm(answer=""),  # answered with nothing
+    ],
+    ids=["no answer", "empty answer"],
+)
+def test_a_failed_camera_says_so_and_the_verdict_still_comes(node, monkeypatch, vlm):
+    node.vlm = vlm
+    published = routes(node, monkeypatch)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert "did not answer" in calls[0]
+    assert node.get_status()["vlm_looks"] == 0
+    assert published[0]["route"] == "repair"
+
+
+def test_a_camera_that_raises_does_not_stop_the_verdict(node, monkeypatch):
+    """`_decide_route` fails open, so even an unhandled client error routes."""
+    node.vlm = _FakeVlm(raises=RuntimeError("service died"))
+    published = routes(node, monkeypatch)
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert len(published) == 1
+    assert published[0]["route"] == "repair"
+
+
+def test_a_talkative_camera_cannot_crowd_out_the_logs(node, monkeypatch):
+    """Cut, not refused, and capped at both ends like a note."""
+    node.vlm = _FakeVlm(answer="tree. " * 500)
+    calls = _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+
+    node._on_fault(_string(FAULT))
+
+    assert calls[0].count("tree.") <= (tn.vlm_client.MAX_ANSWER_CHARS // len("tree. "))
+
+
+def test_the_camera_is_asked_to_describe_and_not_to_judge():
+    """The camera reports; the reasoning model decides.
+
+    Every one of these words was in this question at some point, and each is a
+    conclusion the model downstream is supposed to reach for itself. A vision
+    model that answers them hands back a verdict -- "the row appears passable"
+    was once repeated verbatim as the reason for one.
+    """
+    question = tn.vlm_client.DESCRIBE_QUESTION.lower()
+    before = question.split("do not say whether")[0]
+    for judgement in ("passable", "usable", "in the way", "blocking", "safe"):
+        assert (
+            judgement not in before
+        ), f"the camera is being asked to judge {judgement!r}"
+
+
+def test_the_camera_is_not_asked_for_geometry():
+    """The robot measures range and bearing; a 4B describer guesses them.
+
+    Asked for position, the vision model put a person "to the right" while the
+    collision monitor had an obstacle 0.62 m directly ahead, and the reasoner
+    concluded the robot was misaligned.
+    """
+    assert "distances or bearings" in tn.vlm_client.DESCRIBE_QUESTION
+
+
+def test_the_camera_deadline_fits_inside_the_planners_budget(node):
+    from amiga_ros2_agents.replanning import mission_planner_node as mp
+
+    assert tn.vlm_client.DEFAULT_TIMEOUT_SEC * 2 < mp.ROUTE_TIMEOUT_SEC
+
+
+def test_the_interpretation_path_gets_the_description_too(node, monkeypatch):
+    """Both reasoning points, not just routing."""
+    node.vlm = _FakeVlm(answer="The row ahead is flooded.")
+    calls = _model(
+        monkeypatch,
+        reply(action="drop_task", reason_code="unreachable", disposition="drop"),
+    )
+
+    node._on_interpret(_request(task_id=42), _response())
+
+    assert "The row ahead is flooded." in calls[0]
+
+
+def test_the_evidence_is_latched_at_the_fault(node, monkeypatch):
+    """Interpretation reads the fault's moment, not the buffers as they stand.
+
+    The coordinator only asks once local recovery has run out, which is minutes
+    after the failure. A world frame or a camera image from *then* describes a
+    different moment than the fault it is offered as evidence of.
+    """
+    node.vlm = _FakeVlm(answer="a person is visible")
+    _model(monkeypatch, route_reply(route="repair", reason_code="unspecified"))
+    node._on_world_state(_string('{"battery": 88, "at_tree": 60}'))
+
+    node._on_fault(_string(FAULT))
+
+    # Everything below arrives after the fault and must not reach the decision.
+    node.vlm = _FakeVlm(answer="an empty aisle")
+    node._on_world_state(_string('{"battery": 12, "at_tree": 99}'))
+
+    seen = {}
+    monkeypatch.setattr(
+        tn.llm,
+        "complete",
+        lambda system, user, **kw: seen.setdefault("user", user)
+        or reply(action="drop_task", reason_code="unreachable", disposition="drop"),
+    )
+    node._on_interpret(_request(task_id=60), _response())
+
+    assert "a person is visible" in seen["user"]
+    assert "an empty aisle" not in seen["user"]
+    assert '"battery": 88' in seen["user"]
+    assert '"battery": 12' not in seen["user"]
+    # And the camera was asked once, at the fault, not again for this decision.
+    assert node.get_status()["vlm_looks"] == 1
+
+
+def test_the_log_buffer_prunes_without_rebuilding(node):
+    """A deque pruned from the left, not a list rebuilt on every line.
+
+    This runs at whatever rate the whole stack logs and holds the lock a
+    diagnosis needs, so its cost must not grow with the buffer.
+    """
+    from collections import deque
+
+    assert isinstance(node.log_buffer, deque)
+    for _ in range(200):
+        node._on_log(_log_line("chatty_node", "still here"))
+    assert len(node.log_buffer) == 200
+
+    stale = _log_line("old_node", "long gone")
+    stale.stamp.sec -= int(tn.LOG_WINDOW_SEC) + 5
+    node.log_buffer.appendleft(
+        {"stamp": 0.0, "level": "INFO", "name": "old", "msg": "ancient"}
+    )
+    node._on_log(_log_line("chatty_node", "one more"))
+    assert all(entry["msg"] != "ancient" for entry in node.log_buffer)
 
 
 # ==========================================================================
@@ -1225,6 +1688,32 @@ def _string(data: str):
     from std_msgs.msg import String
 
     return String(data=data)
+
+
+def _log_line(name: str, text: str, level: int = 40):
+    """One /rosout entry, stamped now. Pair it with `_fault_now()`."""
+    from rcl_interfaces.msg import Log
+
+    message = Log()
+    message.stamp = _now_stamp()
+    message.level = level
+    message.name = name
+    message.msg = text
+    return message
+
+
+def _now_stamp():
+    from rclpy.clock import Clock
+
+    return Clock().now().to_msg()
+
+
+def _fault_now() -> str:
+    """FAULT, but stamped now so the log slice around it is not empty."""
+    stamp = _now_stamp()
+    event = json.loads(FAULT)
+    event["timestamp_ms"] = int((stamp.sec + stamp.nanosec * 1e-9) * 1000)
+    return json.dumps(event)
 
 
 def _request(**fields):

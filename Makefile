@@ -70,7 +70,7 @@ repo-init:
 	pre-commit install
 
 shell:
-	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}:${IMAGE_TAG}) && \
+	CONTAINER_PS=$(shell docker ps -q --filter ancestor=${IMAGE}:${IMAGE_TAG} --filter status=running | head -n1) && \
 	docker exec -it $${CONTAINER_PS} bash
 
 manifest:
@@ -95,7 +95,7 @@ bash: udev
 	--net=host \
 	--privileged \
 	${CUDA_MOUNT} \
-	--env="DISPLAY=:2" \
+	--env="DISPLAY=:1" \
 	-v .:/${WORKSPACE}:Z \
 	-v /${WORKSPACE}/manifests \
 	-v ~/.ssh:/root/.ssh:ro \
@@ -156,6 +156,21 @@ ci-lint:
 oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
+VLM_IMAGE_TOPIC ?= /oak0/rgb/image_raw
+# The vision model's endpoint. 8001 because AGENT_API_BASE -- the agents'
+# reasoning model -- is the one that lives on 8000; this is a separate service
+# that only describes camera frames.
+VLM_URL ?= http://localhost:8001/v1/chat/completions
+VLM_QUESTION ?= Describe what you see.
+vlm:
+	ros2 run amiga_vlm_bridge vlm_server --ros-args \
+		-p image_topic:=${VLM_IMAGE_TOPIC} \
+		-p vlm_url:=${VLM_URL} \
+		-p system_prompt:="You are a helpful assistant describing a farm robot's camera view."
+
+vlm-ask:
+	ros2 service call /vlm/ask amiga_vlm_interfaces/srv/VlmAsk "{question: '${VLM_QUESTION}'}"
+
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 
@@ -168,7 +183,7 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 1
+ROBOT_COUNT ?= 3
 # Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
 # so this is the dial on how much coordination traffic the fleet can sustain.
 LORA_SF ?= 7
@@ -179,20 +194,21 @@ COORDINATION ?= true
 # amiga_ros2_agents/README.md. It also switches the coordinators over to asking
 # those agents instead of their local stubs.
 AGENTS ?= false
-# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
-# they will RUN -- well-formed XML, the XSD, and the ontology's required
-# preconditions -- but not for whether they still satisfy the mission: no
-# formula, no SPIN, no viability budget, no edit-size or rate limit. For
-# bringing the coordination loop up end to end, where the question is whether a
-# task crosses robots and comes back as executable XML. Every accept is then
-# reported unverified, in the service response and in the arbiter's status.
-LTL ?= true
+# VLM=true gives each robot a vlm_server, so its triage agent can ask what the
+# camera sees. Needs AGENTS=true, since triage is the only caller, and a vision
+# model on VLM_URL -- a different model and endpoint from AGENT_API_BASE, which
+# stays pointed at the agents' reasoning model.
+VLM ?= false
+
+PERSON ?= 20
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
 		launch_coordination:=$(COORDINATION) \
 		launch_agents:=$(AGENTS) \
-		ltl_verification:=$(LTL) \
+		launch_vlm:=$(VLM) \
+		vlm_url:=$(VLM_URL) \
+		spawn_person:=$(PERSON) \
 		lora_spreading_factor:=$(LORA_SF)
 
 # One command, one working demo: a simulated fleet, a real LLM behind both
@@ -212,6 +228,21 @@ sim:
 # Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
 llm-demo:
 	./scripts/demo_llm_auction.sh
+
+vlm-demo:
+	./scripts/demo_vlm_human.sh
+
+truck-demo:
+	OBSTRUCTION=truck ./scripts/demo_vlm_human.sh
+
+harvest-demo:
+	MISSION=harvest OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
+blinded-demo:
+	BLINDED=1 OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
+vlm-demo-stop:
+	./scripts/demo_vlm_human.sh stop
 
 # Ends a run completely. `tmux kill-session` alone does not: ros_gz_sim's
 # `ign gazebo` server outlives the launch that started it, and the orphans

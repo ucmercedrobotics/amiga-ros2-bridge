@@ -8,6 +8,7 @@ protobuf==5.29.5
 farm-ng-amiga
 utm
 litellm
+requests
 python-dotenv
 jinja2
 lxml

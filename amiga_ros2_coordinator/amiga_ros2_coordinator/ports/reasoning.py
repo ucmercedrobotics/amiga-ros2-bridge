@@ -20,10 +20,10 @@ heuristics nobody can justify:
         here -- it can make us bid worse or not bid, and nothing else.
 
     replan_and_verify(delta) -> ReplanResult
-        our mission just changed. Is the new one still coherent, and does it
-        still satisfy the temporal constraints it is supposed to? That is the
-        existing replan generation plus LTL verification (SPIN/Spot, Z3 for the
-        behaviour tree).
+        our mission just changed. Is the new one still coherent? That is the
+        arbiter's gate: well-formed XML, schema validity, the ontology's
+        preconditions, and objective/viability -- the same checks a local
+        replan goes through.
 
 The stubs below are what the acceptance tests run against. The point of the
 split is that the contract-net state machine is pinned against trivial stubs
@@ -250,7 +250,7 @@ class RejectEverything:
     Not an acceptance-test requirement, but the rejection branch exists in the
     coordinator and untested branches rot. Rejecting a delta that absorbed a
     task turns that task back into an anomaly, which is the behaviour worth
-    pinning before a real LTL backend starts producing rejections for reasons
+    pinning before the real arbiter starts producing rejections for reasons
     nobody anticipated.
     """
 

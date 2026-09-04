@@ -1,4 +1,5 @@
 import os
+import re
 
 import yaml
 
@@ -16,6 +17,47 @@ from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
+#: Tree varieties whose mesh carries no ``Orange_*`` material -- the trees in
+#: this orchard with nothing on them to pick. Read off the meshes rather than
+#: chosen: `meshes/trees_orchard/*.mtl` lists a material per part, and only
+#: these two have no fruit among them.
+BARREN_VARIETIES = ("Citrus_orange_25m_no_mix", "Citrus_orange_35m_no_green")
+
+#: The world's grid, matching generate_orchard_world.py.
+ROWS, TREES_PER_ROW = 8, 18
+
+
+def barren_trees_in(world_path):
+    """Tree indices, in *payload* numbering, that the world put no fruit on.
+
+    Derived from the world so the demo follows it: regenerate the orchard with
+    a different seed and different trees come back empty, with nothing here to
+    update.
+
+    The renumbering is the same trap `spawn_person.py` documents. The generator
+    lays SDF ``tree_01`` at the south end and counts north; the mission payloads
+    number their rows from the north. Read an index straight off a model name
+    and it is mirrored about y = 0 -- naming trees the robot never visits and
+    missing the ones it does.
+    """
+    try:
+        with open(world_path) as handle:
+            sdf = handle.read()
+    except OSError:
+        return []
+
+    barren = []
+    for name, variety in re.findall(
+        r'<model name="tree_(\d+)".*?trees_orchard/([A-Za-z0-9_]+)\.obj', sdf, re.S
+    ):
+        if variety not in BARREN_VARIETIES:
+            continue
+        row_from_south, col = divmod(int(name) - 1, TREES_PER_ROW)
+        row = ROWS - 1 - row_from_south
+        barren.append(row * TREES_PER_ROW + col + 1)
+    return sorted(barren)
+
+
 def qualify_ros(ns, path):
     """Absolute ROS name, namespaced under `ns` (ns="" leaves it unchanged)."""
     path = path.lstrip("/")
@@ -27,6 +69,13 @@ def launch_setup(context, *args, **kwargs):
     launch_moveto = LaunchConfiguration("launch_moveto")
     launch_segment_leaves_sim = LaunchConfiguration("launch_segment_leaves_sim")
     ns = LaunchConfiguration("robot_name").perform(context)
+    barren_trees = barren_trees_in(
+        os.path.join(
+            get_package_share_directory("amiga_ros2_gazebo"),
+            "worlds",
+            "orchard_nbv.sdf",
+        )
+    )
     use_sim_time = {"use_sim_time": True}
 
     kinova_remappings = [
@@ -184,6 +233,25 @@ def launch_setup(context, *args, **kwargs):
             # everybody, which is the difference between a task worth offering
             # to a peer and one worth dropping.
             parameters=[use_sim_time, *sampler_failure_params],
+            condition=IfCondition(launch_segment_leaves_sim),
+        )
+    )
+
+    # The harvester runs alongside the sampler rather than instead of it: both
+    # are things a robot can be asked to do at a tree, and a mission may ask
+    # for either. Which trees it comes back empty from is the world's business,
+    # not this launch's -- see barren_trees, resolved from the world file.
+    actions.append(
+        Node(
+            package="amiga_ros2_behavior_tree",
+            executable="sim_harvest_fruit_server",
+            name="harvest_fruit_sim",
+            namespace=ns,
+            output="screen",
+            parameters=[
+                use_sim_time,
+                {"barren_trees": barren_trees},
+            ],
             condition=IfCondition(launch_segment_leaves_sim),
         )
     )

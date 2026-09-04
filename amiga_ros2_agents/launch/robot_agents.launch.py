@@ -82,6 +82,12 @@ ROBOT_INTERFACES = [
     "/coordination/infeasible",
     "/coordination/interpret_anomaly",
     "/coordination/interpret_note",
+    # The camera, for triage. A client service name is remapped like any other
+    # interface, so triage's absolute default lands on this robot's own VLM and
+    # not on whichever one in the fleet happens to answer first -- which would
+    # be worse than no camera at all, since a description of another robot's
+    # view is evidence that reads as true and is not.
+    "/vlm/ask",
 ]
 
 #: StatusPublisher builds /agents/<node name>/status from the node's *name*,
@@ -117,26 +123,13 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument(
-                "ltl_verification",
-                default_value="true",
-                description="False makes the arbiter gate on whether a plan "
-                "will RUN -- well-formed XML, the XSD, and the ontology's "
-                "required preconditions -- and skip the checks that decide "
-                "whether it is still the mission that was asked for: no "
-                "formula, no SPIN, no viability budget, no edit-size or rate "
-                "limit. For bringing the coordination loop up end to end. "
-                "Every accept is then reported unverified.",
-            ),
-            DeclareLaunchArgument(
                 "objective_gating",
                 default_value="true",
                 description="Whether the arbiter checks that a candidate still "
                 "contains the mission's objectives, and aborts when too few "
                 "survive. This is the only check that can publish "
                 "/mission/abort, which is what ends the local repair loop and "
-                "escalates to the coordinator -- so a fleet run wants it on "
-                "even when ltl_verification is off. False only to study the "
-                "formal gate on its own.",
+                "escalates to the coordinator.",
             ),
             DeclareLaunchArgument(
                 "launch_mission_bridge",
@@ -147,6 +140,51 @@ def generate_launch_description() -> LaunchDescription:
                 "since it has no model and the coordinator is inert without it.",
             ),
             DeclareLaunchArgument(
+                "launch_vlm",
+                default_value="false",
+                description="Start this robot's vlm_server. Every failure "
+                "then carries a description of what its camera saw at that "
+                "moment into triage's decisions. Needs a vision model on "
+                "vlm_url -- a separate model and endpoint from the one the "
+                "agents reason with. Off by default; with it off triage "
+                "decides from logs exactly as before.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_url",
+                default_value="http://localhost:8001/v1/chat/completions",
+                description="OpenAI-compatible chat-completions endpoint that "
+                "accepts image content parts.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_image_topic",
+                default_value="oak0/rgb/image_raw",
+                description="Camera this robot's VLM looks through. Relative, "
+                "so the namespace places it -- absolute here would point every "
+                "robot in a simulated fleet at robot 1's camera.",
+            ),
+            DeclareLaunchArgument(
+                "describe_frame",
+                default_value="false",
+                description="Have the camera describe the image itself -- "
+                "glare, washout -- as well as its contents. Off by default: it "
+                "also makes the robot's own arm much more likely to be "
+                "described, which reads as an obstruction.",
+            ),
+            DeclareLaunchArgument(
+                "camera_description",
+                default_value="the front camera",
+                description="How the routing prompt names the camera the "
+                "description came from. Change it with vlm_image_topic or the "
+                "prompt says the wrong device.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_static_image",
+                default_value="",
+                description="Answer camera questions from this file rather "
+                "than the live topic. For a fault the simulator cannot stage; "
+                "empty (default) uses the camera.",
+            ),
+            DeclareLaunchArgument(
                 "battery_percent",
                 default_value="100",
                 description="What the mission bridge reports to the coordinator. "
@@ -154,12 +192,6 @@ def generate_launch_description() -> LaunchDescription:
                 "simulation, and it is the cheapest way to make a fleet bid "
                 "asymmetrically without moving anyone.",
             ),
-            # ltl_gen is deliberately absent. The arbiter runs the same gate
-            # in-process (ltl_gate.py, sharing ltl.py), because a formula is
-            # needed *inside* the decision that publishes /mission/xml and a
-            # service call from there would make the gate depend on another node
-            # being up. ltl_gen exposes that translation to outside callers, and
-            # a fleet does not need one per robot.
             *(
                 Node(
                     package=PACKAGE,
@@ -167,16 +199,27 @@ def generate_launch_description() -> LaunchDescription:
                     parameters=[
                         {
                             "use_sim_time": use_sim_time,
-                            # Only the arbiter declares these; a parameter a node
-                            # never declares is ignored, so passing them to all
-                            # of them keeps this a one-line table entry rather
-                            # than a special case in the loop.
-                            "ltl_verification": ParameterValue(
-                                LaunchConfiguration("ltl_verification"),
-                                value_type=bool,
-                            ),
+                            # Only the arbiter declares this; a parameter a node
+                            # never declares is ignored, so passing it to all of
+                            # them keeps this a one-line table entry rather than
+                            # a special case in the loop.
                             "objective_gating": ParameterValue(
                                 LaunchConfiguration("objective_gating"),
+                                value_type=bool,
+                            ),
+                            # Only triage declares this one. Tied to the same
+                            # flag that starts the server, so the two cannot
+                            # disagree: a triage told to look with nothing to
+                            # look through spends its discovery timeout on
+                            # every fault and learns nothing.
+                            "use_vlm": ParameterValue(
+                                LaunchConfiguration("launch_vlm"), value_type=bool
+                            ),
+                            "camera_description": LaunchConfiguration(
+                                "camera_description"
+                            ),
+                            "describe_frame": ParameterValue(
+                                LaunchConfiguration("describe_frame"),
                                 value_type=bool,
                             ),
                         }
@@ -184,6 +227,45 @@ def generate_launch_description() -> LaunchDescription:
                     **common,
                 )
                 for agent in AGENTS
+            ),
+            # This robot's eyes. Not an agent -- it holds no state, decides
+            # nothing and has no prompt; it turns the latest camera frame into a
+            # sentence when triage asks. It lives in this launch file anyway
+            # because it is useless to anything else here and triage is the only
+            # caller, the same reasoning that puts mission_bridge beside the
+            # coordinator rather than in this package's agent list.
+            #
+            # Both names relative, so this robot's namespace places them: the
+            # camera it looks through is its own, and the service it serves is
+            # the one its own triage resolves /vlm/ask to.
+            Node(
+                package="amiga_vlm_bridge",
+                executable="vlm_server",
+                name="vlm_server",
+                namespace=namespace,
+                output="screen",
+                condition=IfCondition(LaunchConfiguration("launch_vlm")),
+                parameters=[
+                    {
+                        "use_sim_time": use_sim_time,
+                        "service_name": "vlm/ask",
+                        "image_topic": LaunchConfiguration("vlm_image_topic"),
+                        "static_image_path": LaunchConfiguration("vlm_static_image"),
+                        "vlm_url": LaunchConfiguration("vlm_url"),
+                        # Deliberately says "a camera", not "the front camera":
+                        # which one it is depends on vlm_image_topic, and a
+                        # system prompt insisting on the front one while the
+                        # node subscribes to the wrist would put a falsehood in
+                        # front of the model on every single call.
+                        "system_prompt": "You are looking through a camera on "
+                        "a robot working in a pistachio orchard. "
+                        "Describe only what is visible. Never guess at causes.",
+                        # Well under triage's own 8 s deadline, so the far end
+                        # gives up before the caller does and the log says the
+                        # model was slow rather than that the service vanished.
+                        "http_timeout_sec": 6.0,
+                    }
+                ],
             ),
             # Not an agent and no model: it summarises the plan for the
             # coordinator's mission port so the coordinator never parses XML.

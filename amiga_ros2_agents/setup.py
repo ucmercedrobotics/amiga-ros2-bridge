@@ -37,12 +37,11 @@ setup(
     zip_safe=True,
     maintainer="appuser",
     maintainer_email="appuser@todo.todo",
-    description="LLM agents for the Amiga robot — mission planning, arbitration, world state, LTL generation",
+    description="LLM agents for the Amiga robot — mission planning, arbitration, world state",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "ltl_gen = amiga_ros2_agents.verification.ltl_gen_node:main",
             "mission_planner = amiga_ros2_agents.replanning.mission_planner_node:main",
             "arbiter = amiga_ros2_agents.replanning.arbiter_node:main",
             "world_state = amiga_ros2_agents.replanning.world_state_node:main",

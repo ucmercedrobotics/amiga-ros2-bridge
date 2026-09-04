@@ -10,6 +10,7 @@
 amiga_interfaces
 amiga-ros2-nav/amiga_navigation_interfaces
 ros2-kortex-control/kortex_interfaces
+amiga_vlm/amiga_vlm_interfaces
 
 # The behaviour tree. Its one dependency without a humble debian,
 # behaviortree_ros2, is built from source by build_underlay.sh.
@@ -23,6 +24,7 @@ amiga_ros2_bridge
 amiga_ros2_agents
 amiga_ros2_teleop
 amiga_ros2_oakd
+amiga_vlm/amiga_vlm_bridge
 
 # Excluded, and what it would cost to include:
 #

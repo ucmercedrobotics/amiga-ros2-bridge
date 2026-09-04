@@ -40,9 +40,8 @@
 # Two real LLM replans, on two different robots' XML, off one real fault.
 #
 # NOTE the arbiter must be able to ABORT for the loop above to terminate,
-# which is `objective_gating` (on by default) and NOT `ltl_verification`.
-# This runs with ltl_verification:=false -- no formula, no SPIN -- and the
-# objective/viability checks still on, which is what ends local recovery.
+# which is `objective_gating` (on by default) -- the check that ends local
+# recovery.
 #
 # Usage:
 #   export AGENT_MODEL=hosted_vllm/openai/gpt-oss-120b
@@ -72,12 +71,17 @@ LOG_DIR="/tmp/llm-demo-logs"
 
 # Real, checked-in two-frame (XML + orchard JSON) mission payloads, cycled
 # round-robin across the healthy robots so not everyone runs the identical
-# plan.
+# plan. One aisle per mission, same set demo_vlm_human.sh uses, and for the
+# same reason: sample_20_64/22_66/24_68 all opened with the SAME
+# <MoveToAisleHead id="2">, so every robot's first move sent all three into
+# aisle 2 together before they ever split off to their own trees -- a shared
+# bottleneck this demo never meant to test. These three missions don't share
+# an aisle or a tree with each other.
 EXAMPLES_DIR="amiga_ros2_behavior_tree/examples"
 MISSION_BINS=(
-    "${EXAMPLES_DIR}/sample_20_64.bin"
-    "${EXAMPLES_DIR}/sample_22_66.bin"
-    "${EXAMPLES_DIR}/sample_24_68.bin"
+    "${EXAMPLES_DIR}/sample_aisle6.bin"
+    "${EXAMPLES_DIR}/sample_aisle4.bin"
+    "${EXAMPLES_DIR}/sample_aisle2.bin"
 )
 
 # Which robot (1-based) gets the broken arm, and how it breaks. Everything
@@ -247,7 +251,7 @@ tmux set -g mouse on
 tmux set -g history-limit 500000
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true ltl_verification:=false objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"
@@ -258,6 +262,15 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     tmux send-keys -t "$SESSION:bt${i}" \
         "ros2 launch amiga_ros2_behavior_tree bt.launch.py ${ns_arg} port:=${port} 2>&1 | tee ${LOG_DIR}/bt${i}.log" C-m
 done
+
+# The decision story off /rosout, everything else dropped -- same pane the
+# other demos give this a window for. Started here rather than left out: this
+# demo's whole point is a fault crossing between robots, and that crossing is
+# exactly what the story pane narrates (routed, escalated, announced,
+# transferred, absorbed).
+tmux new-window -t "$SESSION" -n agents
+tmux send-keys -t "$SESSION:agents" \
+    "python3 ${PROJECT_PATH}/scripts/watch_agents.py 2>&1 | tee ${LOG_DIR}/agents.log" C-m
 
 # Three tiled windows, one pane per robot each:
 #   watch        every LLM repair attempt (the loser's local loop, then the
@@ -384,7 +397,7 @@ for i in \$(seq 1 ${ROBOT_COUNT}); do
 done
 echo
 echo 'all missions fed.'
-echo 'watch: bt<i> for BT execution, watch/infeasible/mission-xml for the LLM+auction pipeline'
+echo 'watch: bt<i> for BT execution, agents for the decision story, watch/infeasible/mission-xml for the LLM+auction pipeline'
 echo 'logs: $LOG_DIR/*_mission_xml.log'
 "
 tmux send-keys -t "$SESSION:feed" "$feed_cmd" C-m

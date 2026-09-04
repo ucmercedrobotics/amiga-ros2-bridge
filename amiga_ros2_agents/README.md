@@ -7,23 +7,20 @@ a DDS participant is the whole story.
 
 ## Layout
 
-Five directories, and what separates them is what each part is allowed to know.
+Four directories, and what separates them is what each part is allowed to know.
 The dependency direction runs down this list and never back up.
 
 | Directory | What lives there |
 | --- | --- |
 | `runtime/` | How an agent is wired, with nothing about what it decides. |
 | `mission/` | The plan document: its schema, and the tasks inside it. |
-| `verification/` | The LTL specification, the Promela model, and SPIN. |
 | `replanning/` | The self-correction loop — the agents that repair a plan in flight. |
 | `coordination/` | Where this stack meets the fleet. |
 
-`runtime/` knows nothing about missions. `mission/` and `verification/` are
-libraries with no rclpy in them, so they unit-test with no ROS and no network —
-which is what makes the verification claim below checkable on its own. Only
-`replanning/` and `coordination/` hold a ROS node. When an agent needs
-something a sibling agent also needs, it imports the library, never the other
-agent.
+`runtime/` knows nothing about missions. `mission/` is a library with no
+rclpy in it, so it unit-tests with no ROS and no network. Only `replanning/`
+and `coordination/` hold a ROS node. When an agent needs something a sibling
+agent also needs, it imports the library, never the other agent.
 
 | File | What it is |
 | --- | --- |
@@ -33,17 +30,13 @@ agent.
 | `runtime/spin.py` | `run()` — the init/spin/shutdown every agent's `main()` delegates to. |
 | `mission/xsd.py` | BT.CPP mission schema loading, shared by the arbiter and the planner. |
 | `mission/mission_tasks.py` | The only module that turns plan XML into task records and back. |
-| `verification/ltl.py` | Mission text → LTL formula. The specification. |
-| `verification/promela.py` | Behaviour tree → Promela model, and the propositions it establishes. |
-| `verification/verify.py` | SPIN, and the three-way verdict: holds, violated, or not established. |
-| `verification/ltl_gate.py` | The four ordered checks the arbiter runs. |
-| `verification/ltl_gen_node.py` | **LTL generator** — natural-language mission → Promela/SPIN LTL. |
 | `replanning/mission_planner_node.py` | **Mission planner** — minimally edits the BT.CPP XML plan on failure. |
 | `replanning/arbiter_node.py` | **Arbiter** — gates candidate edits; sole writer of `/mission/xml`. |
 | `replanning/world_state_node.py` | **World state** — aggregates action feedback into `/world_state`. |
 | `coordination/triage_node.py` | **Triage** — decides what happens to work the local loop could not recover. |
 | `coordination/note_node.py` | **Note** — reads a peer's note about work it is offering and says what it means for our bid. |
 | `coordination/mission_bridge_node.py` | **Mission bridge** — answers the coordinator's questions about the plan, read-only. |
+| `coordination/vlm_client.py` | How triage asks what the camera sees when a fault is captured. |
 
 `world_state` sits under `replanning/` because the planner's context window is
 what it feeds; `mission_bridge` sits under `coordination/` because the only
@@ -96,6 +89,75 @@ on the broken camera each session wrapped the dead leaf in another retry
 decorator and replaced the plan the escalation needed to name its failing node
 in.
 
+**It looks at the scene, every time.** Everything else triage reads is the
+robot's own account of itself — log lines, world state, the plan. None of it
+says what is in front of the robot, and that is the fact both decisions turn on:
+a sampler that fails because its camera is dead and one that fails because the
+robot is parked a row over produce the same repeated error.
+
+So with `use_vlm:=true`, a fault is captured the moment it arrives — the
+fault-centred log slice, the world-state frame current at that instant, and one
+call to `/vlm/ask` (the `vlm_server` in [`amiga_vlm`](../amiga_vlm)) asking the
+camera to describe the scene. `_capture` does this on the routing thread, and
+both decisions read that snapshot.
+
+Two properties fall out of latching it at the fault rather than pulling it when
+a prompt is built:
+
+* **The evidence describes one moment.** The logs were always fault-centred; the
+  world frame and the camera were not. For routing that gap was milliseconds.
+  For interpretation it was minutes — the coordinator only asks once local
+  recovery has run out — so the prompt was pairing a fault with a world frame
+  and a picture from long afterwards and presenting them as one picture.
+* **One camera call per fault**, not one per decision. Measured: routing and
+  interpretation chained six times, zero extra calls for the second.
+
+### The camera describes, the model decides
+
+The question put to the camera is fixed and asks for a description only. That
+division is the easiest thing here to get wrong:
+
+* **No judgements.** "Is anything in the way", "is the row passable", "is the
+  image usable" all sound like camera questions and are all decisions belonging
+  to the model holding the logs, the plan, the battery and the fleet. A vision
+  model asked them hands back a conclusion, and a conclusion is hard to argue
+  with downstream — *"the row appears passable"* came back once and was repeated
+  verbatim as the reason for a verdict.
+* **No geometry.** The robot measures range and bearing. Asked for position
+  anyway, a 4B describer put a person *"to the right"* while `collision_monitor`
+  had an obstacle 0.62 m directly ahead, and the reasoner concluded the robot
+  was misaligned.
+
+What is left is the one thing only the camera knows: what the things in front of
+the robot *are*.
+
+### What it changes
+
+Measured against a Gazebo run with a person standing in the robot's path, the
+same navigation failure put through the pipeline twelve times with the camera
+and twelve times without:
+
+| | with the camera | without |
+| --- | --- | --- |
+| verdict | `repair` 12/12 | `repair` 12/12 |
+| names a person | **11/12** | **0/12** |
+| suggests waiting for them | 9/12 | 2/12 |
+| median latency | 10.9 s | 7.0 s |
+
+The verdict never changes; the reasoning behind it does. Without the camera the
+model gets no further than *"an obstacle blocked the current path"* and plans a
+way around it every time. With it: *"a man standing in the aisle; this is a
+transient blockage"* — and the advice becomes *wait for the person to move*,
+which is the right manoeuvre near a human in a narrow row and one the logs alone
+give no reason to consider.
+
+The vision model is a **separate model on a separate endpoint** from
+`AGENT_MODEL` / `AGENT_API_BASE`, which are untouched by any of this. A small
+vision model is enough precisely because it decides nothing.
+
+Never load-bearing. A camera that is absent, slow or broken leaves the section
+out or says it could not answer, and the verdict comes out as it always did.
+
 **Escalation stays deterministic.** A routed `escalate`, an `/mission/abort`,
 or a planner give-up on `/mission/planner_status` all publish to
 `/coordination/infeasible` unchanged. **No model is involved in that step**: the
@@ -145,38 +207,22 @@ send one rarely: reading a note makes the receiving auction deliberative, and a
 or every answer lands after its own bid and is counted `notes_too_late`; the
 coordinator warns at startup when it does not.
 
-`ltl_gen` exposes the same translation over ROS — `/mission/generate_ltl` or the
-`/mission/text` topic — but the arbiter does not go through it. The gate needs a
-formula *inside* the decision that publishes `/mission/xml`, and a service call
-from there would make the gate depend on another node being up. Both share
-`ltl.py`, so there is still one place that turns English into a formula.
-
 ### Verification
 
-Every candidate plan is checked against the LTL specification its own mission
-text yields, and the two halves are produced independently: `ltl.py` sees the
-`<Mission>` text and never the tree, `promela.py` compiles the tree and never
-sees the formula. Neither can be bent to fit the other, which is what makes
-their agreement evidence rather than construction.
+Every candidate plan — a local repair or a fleet-level task transfer alike —
+passes through the same gate before it reaches the executing tree: well-formed
+XML, schema validity against the mission grammar, the ontology's preconditions
+(e.g. a leaf-sampling action requires the plan first establishes the robot is
+at that tree), and objective/viability (the only check that can abort a
+mission, bounding how much of it an edit may silently drop before local repair
+gives up). All four are `arbiter_node.py:_evaluate`'s job; see its module
+docstring for the exact order.
 
-That only holds if the mission text is fixed, so **a replan may not rewrite
-`<Mission>`** — a planner that could would be authoring the specification it is
-graded against. The one exception is the coordinator absorbing a peer's task,
-which genuinely changes what this robot's mission is; the clause is generated
-from the announcement's own fields, never by a model.
-
-All of it is in `verification/`, and the four library modules there hold no
-rclpy — the model checking is something you can point at a plan and a formula
-with no robot in the loop, which is why `test_verify.py` runs SPIN for real
-rather than mocking it. `ltl_gen_node` is the one agent in that directory.
-Atomic propositions are named by content — `at_tree_10`, `sampled_tree_10` — so
-they survive a replan reordering or dropping tasks. The naming scheme is
-mandated by `prompts/ltl_gen/system.j2` and emitted by `promela.py`; that shared
-convention is the whole contract between the two halves.
-
-Needs `spin` on PATH (`scripts/ci/install_spin.sh`, built from source so it
-works on aarch64). Without it, plans are accepted and recorded as
-`ltl_unverified` — never silently as verified.
+This pipeline used to include a fifth, formal step here — a temporal-logic
+specification generated once from the pristine mission text, checked against
+each candidate with SPIN — gated behind an `ltl_verification` flag. That check,
+and the Promela model compiler it verified the plan against, have both been
+removed; this pipeline does not use LTL.
 
 ## ROS interfaces
 
@@ -185,7 +231,6 @@ works on aarch64). Without it, plans are accepted and recorded as
 | `mission_planner` | `/mission/xml`, `/rosout`, `/bt/status_change`, `/mission/fault_route`, `/mission/rejection`, `/mission/abort`, `/world_state`, `/mission/replan_request` | `/mission/candidate_xml`, `/mission/planner_status` | — |
 | `arbiter` | `/mission/candidate_xml`, `/mission/xml`, `/bt/status_change` | `/mission/xml`, `/mission/rejection`, `/mission/abort`, `/mission/viability_budget` | `/mission/verify_replan` (`amiga_interfaces/srv/VerifyReplan`) |
 | `world_state` | action feedback/status topics, `/mission_status` | `/world_state` (1 Hz JSON) | — |
-| `ltl_gen` | `/mission/text` | `/mission/ltl` | `/mission/generate_ltl` (`amiga_interfaces/srv/GenerateLTL`) |
 | `triage` | `/bt/status_change`, `/rosout`, `/world_state`, `/mission/xml`, `/mission/abort`, `/mission/planner_status` | `/mission/fault_route`, `/coordination/infeasible` | `/coordination/interpret_anomaly` (`amiga_interfaces/srv/InterpretAnomaly`) |
 | `note` | — | — | `/coordination/interpret_note` (`amiga_interfaces/srv/InterpretNote`) |
 | `mission_bridge` | `mission/xml` | `mission/coordination_state` (latched JSON) | — |
@@ -303,17 +348,3 @@ candidate; the arbiter accepts or rejects it:
 A rejection comes back on `/mission/rejection` with the reason and the planner
 retries; after too many failures the arbiter publishes `/mission/abort` and the
 planner stops replanning for the rest of the mission.
-
-For the LTL agent (needs `agents.launch.py`):
-
-```bash
-ros2 service call /mission/generate_ltl amiga_interfaces/srv/GenerateLTL \
-  "{mission: 'visit trees 1 through 3 and sample the leaves at each'}"
-# ok: true, formula: <>(at_tree_1 && <>sampled_tree_1) && <>(at_tree_2 && ...)
-```
-
-To pin the atomic propositions instead of letting the model invent them:
-
-```bash
-ros2 launch amiga_ros2_agents agents.launch.py ap_vocabulary:="[at_tree_1, sampled_tree_1]"
-```

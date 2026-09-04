@@ -1,9 +1,10 @@
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
 )
@@ -41,7 +42,9 @@ ALL_CAPABILITIES = [
     "OrientRobotHeading",
     "FollowPerson",
     "SampleLeaf",
+    "HarvestFruit",
     "MoveArmToPosition",
+    "Wait",
 ]
 
 
@@ -166,11 +169,16 @@ def launch_setup(context, *args, **kwargs):
     launch_coordination = (
         LaunchConfiguration("launch_coordination").perform(context).lower() == "true"
     )
-    ltl_verification = LaunchConfiguration("ltl_verification").perform(context).lower()
     objective_gating = LaunchConfiguration("objective_gating").perform(context).lower()
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
     )
+    launch_vlm = LaunchConfiguration("launch_vlm").perform(context).lower()
+    vlm_url = LaunchConfiguration("vlm_url").perform(context)
+    vlm_image_topic = LaunchConfiguration("vlm_image_topic").perform(context)
+    vlm_static_image = LaunchConfiguration("vlm_static_image").perform(context)
+    camera_description = LaunchConfiguration("camera_description").perform(context)
+    describe_frame = LaunchConfiguration("describe_frame").perform(context)
     # 0 (default) means nobody: an ordinary sim run has no broken arm. Set it
     # to a robot index to give exactly that robot a camera fault, which is the
     # kind of failure a peer can take over -- unlike a missing tree, which no
@@ -178,6 +186,13 @@ def launch_setup(context, *args, **kwargs):
     broken_sampler_robot = int(
         LaunchConfiguration("broken_sampler_robot").perform(context)
     )
+    # 0 (default) means an empty orchard. A tree index puts a standing person
+    # on that tree's row waypoint -- the pose Nav2 aims at before handing over
+    # to the lidar approach, and the only spot in the aisle where one body is
+    # enough to abort a goal rather than be driven around.
+    spawn_person = int(LaunchConfiguration("spawn_person").perform(context))
+    spawn_truck = int(LaunchConfiguration("spawn_truck").perform(context))
+    planner_host = LaunchConfiguration("planner_host").perform(context)
     broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
     spreading_factor = int(
@@ -395,9 +410,9 @@ def launch_setup(context, *args, **kwargs):
                     output="screen",
                     parameters=[
                         {
-                            "safety_distance": 1.5,
+                            "safety_distance": 2.5,
                             "lidar_topic": qualify_ros(ns, "ouster/points"),
-                            "azimuth_tolerance": 0.5,
+                            "azimuth_tolerance": 0.8,
                             "min_object_height": 0.1,
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
@@ -424,6 +439,7 @@ def launch_setup(context, *args, **kwargs):
                     "bt.launch.py",
                     namespace=ns,
                     port=str(mission_port_base + i - 1),
+                    planner_host=planner_host,
                 )
             )
 
@@ -459,10 +475,82 @@ def launch_setup(context, *args, **kwargs):
                     use_sim_time="true",
                     launch_mission_bridge="false",
                     battery_percent=str(batteries[i - 1]),
-                    ltl_verification=ltl_verification,
                     objective_gating=objective_gating,
+                    launch_vlm=launch_vlm,
+                    vlm_url=vlm_url,
+                    # Relative, and the same for every robot: the namespace is
+                    # what makes robot 2 look through robot 2's camera. This is
+                    # the topic sim_hardware_shims republishes the Gazebo front
+                    # camera on, so it is the same name the real Oak-D driver
+                    # publishes and nothing below the shim layer changes.
+                    #
+                    # Both scoped to the broken robot, for the same reason
+                    # sampler_fail_goals is: the fault belongs to one robot, so
+                    # the evidence for it has to as well. A fleet-wide static
+                    # image would answer every OTHER robot's camera questions
+                    # with a photograph of a fault they do not have -- and a
+                    # healthy robot reasoning from a picture of somebody else's
+                    # glare is the same failure as a robot reading its own arm
+                    # as an obstruction.
+                    vlm_image_topic=(
+                        vlm_image_topic
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "oak0/rgb/image_raw"
+                    ),
+                    vlm_static_image=(
+                        vlm_static_image if i == broken_sampler_robot else ""
+                    ),
+                    # Follows the topic: the robots still on the front camera
+                    # must keep the front camera's sentence, or their routing
+                    # prompt describes a device they are not looking through.
+                    camera_description=(
+                        camera_description
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "the front camera"
+                    ),
+                    describe_frame=(
+                        describe_frame
+                        if i == broken_sampler_robot or not vlm_static_image
+                        else "false"
+                    ),
                 )
             )
+
+    if spawn_person:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_person.py",
+                    ),
+                    "--tree",
+                    str(spawn_person),
+                ],
+                output="screen",
+            )
+        )
+
+    if spawn_truck:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_truck.py",
+                    ),
+                    "--tree",
+                    str(spawn_truck),
+                    "--entrance",
+                    "--span",
+                ],
+                output="screen",
+            )
+        )
 
     return actions
 
@@ -504,6 +592,16 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
             DeclareLaunchArgument(
+                "planner_host",
+                default_value="",
+                description="Fleet planner to register and heartbeat with. "
+                "Empty (the default here) disables discovery, because a sim is "
+                "driven by netcat straight into each robot's mission port and "
+                "has no planner to answer -- bt.launch.py's own default points "
+                "at the real fleet host, which on a dev box just refuses every "
+                "5s per robot. Set it to that host to opt back in.",
+            ),
+            DeclareLaunchArgument(
                 "broken_sampler_robot",
                 default_value="0",
                 description="Give this robot (1-based) a failing leaf sampler; "
@@ -515,9 +613,16 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "broken_sampler_mode",
                 default_value="no_point_cloud",
-                description="How that robot's sampler fails. no_point_cloud is "
-                "a fault in that robot (a peer with a working camera is the "
-                "right answer); no_leaves is permanent for everyone.",
+                description="How that robot's sampler fails, and each mode has "
+                "a different right answer. no_point_cloud is a fault in that "
+                "robot, so a peer with a working camera should take the work; "
+                "no_leaves is permanent for everyone, so it should be dropped; "
+                "no_masks is neither -- the sensor works and the branch is not "
+                "bare, the detector was simply defeated by the conditions, so "
+                "a different position or moment is what fixes it. That third "
+                "one needs the camera to show the conditions: pair it with "
+                "vlm_static_image, because Gazebo will not render a sun-blinded "
+                "frame.",
             ),
             DeclareLaunchArgument(
                 "launch_coordination",
@@ -540,6 +645,77 @@ def generate_launch_description():
                 "waiting 45 s on a service nobody serves.",
             ),
             DeclareLaunchArgument(
+                "spawn_truck",
+                default_value="0",
+                description="Tree index whose lane to park a pickup across, or "
+                "0 for none. Placed at the mouth of that lane, so the row "
+                "cannot be entered at all -- unlike the person, who blocks one "
+                "goal pose and leaves the lane open either side. A different "
+                "fault to reason about, which is the reason for having both.",
+            ),
+            DeclareLaunchArgument(
+                "spawn_person",
+                default_value="0",
+                description="Tree index to put a standing person in front of, "
+                "or 0 for none. The person lands on that tree's row waypoint, "
+                "which makes MoveToTreeID abort for real instead of routing "
+                "around -- the fault the triage agent and the VLM read.",
+            ),
+            DeclareLaunchArgument(
+                "launch_vlm",
+                default_value="false",
+                description="Give each robot a vlm_server, so every failure "
+                "carries a description of what that robot's camera saw into "
+                "its triage decisions. Needs launch_agents too -- triage is "
+                "what asks -- and a vision model on vlm_url: a separate model "
+                "and endpoint from the one the agents reason with. Off by "
+                "default.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_image_topic",
+                # The front camera, which is what the obstruction demos want:
+                # a person or a vehicle in the aisle is in front of the rover,
+                # not in front of the arm. A fault in the ARM's own seeing
+                # wants the other one -- /camera/color/image_raw, the wrist
+                # RealSense the leaf segmenter reads -- because comparing a
+                # front-camera view against an arm-camera failure is comparing
+                # two different devices, and the honest conclusion from that is
+                # the one the reasoning model kept drawing: the arm's sensor
+                # must be dead.
+                default_value="oak0/rgb/image_raw",
+                description="Which camera the vlm_server describes. The front "
+                "Oak-D by default; use camera/color/image_raw for faults in "
+                "what the arm itself can see.",
+            ),
+            DeclareLaunchArgument(
+                "describe_frame",
+                default_value="false",
+                description="Camera reports the state of the image as well as "
+                "its contents. Off by default -- it also makes the robot's own "
+                "arm much more likely to be described.",
+            ),
+            DeclareLaunchArgument(
+                "camera_description",
+                default_value="the front camera",
+                description="How the routing prompt names the camera. Must "
+                "agree with vlm_image_topic.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_static_image",
+                default_value="",
+                description="Answer every camera question from this file "
+                "instead of the live topic. For faults the simulator cannot "
+                "stage -- Gazebo will not blow out a frame with low sun, so a "
+                "blinded detector has no picture to be diagnosed from. Empty "
+                "(default) uses the camera.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_url",
+                default_value="http://localhost:8001/v1/chat/completions",
+                description="OpenAI-compatible endpoint accepting image content "
+                "parts. One endpoint serves the whole simulated fleet.",
+            ),
+            DeclareLaunchArgument(
                 "lora_symlink_dir",
                 default_value="/tmp/amiga_lora_sim",
                 description="Where the virtual radio's per-robot ptys are "
@@ -554,25 +730,14 @@ def generate_launch_description():
                 "to make a fleet bid asymmetrically without moving anyone.",
             ),
             DeclareLaunchArgument(
-                "ltl_verification",
-                default_value="true",
-                description="False drops the arbiter's formal gate: no formula "
-                "is generated and SPIN never runs. Plans are still checked for "
-                "whether they RUN (XSD + the ontology's required "
-                "preconditions) and for whether they still contain the "
-                "mission's work (see objective_gating). For bringing the "
-                "coordination loop up end to end; every accept is then "
-                "reported unverified.",
-            ),
-            DeclareLaunchArgument(
                 "objective_gating",
                 default_value="true",
                 description="The arbiter's objective-preservation and "
                 "viability checks, and with them its ability to ABORT. "
                 "/mission/abort is what ends the local repair loop and hands "
-                "the fault to the coordinator, so a fleet run needs this on "
-                "regardless of ltl_verification. False makes the local loop "
-                "endless and nothing is ever auctioned.",
+                "the fault to the coordinator, so a fleet run needs this on. "
+                "False makes the local loop endless and nothing is ever "
+                "auctioned.",
             ),
             DeclareLaunchArgument(
                 "lora_spreading_factor",

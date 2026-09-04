@@ -164,8 +164,11 @@ class CoordinatorParams:
     #: model call plus the backoff that follows it.
     note_window_multiplier: float = 9.0
     #: Longest a bidder sits on a bid it is having a note interpreted for, as a
-    #: multiple of ``bid_max_backoff_sec``.
-    note_backoff_multiplier: float = 10.0
+    #: multiple of ``bid_max_backoff_sec``. 18x the 2 s default is 36 s. Sized
+    #: from measurement, not taste: a 120B note interpretation was observed
+    #: taking 21-22 s against three robots sharing one endpoint, so the 10x
+    #: (20 s) this used to be put every honest answer past its own deadline.
+    note_backoff_multiplier: float = 18.0
 
     @property
     def note_announce_window_sec(self) -> float:

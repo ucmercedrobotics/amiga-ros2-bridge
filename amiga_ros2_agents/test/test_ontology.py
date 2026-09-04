@@ -21,8 +21,7 @@ from lxml import etree
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from amiga_ros2_agents.mission import ontology, orchard  # noqa: E402
-from amiga_ros2_agents.verification import promela  # noqa: E402
+from amiga_ros2_agents.mission import mission_tasks, ontology, orchard  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXAMPLES = os.path.join(REPO, "amiga_ros2_behavior_tree", "examples")
@@ -61,14 +60,25 @@ def test_the_table_describes_exactly_the_schemas_actions():
     would verify vacuously. A row with no schema action is a rule about
     something that cannot appear in a plan, which the next reader will believe.
     """
-    ok, reason = ontology.covers(promela.action_pool(SCHEMA))
+    ok, reason = ontology.covers(_action_pool(SCHEMA))
     assert ok, reason
 
 
 def test_every_action_leaf_can_be_advanced():
     """No element of the vocabulary raises when a walk reaches it."""
-    for tag in promela.action_pool(SCHEMA):
+    for tag in _action_pool(SCHEMA):
         assert tag in ontology.TABLE
+
+
+def _action_pool(xsd_path: str):
+    """Every element name in the schema's ``ActionGroup``.
+
+    Not ``action_names``: that reads the ROS ``action_name`` a leaf dispatches
+    to, and ``Wait`` has none -- it is a local BT node, not an action-server
+    call. This is the full vocabulary a plan may contain, ROS-backed or not,
+    which is what the table needs to be closed against.
+    """
+    return [row["tag"] for row in mission_tasks.action_grammar(xsd_path)]
 
 
 # ==========================================================================
@@ -92,14 +102,18 @@ def test_the_planners_own_plans_break_no_precondition(name, orchard_map):
 def test_reaching_a_tree_expects_that_trees_aisle(name, orchard_map):
     """The relationship the whole design turns on.
 
-    Each ``MoveToTreeID`` expects to be in the aisle the orchard puts that tree
-    in, and each is preceded by the ``MoveToAisleHead`` that establishes it --
-    so nothing is reported missing. That agreement is not arranged here: the
-    aisle ids come from the orchard dump and the plan was written by a model
-    that never saw this table.
+    Each ``MoveToTreeID`` expects to be in an aisle that reaches that tree, and
+    each is preceded by the ``MoveToAisleHead`` that establishes it -- so
+    nothing is reported missing. That agreement is not arranged here: the aisle
+    ids come from the orchard dump and the plan was written by a model that
+    never saw this table.
+
+    A row sits between two lanes, so the expectation names both and the aisle
+    the planner picked has to be one of them. Pinning it to a single id would
+    say a plan that went round to the far side of a blocked row had got the
+    aisle wrong, which is the opposite of true.
     """
     state = ontology.State()
-    expectations = {}
     for element in ontology.actions_in(example(name)):
         step, state = ontology.advance(state, element, orchard_map)
         if step.proposition == ontology.OBJECTIVE:
@@ -108,8 +122,11 @@ def test_reaching_a_tree_expects_that_trees_aisle(name, orchard_map):
             assert need.strength == ontology.EXPECTED
             leaf = element.get("name")
             assert step.missing == (), f"{leaf} is missing {step.missing}"
-            expectations[element.get("id")] = need.arg
-    assert expectations == PLANNER_PLANS[name]
+            chosen = PLANNER_PLANS[name][element.get("id")]
+            assert chosen in need.arg, (
+                f"{leaf}: the planner entered aisle {chosen}, which does not "
+                f"reach tree {element.get('id')} ({need.arg})"
+            )
 
 
 def test_a_tree_move_without_its_aisle_move_is_allowed_but_noted(orchard_map):
@@ -191,7 +208,7 @@ def test_lining_up_at_a_tree_is_not_leaving_it():
 
 
 def test_having_sampled_a_tree_survives_driving_away():
-    """Achievement latches; position does not. Same asymmetry promela encodes."""
+    """Achievement latches; position does not."""
     plan = etree.fromstring(
         b'<Sequence><MoveToTreeID name="v" id="60" approach_tree="true"/>'
         b'<SampleLeaf name="s"/><MoveToAisleHead name="out" id="6"/></Sequence>'
@@ -239,7 +256,7 @@ def test_an_unknown_aisle_is_an_unknown_and_not_a_guess(orchard_map):
     without, _ = ontology.advance(ontology.State(), element)
     with_map, _ = ontology.advance(ontology.State(), element, orchard_map)
     assert without.needs[0].arg == ""
-    assert with_map.needs[0].arg == "4"
+    assert with_map.needs[0].arg == ("4", "5"), "both lanes that reach tree 60"
 
 
 def test_a_control_node_is_not_an_action():
@@ -264,7 +281,7 @@ def test_a_choice_keeps_only_what_both_branches_establish():
 # ==========================================================================
 
 
-def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
+def test_objective_trees_binds_names_to_ids(orchard_map):
     """The names /bt/status_change actually reports, resolved to tree ids.
 
     The names are the planner's, not ours, and change whenever an example plan
@@ -274,7 +291,82 @@ def test_sample_leaf_trees_binds_names_to_ids(orchard_map):
     plan = example("sample_20_64.xml")
     names = [el.get("name") for el in plan.iter("SampleLeaf")]
     expected = dict(zip(names, PLANNER_PLANS["sample_20_64.xml"]))
-    assert ontology.sample_leaf_trees(plan, orchard_map) == expected
+    assert ontology.objective_trees(plan, orchard_map) == expected
+
+
+def test_a_harvested_tree_counts_as_done(orchard_map):
+    """A harvest binds to its tree, and pruning removes it.
+
+    Regression: the binding matched ``SampleLeaf`` alone, so on a harvest
+    mission nothing ever entered the completed ledger. Every replan then
+    redeployed a plan still containing finished trees, and the executor --
+    which rebuilds from the root and re-ticks -- drove back and harvested them
+    again. Only a robot that faulted saw it, because only a fault triggers the
+    redeploy, which is what made it look robot-specific.
+    """
+    plan = example("harvest_aisle2.xml")
+
+    bound = ontology.objective_trees(plan, orchard_map)
+    harvests = [el.get("name") for el in plan.iter("HarvestFruit")]
+    assert harvests, "fixture has no HarvestFruit to bind"
+    assert set(bound) == set(harvests)
+
+    done = bound[harvests[0]]
+    pruned = ontology.prune_completed(plan, [done], orchard_map)
+    assert done not in ontology.objective_trees(pruned, orchard_map).values()
+    # The other tree is still there: pruning removes what is finished, not the
+    # rest of the mission.
+    assert len(list(pruned.iter("HarvestFruit"))) == len(harvests) - 1
+
+
+def test_either_lane_that_reaches_a_tree_satisfies_the_expectation(orchard_map):
+    """Going round to the far side of a blocked row is not an error.
+
+    Tree 20 is worked from aisle 2 or aisle 3. The orchard's default answer is
+    2, and a plan that enters 3 instead is answering something -- a lane
+    blocked by a vehicle that will not move -- rather than getting the aisle
+    wrong. Reporting it as unmet would feed the planner a finding telling it to
+    go back to the lane it just failed in.
+    """
+    for aisle in ("2", "3"):
+        plan = etree.fromstring(
+            b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+            b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence>'
+            b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="'
+            + aisle.encode()
+            + b'"/>'
+            b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
+            b' id="20" approach_tree="true"/>'
+            b'<SampleLeaf name="s" action_name="segment_leaves"/>'
+            b"</Sequence></BehaviorTree></root>"
+        )
+        state = ontology.State()
+        noted = []
+        for element in ontology.actions_in(plan):
+            step, state = ontology.advance(state, element, orchard_map)
+            noted.extend(step.missing)
+        assert noted == [], f"entering aisle {aisle} was reported as missing {noted}"
+
+
+def test_a_lane_that_does_not_reach_the_tree_is_still_noted(orchard_map):
+    """The expectation naming two lanes is not the same as naming none. Aisle 5
+    does not run alongside row 2, so a plan entering it has not reached tree 20
+    by any route, and that is worth saying."""
+    plan = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence>'
+        b'<MoveToAisleHead name="h" action_name="move_to_aisle_head" id="5"/>'
+        b'<MoveToTreeID name="v" action_name="follow_tree_id_waypoint"'
+        b' id="20" approach_tree="true"/>'
+        b'<SampleLeaf name="s" action_name="segment_leaves"/>'
+        b"</Sequence></BehaviorTree></root>"
+    )
+    state = ontology.State()
+    noted = []
+    for element in ontology.actions_in(plan):
+        step, state = ontology.advance(state, element, orchard_map)
+        noted.extend(step.missing)
+    assert any(n.kind == ontology.IN_AISLE for n in noted)
 
 
 def test_pruning_nothing_returns_the_plan_unchanged():
@@ -297,6 +389,120 @@ def test_a_completed_tree_and_its_retry_wrapper_are_removed(orchard_map):
     retries = pruned.findall(".//RetryUntilSuccessful")
     assert len(retries) == 1, "tree 20's retry wrapper should have gone with it"
     assert retries[0].find(".//MoveToTreeID").get("id") == "64"
+
+
+def test_pruning_leaves_no_empty_wrapper_behind(orchard_map):
+    """The XSD failure that fired on every absorb in a live run.
+
+    Grafting a won task wraps the plan's original leaves in a bare
+    ``<Sequence>`` so the two halves stay separable. When the winner had
+    already finished the work in that wrapper, pruning emptied it and left
+    ``<Sequence/>`` in the plan -- which the XSD rejects, because a control
+    node must hold at least one action.
+
+    The plan the planner shows the model is the *pruned* one, so the model was
+    handed XML that could not validate and every edit it returned inherited
+    the fault: "LLM edit failed XSD validation -- not publishing", on every
+    hand-off, costing the winner the one replan that would have re-derived the
+    Wait its rebuild dropped.
+
+    Both of the wrapper's objectives have to be finished for this to bite: with
+    one still pending, ``_isolated_ancestor`` stops below the wrapper and the
+    wrapper keeps a child. It is the aisle heads outliving the last tree that
+    empty it.
+    """
+    plan = example("sample_20_64.xml")
+    root_control = plan.find(".//BehaviorTree")[0]
+    wrapper = etree.Element("Sequence")
+    root_control.insert(0, wrapper)
+    for element in list(root_control)[1:]:
+        wrapper.append(element)
+    absorbed = etree.SubElement(root_control, "Sequence", name="task_43808")
+    etree.SubElement(
+        absorbed,
+        "MoveToTreeID",
+        name="task_43808_visit_90",
+        action_name="follow_tree_id_waypoint",
+        id="90",
+        approach_tree="true",
+    )
+    etree.SubElement(
+        absorbed,
+        "SampleLeaf",
+        name="task_43808_sample_90",
+        action_name="segment_leaves",
+    )
+
+    pruned = ontology.prune_completed(plan, {"20", "64"}, orchard_map)
+
+    assert not [
+        el for el in pruned.iter() if el.tag in ontology.CONTROLS and len(el) == 0
+    ], "the emptied wrapper must go with its contents"
+    assert etree.XMLSchema(etree.parse(SCHEMA)).validate(pruned), (
+        "the pruned plan is what the model is asked to edit, so it has to be "
+        "valid before the model ever sees it"
+    )
+    remaining = {
+        el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"
+    }
+    assert remaining == {"90"}, "only the absorbed task is left to do"
+
+
+def test_pruning_removes_both_halves_of_a_flat_objective(orchard_map):
+    """The task amiga2 won and could not keep.
+
+    A task won at auction is grafted as one flat Sequence -- aisle move,
+    approach, sample, and whatever the planner added, all siblings. No ancestor
+    holds the approach/sample pair alone, so the climb that normally finds a
+    wrapper to delete has nowhere to go and returns the approach by itself.
+
+    Pruning then removed the approach and left the SampleLeaf behind, and the
+    arbiter's own precondition check rejected the plan for it: "<SampleLeaf>
+    ... requires a preceding <MoveToTreeID approach_tree='true'>". Live, amiga2
+    had sampled tree 20 from an earlier auction, won tree 26, and could not
+    graft it -- the task bounced and had to be auctioned again.
+
+    Only bites on a SECOND absorb: a robot's own objectives arrive wrapped in
+    their own RetryUntilSuccessful and prune cleanly, which is why the first
+    hand-off of a run always worked.
+    """
+    plan = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b"<Mission>sample leaves from tree 20</Mission>"
+        b'<BehaviorTree ID="Main"><Sequence name="Mission">'
+        b'<Sequence name="task_43808">'
+        b'<MoveToAisleHead name="task_43808_aisle" action_name="move_to_aisle_head" id="2"/>'
+        b'<MoveToTreeID name="task_43808_visit" action_name="follow_tree_id_waypoint"'
+        b' id="20" approach_tree="true"/>'
+        b'<SampleLeaf name="task_43808_sample" action_name="segment_leaves"/>'
+        b'<Wait name="task_43808_wait" seconds="2.0"/>'
+        b"</Sequence></Sequence></BehaviorTree></root>"
+    )
+
+    pruned = ontology.prune_completed(plan, {"20"}, orchard_map)
+
+    assert pruned.find(".//MoveToTreeID") is None
+    assert pruned.find(".//SampleLeaf") is None, (
+        "a sample whose approach was pruned away has nothing establishing "
+        "where the robot is standing"
+    )
+    assert ontology.violations(pruned, orchard_map) == []
+
+
+def test_pruning_cascades_through_nested_wrappers(orchard_map):
+    """A wrapper whose only child was itself emptied goes too, so one prune
+    cannot leave a chain of hollow controls in the middle of a plan."""
+    plan = example("sample_20_64.xml")
+    root_control = plan.find(".//BehaviorTree")[0]
+    outer = etree.SubElement(root_control, "Sequence", name="outer")
+    inner = etree.SubElement(outer, "Sequence", name="inner")
+    for child in list(root_control)[:-1]:
+        inner.append(child)
+
+    pruned = ontology.prune_completed(plan, {"20", "64"}, orchard_map)
+
+    assert pruned.find('.//Sequence[@name="inner"]') is None
+    assert pruned.find('.//Sequence[@name="outer"]') is None
 
 
 def test_a_completed_trees_own_aisle_head_goes_with_it(orchard_map):
@@ -329,7 +535,9 @@ def test_a_shared_aisle_head_survives_for_the_tree_still_pending():
         b'<MoveToAisleHead name="exit" id="6"/>'
         b"</Sequence>"
     )
-    orchard_map = orchard.Orchard({55: 6, 60: 6})
+    # Both trees on the same lane, and that lane the only one that reaches
+    # them: an edge row, where a tree has a lane on one side only.
+    orchard_map = orchard.Orchard({55: (6,), 60: (6,)})
     pruned = ontology.prune_completed(plan, {"55"}, orchard_map)
     remaining_ids = {
         el.get("id") for el in ontology.actions_in(pruned) if el.tag == "MoveToTreeID"

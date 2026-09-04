@@ -17,6 +17,18 @@ Read that as follows:
 - `findings` — what the edit left inconsistent. A step that establishes something nothing later needs is now dead weight; a step whose expected prerequisite is gone will run badly.
 - `note` — free text from the robot that had this task, sent over a very narrow radio link. If it is non-empty it is the most valuable thing in this message: it is a fact about the world that this robot has no other way of knowing, and it usually constrains HOW the work has to be done rather than whether. Act on it. If it names a route, a hazard, or an ordering, your plan should reflect that and not merely append the task.
 
+{% if transferred_targets %}
+## Handed to another robot — do NOT re-add these
+{{ transferred_targets | join(", ") }} were won from this robot at auction
+and belong to a peer now. They are deliberately absent from the "Active mission
+XML" below, but the <Mission> line above still names them: a transfer removes
+the work without narrowing the stated mission, so the mission text is NOT
+evidence that this robot still owes these.
+
+Restoring one does not recover lost work — it sends this robot where another
+robot is already going, and both then contend for the same approach waypoint.
+
+{% endif %}
 {% if completed_trees or succeeded_nodes %}
 ## Already finished this mission — leave these out
 {% if completed_trees %}Trees {{ completed_trees | join(", ") }} have already been sampled successfully and are deliberately absent from the "Active mission XML" below.

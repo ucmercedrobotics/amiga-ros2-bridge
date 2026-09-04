@@ -54,13 +54,5 @@ string note
 # back: release it and re-raise it as an anomaly.
 bool accepted
 
-# Whether a formal check actually ran. Distinct from `accepted` on purpose -- a
-# plan accepted because no formula could be generated, or because SPIN is not
-# installed, has not been verified, and a mission that completes having never
-# been checked must not be indistinguishable from one that passed.
-bool verified
-
-# Why. On rejection this is the SPIN counterexample, or the name of the
-# proposition the plan failed to establish, which is what makes the rejection
-# something the next attempt can act on.
+# Why, on rejection -- what the next attempt can act on.
 string reason

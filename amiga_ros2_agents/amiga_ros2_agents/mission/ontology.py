@@ -6,14 +6,12 @@ the only part anybody names. Every piece of this system that reasons about a
 plan needs that chain, and until this module existed each of them had its own
 partial copy of it:
 
-    promela._Emitter._at            a SampleLeaf samples the tree the walk last
-                                    moved to
     arbiter._check_no_orphan_sample the same rule, scoped to one Sequence
     mission_tasks._split_by_objective   a unit is a movement plus the work after
 
-None of the three knew that reaching a tree expects entering its aisle, so no
-unit ever contained its aisle move -- and a task handed to another robot
-arrived without the part that gets the robot there. That is the gap this closes.
+Neither knew that reaching a tree expects entering its aisle, so no unit ever
+contained its aisle move -- and a task handed to another robot arrived without
+the part that gets the robot there. That is the gap this closes.
 
 **Two strengths of precondition, and the distinction is load-bearing.**
 
@@ -29,15 +27,14 @@ only reject what is genuinely wrong) and planning (which wants the whole chain).
 
 **The table is closed against the schema.** One row per element of the XSD's
 ``<xs:group name="ActionGroup">``; ``covers`` checks that against
-``promela.action_pool`` so a new action in the schema is a loud test failure
-rather than a leaf that silently means nothing. The vocabulary a row is written
-in is small on purpose -- five fact kinds -- because a predicate nobody can
-establish is a predicate that only ever blocks a plan.
+``mission_tasks.action_grammar`` so a new action in the schema is a loud test
+failure rather than a leaf that silently means nothing. The vocabulary a row is
+written in is small on purpose -- five fact kinds -- because a predicate nobody
+can establish is a predicate that only ever blocks a plan.
 
 **Position is exclusive; achievement latches.** A robot is at one place and in
 one aisle at a time, so a move retracts where it used to be. Having sampled a
-tree is permanent. That asymmetry is the same one ``promela`` encodes in its
-macros and its latches, and it is why a state here is a set of facts rather
+tree is permanent. That asymmetry is why a state here is a set of facts rather
 than a list of things that happened.
 
 No ROS, no lxml beyond element inspection, so this is testable against real
@@ -66,12 +63,27 @@ AT_GPS = "at_gps"
 IN_AISLE = "in_aisle"
 #: Tree ``t`` has been sampled. Latches.
 SAMPLED_TREE = "sampled_tree"
+#: Tree ``t`` has been harvested. Latches, and deliberately distinct from
+#: ``sampled_tree``: a mission that asked for fruit is not satisfied by a leaf.
+HARVESTED_TREE = "harvested_tree"
 #: The arm is at a commanded pose. Latches.
 ARM_POSITIONED = "arm_positioned"
 
 #: Facts that stay true once true. Having sampled a tree survives driving away
 #: from it; being at the tree does not.
-LATCHING = frozenset({SAMPLED_TREE, ARM_POSITIONED})
+LATCHING = frozenset({SAMPLED_TREE, HARVESTED_TREE, ARM_POSITIONED})
+
+#: The actions that finish a mission's work at a tree, and the fact each leaves
+#: behind. Both bind to the ``MoveToTreeID`` ahead of them and both are what a
+#: plan is *for*, so pruning and the completed-objectives ledger treat them
+#: alike -- see ``_objective_bindings``. An action missing from here is
+#: invisible to both: its tree never counts as done, so a redeployed plan still
+#: contains it and the executor, which rebuilds from the root every time, does
+#: the work again.
+OBJECTIVE_FACTS = {
+    "SampleLeaf": SAMPLED_TREE,
+    "HarvestFruit": HARVESTED_TREE,
+}
 
 #: Where the robot is. One at a time: establishing any of these retracts the
 #: others, which is what makes "sample where you last moved to" mean something.
@@ -86,9 +98,9 @@ TRAVELS = WHERE | AISLE
 REQUIRED = "required"
 EXPECTED = "expected"
 
-#: How an action shows up in the verification model's vocabulary. Named here
-#: rather than in ``promela`` so the emitter is a lookup with no tag literals
-#: in it, which is what stopped the two drifting apart in the first place.
+#: What kind of fact an action's completion represents. Objective/achievement
+#: facts are the work itself, never a leftover; ``dangling`` reads this to
+#: skip them when looking for orphaned setup steps.
 OBJECTIVE = "objective"  # somewhere the mission wanted the robot to be
 ACHIEVEMENT = "achievement"  # something the mission wanted done, latching
 DONE = "done"  # ran; nothing else to say about it
@@ -147,14 +159,25 @@ class Need:
 
     kind: str
     strength: str = REQUIRED
-    arg: str = ""
+    #: The binding required. A tuple means any of them will do, which is how a
+    #: tree that a robot can reach from either of two lanes says so: both are
+    #: correct, and a plan choosing the second is answering something -- a
+    #: blocked lane -- rather than getting the first one wrong.
+    arg: object = ""
 
     def met_by(self, fact: Fact) -> bool:
         """Whether ``fact`` satisfies this need."""
-        return fact.kind == self.kind and (not self.arg or fact.arg == self.arg)
+        if fact.kind != self.kind or not self.arg:
+            return fact.kind == self.kind
+        if isinstance(self.arg, tuple):
+            return fact.arg in self.arg
+        return fact.arg == self.arg
 
     def __str__(self) -> str:
-        return f"{self.kind}({self.arg})" if self.arg else f"{self.kind}(?)"
+        if not self.arg:
+            return f"{self.kind}(?)"
+        shown = " or ".join(self.arg) if isinstance(self.arg, tuple) else self.arg
+        return f"{self.kind}({shown})"
 
     @property
     def phrase(self) -> str:
@@ -280,6 +303,14 @@ def _move_to_tree(element, orchard, state) -> dict:
         return {"defect": f"<MoveToTreeID> '{_name(element)}' has no id"}
     approach = (element.get("approach_tree") or "").strip().lower() == "true"
     aisle = orchard.aisle_of(tree) if orchard is not None else None
+    # Either lane that reaches this tree satisfies the expectation. The default
+    # is only the nearer suggestion, and treating it as the sole right answer
+    # would report a plan that went round to the open side of a blocked row as
+    # having got the aisle wrong.
+    sides = orchard.aisles_of(tree) if orchard is not None else ()
+    wanted = (
+        tuple(str(a) for a in sides) if sides else ("" if aisle is None else str(aisle))
+    )
 
     here = Fact(AT_TREE if approach else AT_WAYPOINT, tree)
     establishes = (here,) if aisle is None else (here, Fact(IN_AISLE, str(aisle)))
@@ -289,7 +320,7 @@ def _move_to_tree(element, orchard, state) -> dict:
         # Every plan in examples/ omits it. What the expectation buys is the
         # *closure* -- the aisle move belongs to this tree's task -- and a
         # prerequisite worth emitting when the task is rebuilt elsewhere.
-        "needs": (Need(IN_AISLE, EXPECTED, "" if aisle is None else str(aisle)),),
+        "needs": (Need(IN_AISLE, EXPECTED, wanted),),
         "establishes": establishes,
         "clears": TRAVELS,
         "proposition": OBJECTIVE if approach else SILENT,
@@ -326,6 +357,31 @@ def _sample_leaf(element, orchard, state) -> dict:
     }
 
 
+def _harvest_fruit(element, orchard, state) -> dict:
+    """HarvestFruit: SampleLeaf's shape, a different achievement.
+
+    Picks from whatever the robot is in front of, so it needs the same
+    ``at_tree`` and is refused in a state that does not say where that is.
+
+    What it establishes is its own fact rather than ``sampled_tree``. The two
+    are different work on the same object -- a plan that harvested a tree has
+    not sampled it -- and sharing the predicate would let a mission asking for
+    one be satisfied by the other, which is exactly the kind of quiet
+    substitution the objective gate exists to catch.
+
+    Picking nothing is not modelled here. An empty tree is a fact about the
+    orchard, not about the plan: the action reports what it got, and whether
+    that is worth another robot's time is a judgement made from the camera,
+    not from the schema.
+    """
+    at = state.holding(AT_TREE) if state is not None else None
+    return {
+        "needs": (Need(AT_TREE, REQUIRED),),
+        "establishes": () if at is None else (Fact(HARVESTED_TREE, at.arg),),
+        "proposition": ACHIEVEMENT,
+    }
+
+
 def _gps(element, orchard, state) -> dict:
     """MoveToGPSLocation / ApproachGPSWaypoint: a place named absolutely."""
     lat, lon = element.get("latitude"), element.get("longitude")
@@ -354,6 +410,17 @@ def _local(element, orchard, state) -> dict:
     return {"proposition": DONE}
 
 
+def _wait(element, orchard, state) -> dict:
+    """Wait: time passes and the robot does not move.
+
+    Clears nothing, on purpose. The pose it already had is the pose it still
+    has, so "approach the tree, wait for someone to walk past, sample it" reads
+    as one continuous approach rather than an approach, a gap, and an orphaned
+    sample the fleet would refuse.
+    """
+    return {"proposition": DONE}
+
+
 def _follow(element, orchard, state) -> dict:
     """FollowPerson: unbounded movement, so nowhere is known afterwards."""
     return {"clears": TRAVELS, "proposition": DONE}
@@ -372,6 +439,8 @@ TABLE: Dict[str, object] = {
     "FollowPerson": _follow,
     "MoveArmToPosition": _arm,
     "SampleLeaf": _sample_leaf,
+    "HarvestFruit": _harvest_fruit,
+    "Wait": _wait,
 }
 
 #: Every action this module can talk about.
@@ -556,7 +625,24 @@ def prune_completed(root, completed, orchard=None):
     aisles_still_needed = set()
     for move, sample, tree_id in objectives:
         if tree_id in completed_ids:
+            # Both halves, not just the move. When the pair is wrapped in a
+            # RetryUntilSuccessful of its own -- how the planner writes an
+            # objective -- both climbs reach that wrapper and the set collapses
+            # them to one removal, exactly as before. When it is NOT wrapped
+            # they climb nowhere and return themselves, so both leaves go.
+            #
+            # That second shape is the one a task won at auction has: the graft
+            # puts the aisle move, the approach, the sample and whatever the
+            # planner added into one flat Sequence, so no ancestor holds the
+            # pair alone. Asking only about the move then deleted only the
+            # move, and the orphaned SampleLeaf failed the arbiter's own
+            # precondition check -- "requires a preceding <MoveToTreeID
+            # approach_tree='true'>" -- which rejected the whole plan. Live,
+            # that cost amiga2 a task it had just won: it had sampled tree 20
+            # from an earlier auction, won tree 26, and could not graft it
+            # because pruning tree 20 left its sample behind.
             to_remove.add(_isolated_ancestor(move, {move, sample}))
+            to_remove.add(_isolated_ancestor(sample, {move, sample}))
         else:
             aisle = orchard.aisle_of(tree_id) if orchard is not None else None
             if aisle is not None:
@@ -575,31 +661,77 @@ def prune_completed(root, completed, orchard=None):
             if parent is not None:
                 parent.remove(element)
 
+    # 3. Whatever the two steps above emptied goes with its contents.
+    _drop_emptied_controls(doc)
+
     return doc
 
 
-def sample_leaf_trees(root, orchard=None) -> Dict[str, str]:
-    """Every ``SampleLeaf``'s ``name`` -> the tree id it binds to.
+#: Control nodes, matching the XSD's ControlGroup. Spelled out here rather
+#: than imported from ``mission_tasks``: that module builds on this one.
+CONTROLS = frozenset(
+    {"Sequence", "ReactiveSequence", "Fallback", "RetryUntilSuccessful"}
+)
+
+
+def _drop_emptied_controls(root) -> None:
+    """Remove control nodes that pruning left holding nothing.
+
+    The XSD requires every control node to have at least one child, so a
+    wrapper emptied by pruning makes the entire plan invalid -- and the plan
+    the planner shows the model is the *pruned* one, so the model is handed
+    XML that cannot validate and its edit inherits the fault. That is the
+    whole of ``LLM edit failed XSD validation -- Element 'Sequence': Missing
+    child element(s)``, which fired on every absorb in a live run and cost the
+    winner the one replan that would have re-derived the ``Wait`` the rebuild
+    dropped.
+
+    The path there: grafting a won task wraps the original leaves in a bare
+    ``<Sequence>`` so the two stay separable, and pruning the robot's finished
+    trees out of that wrapper leaves ``<Sequence/>`` behind.
+
+    Deepest first, so a wrapper whose only child was itself emptied goes too.
+    The ``BehaviorTree``'s own root control node always stays: it is what an
+    absorbed task gets appended to, and a childless ``BehaviorTree`` is no
+    better than an empty ``Sequence``.
+    """
+    protected = {child for tree in root.iter("BehaviorTree") for child in tree}
+    for element in reversed(list(root.iter())):
+        if element.tag in CONTROLS and len(element) == 0 and element not in protected:
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+
+
+def objective_trees(root, orchard=None) -> Dict[str, str]:
+    """Every objective action's ``name`` -> the tree id it binds to.
 
     BT.CPP reports a leaf's *name* on status-change, not a tree id -- that
     attribute lives on the ``MoveToTreeID`` ahead of it, which is this
     schema's concept, not BT.CPP's. This is how a SUCCESS event's ``node``
     field (e.g. ``"sample_tree60"``) becomes a tree id for a completed-
     objectives ledger, using the same binding ``prune_completed`` removes by.
+
+    Covers every action in ``OBJECTIVE_FACTS``, so a harvest counts as done
+    the same way a sample does.
     """
     return {
-        (sample.get("name") or ""): tree_id
-        for _, sample, tree_id in _objective_bindings(root, orchard)
+        (objective.get("name") or ""): tree_id
+        for _, objective, tree_id in _objective_bindings(root, orchard)
     }
 
 
 def _objective_bindings(root, orchard=None):
-    """Every ``(MoveToTreeID, SampleLeaf, tree_id)`` triple in the plan.
+    """Every ``(MoveToTreeID, objective, tree_id)`` triple in the plan.
 
-    The binding ``advance`` computes -- which tree a sample lands on is a
+    The binding ``advance`` computes -- which tree the work lands on is a
     function of where the state says the robot is, not of anything on the
-    ``SampleLeaf`` element itself -- kept here instead of discarded, for
-    ``prune_completed`` and ``sample_leaf_trees`` to share.
+    objective element itself -- kept here instead of discarded, for
+    ``prune_completed`` and ``objective_trees`` to share.
+
+    Every action in ``OBJECTIVE_FACTS`` binds, not ``SampleLeaf`` alone: a
+    harvest is a mission's work in exactly the way a sample is, and a harvest
+    that did not bind would never be pruned from a redeployed plan.
     """
     state = State()
     last_move_for: Dict[str, object] = {}
@@ -611,12 +743,11 @@ def _objective_bindings(root, orchard=None):
         ):
             last_move_for[(element.get("id") or "").strip()] = element
         step, state = advance(state, element, orchard)
-        if element.tag == "SampleLeaf":
-            sampled = next(
-                (f for f in step.establishes if f.kind == SAMPLED_TREE), None
-            )
-            if sampled is not None and sampled.arg in last_move_for:
-                out.append((last_move_for[sampled.arg], element, sampled.arg))
+        kind = OBJECTIVE_FACTS.get(element.tag)
+        if kind is not None:
+            done = next((f for f in step.establishes if f.kind == kind), None)
+            if done is not None and done.arg in last_move_for:
+                out.append((last_move_for[done.arg], element, done.arg))
     return out
 
 

@@ -29,6 +29,7 @@ from collections import deque
 from threading import Condition, Lock, Thread
 from typing import Dict, List, Optional, Set
 
+from amiga_ros2_comms.codec import Target, TargetKind
 from lxml import etree
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
@@ -64,10 +65,19 @@ ROUTE_TOPIC = "/mission/fault_route"
 # This gate must fail open. Triage not running, a model endpoint that is down, a
 # reply that will not parse -- none of those should leave a robot sitting on a
 # fault it could have planned around, so the timeout restores exactly the
-# behaviour this gate replaced: replan and find out. Long enough for one model
-# call and change; short enough that a robot stalled at a tree is not stalled
-# for a minute.
-ROUTE_TIMEOUT_SEC = 25.0
+# behaviour this gate replaced: replan and find out.
+#
+# Sized for triage's slowest honest path, not its usual one. With `use_vlm` set
+# a verdict costs three round-trips -- the look gate, the camera, and the
+# decision -- which measured 15-22 s against gpt-oss-120b with a vision model
+# beside it. At 25 s that was inside the budget only until the endpoint had
+# other work, and a verdict arriving late is worse than none: the planner has
+# already opened a session on a fault triage was about to say was hardware.
+#
+# Raising it costs nothing when triage is healthy, because it publishes as soon
+# as it decides and this returns immediately. It is only how long the planner
+# waits on a triage that is never going to answer.
+ROUTE_TIMEOUT_SEC = 45.0
 
 # A whole XML plan comes back in one reply, so this must NOT fall back to
 # llm.MAX_TOKENS (2048) — a truncated plan fails XSD validation every time.
@@ -120,6 +130,22 @@ class MissionPlannerNode(Node):
         # completed_trees above stays because pruning removes work by tree id,
         # which is the one place a tree id is genuinely the right key.
         self.succeeded_nodes: List[str] = []
+        # Targets a peer won from this robot at auction. Not "done" -- done
+        # somewhere else, which for planning purposes means the same thing:
+        # sending this robot there too puts it where another one is already
+        # going.
+        #
+        # Needed because the plan alone cannot say it. `remove_task` takes the
+        # transferred objective out of the XML, but the <Mission> text is a
+        # ratchet: absorbing a task extends it, transferring one deliberately
+        # leaves it alone (that asymmetry is what catches a plan quietly
+        # abandoning work). So after a hand-off the plan says "sample tree 26"
+        # while the mission still says "sample trees 20 and 26", and the next
+        # replan reads the mission, sees 20 missing, and restores it. Seen end
+        # to end: amiga3 gave tree 20 to amiga2, dropped it correctly for two
+        # plans, then re-added it -- and the two robots deadlocked in aisle 2,
+        # one of them standing on the waypoint the other needed.
+        self.transferred_targets: Set[Target] = set()
         self.fault_constraints: List[Dict] = []
         self._last_status: Dict = {
             "mission_xml_received": False,
@@ -396,7 +422,7 @@ class MissionPlannerNode(Node):
             doc = etree.fromstring(xml.encode("utf-8"))
         except etree.XMLSyntaxError:
             return
-        tree_id = ontology.sample_leaf_trees(doc, orchard_map).get(name)
+        tree_id = ontology.objective_trees(doc, orchard_map).get(name)
         if tree_id is None:
             return
         with self._lock:
@@ -436,6 +462,7 @@ class MissionPlannerNode(Node):
         # A pseudo-event, so the retry counter, the memory and the rejection
         # loop all key off this the way they key off a failing node.
         cause = str(request.get("cause", "workload_changed"))
+        self._record_ownership_change(cause, request.get("target"))
         event = {
             "node": f"{cause}:{request.get('task_id')}",
             "reason": cause,
@@ -482,6 +509,65 @@ class MissionPlannerNode(Node):
             },
             daemon=True,
         ).start()
+
+    def _record_ownership_change(self, cause: str, target) -> None:
+        """Remember which targets stopped being this robot's, and which came back.
+
+        Every kind of target, not just trees -- an aisle or a GPS waypoint a
+        peer took is exactly as re-sendable-to as a tree is, so excluding them
+        left a hole this ledger exists to close.
+
+        Absorbing clears the mark rather than ignoring it, so a target handed
+        away and later won back is plannable again -- the ledger tracks who
+        owns the work now, not what has ever left.
+        """
+        if not isinstance(target, dict):
+            return
+        try:
+            parsed = Target(
+                kind=TargetKind[str(target.get("kind", "none")).upper()],
+                a=int(target.get("a") or 0),
+                b=int(target.get("b") or 0),
+            )
+        except (KeyError, ValueError, TypeError):
+            return
+        if not parsed.placed:
+            return
+        with self._lock:
+            if cause == "task_transferred":
+                if parsed not in self.transferred_targets:
+                    self.transferred_targets.add(parsed)
+                    self.get_logger().info(
+                        f"{parsed} is a peer's now — excluding it from "
+                        "future replans"
+                    )
+            elif cause == "task_absorbed":
+                self.transferred_targets.discard(parsed)
+
+    def _strip_transferred(self, xml: str, transferred: "Set[Target]") -> Optional[str]:
+        """``xml`` with any task on a transferred target cut out.
+
+        The mission text still names transferred work, so a model asked not to
+        restore it can still do so by reading the <Mission> line rather than
+        the instruction. This is the check that catches it regardless: a
+        task's target survives an edit even when its element names do not, so
+        matching on target (not on task_id, which the edit can freely change)
+        is what makes this a backstop and not just another prompt.
+
+        Returns None if nothing is left to run.
+        """
+        for task in mission_tasks.tasks_in(xml):
+            if task.target not in transferred:
+                continue
+            stripped = mission_tasks.remove_task(xml, task.task_id)
+            if stripped is None:
+                continue
+            self.get_logger().warn(
+                f"  Edit re-added {task.target}, which belongs to a peer — "
+                "removing it before publishing"
+            )
+            xml = stripped
+        return xml if mission_tasks.tasks_in(xml) else None
 
     def _on_rejection(self, msg: String):
         """Arbiter rejected our last candidate — retry with the reason as feedback,
@@ -643,6 +729,21 @@ class MissionPlannerNode(Node):
             sessions_done = self._last_status["sessions"]
             aborted = self._mission_aborted
 
+        # A workload-change session carries the plan its own edit actually
+        # committed, not just a request to write one -- see arbiter_node.py's
+        # _request_replan. current_mission_xml is this robot's copy of the
+        # last plan it was free to adopt, and /mission/xml only ever carries
+        # one while the robot is idle, so a robot still mid-mission can be
+        # sitting on a copy that predates this commit by as long as the
+        # mission runs. Editing that stale copy re-derives, from scratch,
+        # a unit the commit already built correctly -- observed live: a
+        # tree absorbed from a different aisle than the one in the stale
+        # copy got rewritten with the wrong aisle, because the right one
+        # was never in the document the model was shown.
+        committed = ((extra or {}).get("request") or {}).get("committed_mission_xml")
+        if committed:
+            xml = committed
+
         if aborted:
             return
 
@@ -689,6 +790,7 @@ class MissionPlannerNode(Node):
         with self._lock:
             completed = set(self.completed_trees)
             succeeded = list(self.succeeded_nodes)
+            transferred = set(self.transferred_targets)
             orchard_map = self.orchard
         try:
             active_doc = etree.fromstring(xml.encode("utf-8"))
@@ -718,7 +820,7 @@ class MissionPlannerNode(Node):
         # concrete fact that was missing when a fault reason like "approach
         # tree 60 not via aisle 6" had nothing to contradict aisle 9 with.
         if orchard_map:
-            orchard_facts = orchard.facts_for_trees(orchard_map, pruned_tree_ids)
+            orchard_facts = orchard.sides_for_trees(orchard_map, pruned_tree_ids)
             known_aisles = sorted(orchard_map.aisles())
         else:
             orchard_facts = {}
@@ -787,6 +889,7 @@ class MissionPlannerNode(Node):
             orchard_facts=orchard_facts,
             known_aisles=known_aisles,
             completed_trees=sorted(completed),
+            transferred_targets=sorted(str(t) for t in transferred),
             succeeded_nodes=succeeded,
             prior_fault_constraints=prior_fault_constraints,
             route_guidance=route_guidance,
@@ -796,7 +899,8 @@ class MissionPlannerNode(Node):
         self.get_logger().info(
             f"  Calling model ({llm.MODEL}) — "
             f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
-            f"completed_trees={sorted(completed)}, pruned={len(completed)}"
+            f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
+            f"transferred_targets={sorted(str(t) for t in transferred)}"
         )
 
         # 7. Call LLM
@@ -819,6 +923,21 @@ class MissionPlannerNode(Node):
                 f"  Response preview: {edited_xml[:200]}"
             )
             return
+
+        # 8b. The mission text still names transferred work (see
+        # transferred_targets above), so a model reading it can restore what a
+        # peer already owns despite being told not to. The prompt is a
+        # courtesy; this is the backstop -- the same move as pruning completed
+        # work out before the call, done after instead, because the risk here
+        # is the model ADDING work back rather than leaving it in.
+        if transferred:
+            edited_xml = self._strip_transferred(edited_xml, transferred)
+            if edited_xml is None:
+                self.get_logger().warn(
+                    "  Edit had no work left after removing transferred "
+                    "targets — not publishing"
+                )
+                return
 
         # 9. Summarise what changed, against the pruned XML the model was
         # actually shown — not the raw active mission, which may still
