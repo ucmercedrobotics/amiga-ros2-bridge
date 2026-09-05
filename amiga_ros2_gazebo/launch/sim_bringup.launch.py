@@ -192,6 +192,7 @@ def launch_setup(context, *args, **kwargs):
     # enough to abort a goal rather than be driven around.
     spawn_person = int(LaunchConfiguration("spawn_person").perform(context))
     spawn_truck = int(LaunchConfiguration("spawn_truck").perform(context))
+    remove_tree = int(LaunchConfiguration("remove_tree").perform(context))
     planner_host = LaunchConfiguration("planner_host").perform(context)
     broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
@@ -412,7 +413,7 @@ def launch_setup(context, *args, **kwargs):
                         {
                             "safety_distance": 2.5,
                             "lidar_topic": qualify_ros(ns, "ouster/points"),
-                            "azimuth_tolerance": 0.8,
+                            "azimuth_tolerance": 0.4,
                             "min_object_height": 0.1,
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
@@ -552,6 +553,23 @@ def launch_setup(context, *args, **kwargs):
             )
         )
 
+    if remove_tree:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "remove_tree.py",
+                    ),
+                    "--tree",
+                    str(remove_tree),
+                ],
+                output="screen",
+            )
+        )
+
     return actions
 
 
@@ -660,6 +678,16 @@ def generate_launch_description():
                 "or 0 for none. The person lands on that tree's row waypoint, "
                 "which makes MoveToTreeID abort for real instead of routing "
                 "around -- the fault the triage agent and the VLM read.",
+            ),
+            DeclareLaunchArgument(
+                "remove_tree",
+                default_value="0",
+                description="Tree index to delete from the running world, or "
+                "0 for none. GetTreeInfo keeps answering for it -- this only "
+                "removes the Gazebo model, not the orchard map entry -- so a "
+                "robot sent there finds a real, physical absence at a "
+                "position its own map still calls a tree: a stale map, not a "
+                "scripted fault.",
             ),
             DeclareLaunchArgument(
                 "launch_vlm",
