@@ -998,6 +998,63 @@ def test_an_interpretation_that_is_not_one_of_the_four_actions_is_refused():
     assert rig.session.stats()["interpret_failed"] == 1
 
 
+def test_holding_a_task_that_never_left_still_resets_the_planner():
+    """The bug: DropTask with disposition HOLD on a task still in the mission.
+
+    Unlike ReDelegate's fallback, DropTask never announces -- the task was
+    ours the whole time, so ``in_mission`` never went False. The old
+    _rejoin_mission treated that as nothing having changed and skipped the
+    replan entirely, which meant the local planner's exhausted retry budget
+    (reset only by a replan arriving) was never refreshed: the identical
+    fault came back to an identical, still-exhausted robot, forever. A
+    replan has to fire here even though nothing about the plan's membership
+    changed, because the planner's session is what "try again later" is
+    actually promising to refresh.
+    """
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter(
+            [DropTask(task=task, disposition=LocalDisposition.HOLD)]
+        )
+    )
+    rig.session.own(task)
+
+    rig.session.report_infeasible(task)
+
+    assert rig.session.state_of(TASK_ID) is TaskState.OURS
+    assert rig.replanner.calls == 1
+    assert rig.replanner.deltas[0].added == [task]
+
+
+def test_a_task_held_past_the_cap_is_dropped_instead():
+    """HOLD resets the budget, which is exactly why it cannot be free forever.
+
+    Each hold buys the local planner one more attempt at an identical fault;
+    without a limit, "try again later" and "try again forever" are the same
+    thing for a fault that was never going to resolve. max_local_holds is
+    that limit, and once it is spent the task is dropped regardless of what
+    the interpreter keeps asking for.
+    """
+    task = a_task()
+    rig = make_rig(
+        interpreter=ScriptedInterpreter(
+            [DropTask(task=task, disposition=LocalDisposition.HOLD)]
+        ),
+        max_local_holds=2,
+    )
+    rig.session.own(task)
+
+    rig.session.report_infeasible(task)
+    assert rig.session.state_of(TASK_ID) is TaskState.OURS
+
+    rig.session.report_infeasible(task)
+    assert rig.session.state_of(TASK_ID) is TaskState.OURS
+
+    rig.session.report_infeasible(task)
+    assert rig.session.state_of(TASK_ID) is TaskState.RELINQUISHED
+    assert rig.mission.released == [task]
+
+
 def test_dropping_a_task_never_announces_it():
     task = a_task()
     rig = make_rig(interpreter=ScriptedInterpreter([DropTask(task=task)]))

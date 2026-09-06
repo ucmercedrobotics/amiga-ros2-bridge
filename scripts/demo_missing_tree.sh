@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# One robot, the same aisle-2 mission every other demo uses, and the second
+# One robot, the same aisle-2 mission every other demo uses, and the first
 # of its two trees is not there.
 #
-# The robot samples trees 20 and 26 (aisle 2, sample_aisle2.bin -- the exact
-# mission demo_vlm_human.sh feeds robot 3), except tree 26 is deleted from
-# the running world before the mission starts. GetTreeInfo -- the orchard
-# map -- is not touched, so the robot's own plan still says tree 26 exists:
-# it drives to the recorded position and finds bare soil. That is a stale
-# map, the real shape of a missing tree, not a scripted fault -- see
+# The robot is sent to sample trees 20 and 26 (aisle 2, sample_aisle2.bin --
+# the exact mission demo_vlm_human.sh feeds robot 3), except tree 20 is
+# deleted from the running world before the mission starts. GetTreeInfo --
+# the orchard map -- is not touched, so the robot's own plan still says tree
+# 20 exists: it drives to the recorded position and finds bare soil. That is
+# a stale map, the real shape of a missing tree, not a scripted fault -- see
 # remove_tree.py.
 #
 # The physics matters here in a way it did not for the person/truck demos.
@@ -20,7 +20,7 @@
 # caught mid-turn, and now reports a failure where it used to report
 # success. Accepted here because this demo is the priority right now.
 #
-#   tree 26 removed at launch -> robot approaches 20 (fine), then 26 ->
+#   tree 20 removed at launch -> robot approaches 20 first ->
 #                                 lidar finds nothing -> NavigateViaLidar
 #                                 aborts -> MoveToTreeID FAILS ->
 #                                 /bt/status_change
@@ -32,7 +32,7 @@
 #                                    burns the retry budget
 #                                 -> escalate: with zero peers, re_delegate
 #                                    has nowhere to send the work; the right
-#                                    answer is drop_task, then exit the aisle
+#                                    answer is drop_task, then move on to 26
 #
 # No auction to watch -- one robot, no peers -- which is the point: this
 # tests the single-robot decision (repair, then give up locally and drop,
@@ -66,9 +66,8 @@ EXAMPLES_DIR="amiga_ros2_behavior_tree/examples"
 MISSION_BIN="${EXAMPLES_DIR}/sample_aisle2.bin"
 MISSION_AISLE=2
 
-# The second (and last) tree in sample_aisle2.bin. Not the first: a fault on
-# the very first tree cannot be told apart from "the robot never got going."
-MISSING_TREE="${MISSING_TREE:-26}"
+# The first tree in sample_aisle2.bin.
+MISSING_TREE="${MISSING_TREE:-20}"
 
 # Must match sim_bringup.launch.py's robot_name_prefix; irrelevant here since
 # ROBOT_COUNT=1 means robot 1 is unnamespaced (see that file's module

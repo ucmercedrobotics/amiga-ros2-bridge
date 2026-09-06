@@ -338,6 +338,24 @@ def test_absorbing_a_task_asks_this_robots_planner_to_replan(arbiter):
     assert asked[0]["target"] == {"kind": "tree", "a": 35, "b": 0}
 
 
+def test_re_adding_a_task_already_ours_does_not_graft_it_twice(arbiter):
+    """HOLD and REQUEST_HUMAN both replay the coordinator's own task as an
+    'add', purely to reach the replan notification below -- see
+    coordinator.py's _rejoin_mission. insert_task has no way to know the task
+    never left, and would graft a second copy of it if this request reached
+    it. The plan is already correct, so the accurate edit is no edit: the
+    active mission comes back byte-identical, and the planner still hears
+    about it.
+    """
+    asked = replan_requests(arbiter)
+    response = call(arbiter, request_for(task_id=33891, tree=10))
+
+    assert response.accepted, response.reason
+    assert arbiter.active_mission_xml == ACTIVE
+    assert arbiter.active_mission_xml.count("Visit_Tree_10") == 1
+    assert len(asked) == 1
+
+
 def test_the_request_carries_the_plan_the_commit_actually_produced(arbiter):
     """Not a reference to it -- the planner has no other way to see it.
 
