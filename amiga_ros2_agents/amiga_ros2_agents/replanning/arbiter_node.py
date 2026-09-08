@@ -336,6 +336,22 @@ class ArbiterNode(Node):
             reason = "removal leaves no work — accepted with nothing to publish"
             self.get_logger().info(f"ACCEPTED coordinator edit — {reason}")
             self.status.publish(self.get_status())
+        elif not request.removing and candidate == active:
+            # HOLD and REQUEST_HUMAN replay this same "add" request on a task
+            # that never left -- see _apply_task_edit -- purely to reach
+            # _request_replan below. Nothing changed, so there is nothing for
+            # _decide to check: accepting is the accurate answer, not a
+            # shortcut past one. Without this, a robot told to hold a task
+            # for a later attempt got a later attempt that never came --
+            # the planner's retry budget resets only here, on a request this
+            # branch would otherwise never let through.
+            accepted = True
+            reason = "task already ours — accepted with nothing to publish"
+            with self._lock:
+                self._last_status["accepted"] += 1
+                self._last_status["last_decision"] = "accepted"
+            self.get_logger().info(f"ACCEPTED coordinator edit — {reason}")
+            self.status.publish(self.get_status())
         else:
             with self._lock:
                 self.justified_drops |= departing
@@ -448,6 +464,15 @@ class ArbiterNode(Node):
             # Losing work never widens what the mission claims to do, so the
             # text stands unchanged.
             return edited, []
+
+        # Already ours: HOLD and REQUEST_HUMAN both replay this same "add"
+        # request purely to reach the coordinator's notification below (see
+        # _on_verify_replan) -- the task itself never left, and insert_task has
+        # no way to know that and would graft it a second time. The plan is
+        # already correct, so it is the whole answer: no edit, no appendix,
+        # nothing dropped.
+        if any(t.task_id == task_id for t in mission_tasks.tasks_in(active)):
+            return active, "", []
 
         task = mission_tasks.MissionTask(
             task_id=task_id,

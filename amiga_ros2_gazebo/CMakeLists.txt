@@ -21,6 +21,7 @@ install(PROGRAMS
   scripts/sim_joint_state_filter.py
   scripts/spawn_person.py
   scripts/spawn_truck.py
+  scripts/remove_tree.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
