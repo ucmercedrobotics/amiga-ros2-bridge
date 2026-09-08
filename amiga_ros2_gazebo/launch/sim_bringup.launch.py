@@ -198,6 +198,31 @@ def launch_setup(context, *args, **kwargs):
     spreading_factor = int(
         LaunchConfiguration("lora_spreading_factor").perform(context)
     )
+    # Same Gazebo sim either way -- this only swaps what carries lora/tx and
+    # lora/rx between robots. false (default): the virtual medium below models
+    # the shared channel and each bridge opens a pty it creates. true: no
+    # virtual medium is started at all, and each robot's bridge opens a real
+    # serial port to a real radio instead.
+    lora_hardware = (
+        LaunchConfiguration("lora_hardware").perform(context).lower() == "true"
+    )
+    lora_serial_ports = [
+        p.strip()
+        for p in LaunchConfiguration("lora_serial_ports").perform(context).split(",")
+        if p.strip()
+    ]
+    # 0 (default): this robot's coordinator/LoRa identity is its position in
+    # THIS launch's own loop (1..robot_count), exactly as before. Non-zero
+    # overrides it -- the one thing a single-robot launch (robot_count:=1)
+    # cannot express on its own, since its loop index is always 1 regardless
+    # of which robot it actually is. Needed when each robot in the fleet is
+    # its own Gazebo instance on its own machine, talking over real LoRa
+    # hardware: every machine runs robot_count:=1, so without this override
+    # they would all claim node_id 1 -- and two robots sharing a node_id have
+    # each other's real transmissions silently discarded as self-echoes by
+    # the reliability layer (see reliability/session.py's rx_self handling),
+    # which looks exactly like the radios not working when they actually are.
+    node_id_override = int(LaunchConfiguration("node_id").perform(context))
     # One entry per robot, short list padded with 100. Batteries are the
     # cheapest way to make a fleet asymmetric: they enter default_fitness as a
     # penalty below 50%, so `batteries:=100,20,100` makes robot 2 bid badly on
@@ -234,7 +259,11 @@ def launch_setup(context, *args, **kwargs):
     # Started once, not per robot: it *is* the shared channel, and modelling
     # contention between robots is most of its point. bridges:=false because
     # each robot's bridge is started below, in that robot's own namespace.
-    if launch_coordination:
+    #
+    # Skipped entirely in lora_hardware mode: real radios are their own shared
+    # channel, so there is nothing here to simulate, and each robot's bridge
+    # below opens a real serial port instead of a pty this would create.
+    if launch_coordination and not lora_hardware:
         actions.append(
             _include(
                 "amiga_ros2_comms",
@@ -247,10 +276,17 @@ def launch_setup(context, *args, **kwargs):
         )
 
     for i in range(1, robot_count + 1):
+        # This robot's identity for anything that must agree with its peers
+        # (LoRa node_id, which robot broken_sampler_robot names) rather than
+        # with this launch's own internal loop -- see node_id_override above.
+        robot_id = node_id_override if node_id_override else i
         # robot1 is unnamespaced only when it's the sole robot — see module
         # docstring. Namespace only, not spawn name (that's gazebo.launch.py's
         # own robot1_name arg, not threaded through here, same as before this
-        # file generalized to N robots).
+        # file generalized to N robots). Deliberately keyed on i, not
+        # robot_id: this is purely a local ROS-graph concern, and a
+        # node_id_override run is still, locally, the sole robot in its own
+        # Gazebo instance.
         ns = "" if (i == 1 and robot_count == 1) else f"{name_prefix}{i}"
         # Matches the frame_prefix given to robot_state_publisher in
         # urdf.launch.py — needed anywhere a node's frame-name parameter
@@ -343,8 +379,12 @@ def launch_setup(context, *args, **kwargs):
                     robot_name=ns,
                     # Empty for every robot except broken_sampler_robot, so at
                     # most one robot's arm is faulty and the rest of the fleet
-                    # can still take the work it sheds.
-                    sampler_fail_goals=("[0]" if i == broken_sampler_robot else "[]"),
+                    # can still take the work it sheds. robot_id, not i: which
+                    # robot this names is a fleet-wide fact, not a position in
+                    # this launch's own loop -- see node_id_override above.
+                    sampler_fail_goals=(
+                        "[0]" if robot_id == broken_sampler_robot else "[]"
+                    ),
                     sampler_failure_mode=broken_sampler_mode,
                 )
             )
@@ -444,14 +484,32 @@ def launch_setup(context, *args, **kwargs):
             )
 
         # ── Robot-to-robot coordination ────────────────────────────────────
-        # The device name is always amiga<i>, independent of ns -- robot1's
-        # namespace is "" and cannot name a pty. node_id is i, and it is the
-        # one value here with no safe default.
+        # In sim mode the device name is always amiga<i>, independent of ns --
+        # robot1's namespace is "" and cannot name a pty (this is a local pty
+        # path, so it is keyed on the local loop index i like ns is, not on
+        # robot_id). In hardware mode there is no naming convention to fall
+        # back on -- a real radio's device path has no relationship to the
+        # robot index -- so it must be supplied explicitly, one per robot, in
+        # lora_serial_ports (also local: each machine only ever lists its own
+        # robots' ports). node_id is robot_id, since that is the one value
+        # here that must agree with what every OTHER robot in the fleet
+        # thinks this robot's id is -- see node_id_override above.
         if launch_coordination:
+            if lora_hardware:
+                if i - 1 >= len(lora_serial_ports):
+                    raise RuntimeError(
+                        f"lora_hardware:=true but lora_serial_ports only lists "
+                        f"{len(lora_serial_ports)} port(s) for {robot_count} "
+                        f"robot(s) -- give one serial device per robot, e.g. "
+                        f"lora_serial_ports:=/dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2."
+                    )
+                device = lora_serial_ports[i - 1]
+            else:
+                device = f"{symlink_dir}/{name_prefix}{i}"
             actions += coordination_nodes(
                 ns=ns,
-                node_id=i,
-                device=f"{symlink_dir}/{name_prefix}{i}",
+                node_id=robot_id,
+                device=device,
                 spreading_factor=spreading_factor,
                 battery_percent=batteries[i - 1],
                 use_agents=launch_agents,
@@ -494,23 +552,23 @@ def launch_setup(context, *args, **kwargs):
                     # as an obstruction.
                     vlm_image_topic=(
                         vlm_image_topic
-                        if i == broken_sampler_robot or not vlm_static_image
+                        if robot_id == broken_sampler_robot or not vlm_static_image
                         else "oak0/rgb/image_raw"
                     ),
                     vlm_static_image=(
-                        vlm_static_image if i == broken_sampler_robot else ""
+                        vlm_static_image if robot_id == broken_sampler_robot else ""
                     ),
                     # Follows the topic: the robots still on the front camera
                     # must keep the front camera's sentence, or their routing
                     # prompt describes a device they are not looking through.
                     camera_description=(
                         camera_description
-                        if i == broken_sampler_robot or not vlm_static_image
+                        if robot_id == broken_sampler_robot or not vlm_static_image
                         else "the front camera"
                     ),
                     describe_frame=(
                         describe_frame
-                        if i == broken_sampler_robot or not vlm_static_image
+                        if robot_id == broken_sampler_robot or not vlm_static_image
                         else "false"
                     ),
                 )
@@ -719,7 +777,35 @@ def generate_launch_description():
                 "lora_symlink_dir",
                 default_value="/tmp/amiga_lora_sim",
                 description="Where the virtual radio's per-robot ptys are "
-                "symlinked. Robot i's bridge opens <dir>/<prefix><i>.",
+                "symlinked. Robot i's bridge opens <dir>/<prefix><i>. Ignored "
+                "when lora_hardware:=true.",
+            ),
+            DeclareLaunchArgument(
+                "lora_hardware",
+                default_value="false",
+                description="false (default): every robot's lora_bridge talks "
+                "to the virtual medium below. true: the virtual medium is not "
+                "started, and each robot's bridge opens a real serial port "
+                "from lora_serial_ports instead -- the robots themselves stay "
+                "simulated in Gazebo either way, only the radio link is real.",
+            ),
+            DeclareLaunchArgument(
+                "lora_serial_ports",
+                default_value="",
+                description="Comma-separated serial device per robot, e.g. "
+                "/dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2. Required, one entry "
+                "per robot, when lora_hardware:=true; ignored otherwise.",
+            ),
+            DeclareLaunchArgument(
+                "node_id",
+                default_value="0",
+                description="0 (default): this launch's robots get node_id "
+                "1..robot_count, their position in its own loop. Non-zero "
+                "overrides it for a robot_count:=1 launch -- one physical "
+                "robot per machine, each its own Gazebo instance and real "
+                "LoRa radio, needs a node_id that means the same robot on "
+                "every machine, which its always-1 loop position cannot "
+                "express on its own.",
             ),
             DeclareLaunchArgument(
                 "batteries",
