@@ -100,7 +100,7 @@ bash: udev
 	--net=host \
 	--privileged \
 	${CUDA_MOUNT} \
-	--env="DISPLAY=:1" \
+	--env="DISPLAY=:2" \
 	-v .:/${WORKSPACE}:Z \
 	-v /${WORKSPACE}/manifests \
 	-v ~/.ssh:/root/.ssh:ro \

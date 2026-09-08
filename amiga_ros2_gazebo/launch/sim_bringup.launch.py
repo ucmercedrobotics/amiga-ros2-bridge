@@ -49,7 +49,13 @@ ALL_CAPABILITIES = [
 
 
 def coordination_nodes(
-    ns, node_id, device, spreading_factor, battery_percent=100, use_agents=False
+    ns,
+    node_id,
+    device,
+    spreading_factor,
+    battery_percent=100,
+    use_agents=False,
+    rx_link_stats="none",
 ):
     """This robot's radio bridge, its mission bridge and its coordinator.
 
@@ -73,7 +79,20 @@ def coordination_nodes(
             name="lora_bridge",
             namespace=ns,
             output="screen",
-            parameters=[{"use_sim_time": True, "serial_port": device}],
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    "serial_port": device,
+                    # "header" only over real hardware: this radio firmware
+                    # prepends a 3-byte RSSI/SNR header the bridge must strip
+                    # before decoding, or every inbound frame lands shifted by
+                    # 3 bytes and fails to decode as any known message type --
+                    # which looks exactly like no peers ever heartbeating. The
+                    # simulated virtual medium never adds that header, so the
+                    # sim path stays "none".
+                    "rx_link_stats": rx_link_stats,
+                }
+            ],
         ),
         # Answers the coordinator's mission questions off /mission/xml, and
         # turns a won task into a candidate for the arbiter. Without it the
@@ -514,6 +533,7 @@ def launch_setup(context, *args, **kwargs):
                 spreading_factor=spreading_factor,
                 battery_percent=batteries[i - 1],
                 use_agents=launch_agents,
+                rx_link_stats="header" if lora_hardware else "none",
             )
 
         # ── This robot's own LLM agents ────────────────────────────────────
