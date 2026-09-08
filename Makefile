@@ -12,6 +12,10 @@ LORA_ROBOTS?=robot1,robot2,robot3
 # meant to be overridden per robot.
 NODE_ID?=1
 PAYLOAD:=true
+
+AGENT_MODEL?=hosted_vllm/openai/gpt-oss-120b
+AGENT_API_BASE?=http://100.88.70.65:8000/v1
+VLM_URL?=http://100.88.70.65:8001/v1/chat/completions
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
 ARCH_TAG:=amd64
@@ -92,6 +96,7 @@ udev:
 
 bash: udev
 	docker run -it --rm \
+	--name=amiga-demo \
 	--net=host \
 	--privileged \
 	${CUDA_MOUNT} \
@@ -101,6 +106,9 @@ bash: udev
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/:/dev/ \
 	-e FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/${MACHINE_NAME}.xml \
+	-e AGENT_MODEL=${AGENT_MODEL} \
+	-e AGENT_API_BASE=${AGENT_API_BASE} \
+	-e VLM_URL=${VLM_URL} \
 	${IMAGE}:${IMAGE_TAG} bash
 
 deps:
@@ -157,10 +165,13 @@ oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
 VLM_IMAGE_TOPIC ?= /oak0/rgb/image_raw
-# The vision model's endpoint. 8001 because AGENT_API_BASE -- the agents'
-# reasoning model -- is the one that lives on 8000; this is a separate service
-# that only describes camera frames.
-VLM_URL ?= http://localhost:8001/v1/chat/completions
+# VLM_URL is defined once at the top of this file, with the other two model
+# endpoints. It used to be declared here as well, defaulting to localhost --
+# but a second `?=` on a variable the top already set is dead: the first
+# assignment wins and this one silently does nothing. Point it somewhere else
+# per invocation instead:
+#
+#     VLM_URL=http://localhost:8001/v1/chat/completions make vlm
 VLM_QUESTION ?= Describe what you see.
 vlm:
 	ros2 run amiga_vlm_bridge vlm_server --ros-args \
@@ -240,6 +251,15 @@ harvest-demo:
 
 blinded-demo:
 	BLINDED=1 OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
+missing-tree-demo:
+	./scripts/demo_missing_tree.sh
+
+stuck-robot-demo:
+	./scripts/demo_stuck_robot.sh
+
+opportunistic-tree-demo:
+	./scripts/demo_opportunistic_tree.sh
 
 vlm-demo-stop:
 	./scripts/demo_vlm_human.sh stop
