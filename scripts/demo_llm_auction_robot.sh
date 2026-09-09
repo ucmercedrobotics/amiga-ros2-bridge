@@ -59,9 +59,9 @@ LOG_DIR="/tmp/llm-demo-logs/robot${ROBOT_ID}"
 # comment on why that was a bottleneck worth avoiding).
 EXAMPLES_DIR="amiga_ros2_behavior_tree/examples"
 MISSION_BINS=(
-    "${EXAMPLES_DIR}/sample_aisle6.bin"
-    "${EXAMPLES_DIR}/sample_aisle4.bin"
-    "${EXAMPLES_DIR}/sample_aisle2.bin"
+    "${EXAMPLES_DIR}/sample_20_64.bin"
+    "${EXAMPLES_DIR}/sample_22_66.bin"
+    "${EXAMPLES_DIR}/sample_24_68.bin"
 )
 MISSION="${MISSION_BINS[$(( (ROBOT_ID - 1) % ${#MISSION_BINS[@]} ))]}"
 
