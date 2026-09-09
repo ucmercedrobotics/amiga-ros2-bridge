@@ -17,8 +17,7 @@ On Mac:
 Two machines, two radios, one script, role picked at the command line::
 
     # fixed end -- e.g. staying at the aisle head
-    python3 scripts/lora_characterize.py responder \\
-        --serial-port /dev/ttyACM0 --node-id 2
+    python3 scripts/lora_characterize.py responder --serial-port /dev/ttyACM0 --node-id 2
 
     # end that walks away
     python3 scripts/lora_characterize.py initiator --serial-port /tmp/lora --node-id 1 --peer-id 2 --csv /tmp/lora_walk.csv
@@ -39,16 +38,23 @@ code of its own: any ReliabilityNode auto-ACKs a GRANT addressed to its
 node_id, which is *why* the node.py module docstring says it "runs standalone
 ... enough to be useful on a bench with two radios."
 
-The initiator logs every attempt (delivered, with its RTT, or failed, once
-the retry budget is exhausted) to a CSV. While it runs, type a number and
-Enter at any time to relabel subsequent samples with the distance you just
-paced off:
+The initiator logs every attempt (delivered, with its RTT and retransmit
+count, or failed, once the retry budget is exhausted) to a CSV. While it runs,
+type a number and Enter at any time to relabel subsequent samples with the
+distance you just paced off:
 
     50<Enter>      # from here on, samples are logged at distance_m=50
 
+or, if you cannot measure distance in the field, just press Enter with
+nothing typed to bump a plain checkpoint counter instead -- map checkpoint to
+distance afterwards, once you know it:
+
+    <Enter>        # from here on, samples are logged at the next checkpoint
+
 Then, offline and without ROS:
 
-    python3 scripts/lora_characterize.py plot --csv /tmp/lora_walk.csv
+    python3 scripts/lora_characterize.py plot --csv /tmp/lora_walk.csv \\
+        --x distance_m   # or --x checkpoint if that is what you recorded
 """
 
 import argparse
@@ -70,11 +76,13 @@ DEFAULT_ANNOUNCE_WINDOW_SEC = 5.0
 CSV_COLUMNS = [
     "seq",
     "wall_time_utc",
+    "checkpoint",
     "distance_m",
     "node_id",
     "peer_id",
     "outcome",
     "rtt_ms",
+    "attempts",
 ]
 
 
@@ -205,16 +213,29 @@ def run_initiator(args) -> None:
 
     csv_file, writer = _open_csv(args.csv)
     lock = threading.Lock()
-    state = {"distance_m": args.distance_m, "seq": 0, "sent": 0, "recv": 0}
+    state = {
+        "distance_m": args.distance_m,
+        "checkpoint": 0,
+        "seq": 0,
+        "sent": 0,
+        "recv": 0,
+    }
 
-    def current_distance():
+    def current_marker():
         with lock:
-            return state["distance_m"]
+            return state["checkpoint"], state["distance_m"]
 
     def read_stdin():
-        for line in sys.stdin:
-            line = line.strip()
+        for raw_line in sys.stdin:
+            line = raw_line.strip()
             if not line:
+                # Bare Enter: mark a new checkpoint without claiming to know
+                # the distance -- for when you can't measure it in the field
+                # and will map checkpoint -> distance afterwards.
+                with lock:
+                    state["checkpoint"] += 1
+                    checkpoint = state["checkpoint"]
+                print(f"checkpoint now {checkpoint}", flush=True)
                 continue
             try:
                 value = float(line)
@@ -223,11 +244,18 @@ def run_initiator(args) -> None:
                 continue
             with lock:
                 state["distance_m"] = value
-            print(f"distance now {value:g} m", flush=True)
+                state["checkpoint"] += 1
+                checkpoint = state["checkpoint"]
+            print(f"checkpoint {checkpoint}: distance now {value:g} m", flush=True)
 
-    def on_result(seq, distance, sent_t, future):
+    def on_result(seq, checkpoint, distance, sent_t, future):
         rtt_ms = (time.monotonic() - sent_t) * 1000.0
         outcome = future.result()
+        # Set by ReliabilitySession._finish right before it resolves the
+        # future -- how many retransmits *this* GRANT cost, not the session's
+        # running total, so it stays accurate even with several GRANTs in
+        # flight (interval_sec shorter than one retry campaign).
+        attempts = getattr(future, "attempts", None)
         with lock:
             state["recv"] += 1
             recv, sent = state["recv"], state["sent"]
@@ -235,17 +263,20 @@ def run_initiator(args) -> None:
             [
                 seq,
                 datetime.now(timezone.utc).isoformat(),
+                checkpoint,
                 distance,
                 reliability.node_id,
                 args.peer_id,
                 outcome.value,
                 f"{rtt_ms:.2f}",
+                attempts if attempts is not None else "",
             ]
         )
         csv_file.flush()
         print(
-            f"seq={seq:6d} distance={distance!s:>6}m {outcome.value:9s} "
-            f"rtt={rtt_ms:7.1f}ms ({recv}/{sent} delivered-or-resolved)",
+            f"seq={seq:6d} checkpoint={checkpoint:4d} distance={distance!s:>6}m "
+            f"{outcome.value:9s} rtt={rtt_ms:7.1f}ms attempts={attempts} "
+            f"({recv}/{sent} delivered-or-resolved)",
             flush=True,
         )
 
@@ -256,15 +287,15 @@ def run_initiator(args) -> None:
             seq = state["seq"]
             state["seq"] += 1
             state["sent"] += 1
-        distance = current_distance()
+        checkpoint, distance = current_marker()
         # src/seq are overwritten by send_reliable; task_id is ours to use as
         # the correlation id these bare GRANTs don't otherwise carry.
         grant = Grant(src=0, seq=0, task_id=seq & 0xFFFF, winner_id=args.peer_id)
         sent_t = time.monotonic()
         future = reliability.send_reliable(args.peer_id, grant)
         future.add_done_callback(
-            lambda f, seq=seq, distance=distance, sent_t=sent_t: on_result(
-                seq, distance, sent_t, f
+            lambda f, seq=seq, checkpoint=checkpoint, distance=distance, sent_t=sent_t: on_result(
+                seq, checkpoint, distance, sent_t, f
             )
         )
 
@@ -303,53 +334,72 @@ def _cmd_plot(args) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    rtt_by_distance = {}
-    outcomes_by_distance = {}
+    x_col = args.x
+    rtt_by_x = {}
+    outcomes_by_x = {}
+    attempts_by_x = {}
     with open(args.csv, newline="") as f:
         for row in csv.DictReader(f):
             try:
-                distance = float(row["distance_m"])
+                x = float(row[x_col])
             except (KeyError, ValueError):
                 continue
-            outcomes_by_distance.setdefault(distance, [0, 0])
-            outcomes_by_distance[distance][1] += 1
+            outcomes_by_x.setdefault(x, [0, 0])
+            outcomes_by_x[x][1] += 1
             if row.get("outcome") == "delivered":
                 rtt = row.get("rtt_ms")
                 if rtt:
-                    rtt_by_distance.setdefault(distance, []).append(float(rtt))
+                    rtt_by_x.setdefault(x, []).append(float(rtt))
             else:
-                outcomes_by_distance[distance][0] += 1
+                outcomes_by_x[x][0] += 1
+            # attempts is however many retransmits *this* GRANT cost, whether
+            # it was eventually delivered or not -- the more sensitive signal
+            # when a link is degrading but not yet failing outright, since a
+            # delivered message's RTT does not move until the failure edge.
+            attempts = row.get("attempts")
+            if attempts not in (None, ""):
+                attempts_by_x.setdefault(x, []).append(float(attempts))
 
-    if not outcomes_by_distance:
+    if not outcomes_by_x:
         print(f"no rows found in {args.csv}", file=sys.stderr)
         sys.exit(1)
 
-    distances = sorted(outcomes_by_distance)
+    xs = sorted(outcomes_by_x)
     means = [
+        (sum(rtt_by_x[x]) / len(rtt_by_x[x]) if rtt_by_x.get(x) else None) for x in xs
+    ]
+    mean_attempts = [
         (
-            sum(rtt_by_distance[d]) / len(rtt_by_distance[d])
-            if rtt_by_distance.get(d)
+            sum(attempts_by_x[x]) / len(attempts_by_x[x])
+            if attempts_by_x.get(x)
             else None
         )
-        for d in distances
+        for x in xs
     ]
 
-    print(f"{'distance_m':>10} {'n_ok':>6} {'n_failed':>9} {'mean_rtt_ms':>12}")
-    for d in distances:
-        samples = rtt_by_distance.get(d, [])
-        failed, total = outcomes_by_distance[d]
+    print(
+        f"{x_col:>10} {'n_ok':>6} {'n_failed':>9} {'mean_rtt_ms':>12} "
+        f"{'mean_attempts':>13}"
+    )
+    for x in xs:
+        samples = rtt_by_x.get(x, [])
+        failed, total = outcomes_by_x[x]
         mean = sum(samples) / len(samples) if samples else float("nan")
-        print(f"{d:>10g} {len(samples):>6d} {failed:>9d} {mean:>12.1f}")
+        att = attempts_by_x.get(x, [])
+        mean_att = sum(att) / len(att) if att else float("nan")
+        print(
+            f"{x:>10g} {len(samples):>6d} {failed:>9d} {mean:>12.1f} {mean_att:>13.2f}"
+        )
 
-    fig, (ax_rtt, ax_loss) = plt.subplots(2, 1, sharex=True, figsize=(8, 6))
+    fig, (ax_rtt, ax_loss, ax_retry) = plt.subplots(3, 1, sharex=True, figsize=(8, 9))
 
-    for d in distances:
-        samples = rtt_by_distance.get(d, [])
+    for x in xs:
+        samples = rtt_by_x.get(x, [])
         if samples:
             ax_rtt.scatter(
-                [d] * len(samples), samples, s=10, alpha=0.4, color="tab:blue"
+                [x] * len(samples), samples, s=10, alpha=0.4, color="tab:blue"
             )
-    plotted = [(d, m) for d, m in zip(distances, means) if m is not None]
+    plotted = [(x, m) for x, m in zip(xs, means) if m is not None]
     if plotted:
         ax_rtt.plot(
             *zip(*plotted), color="tab:blue", marker="o", label="mean RTT (delivered)"
@@ -361,19 +411,28 @@ def _cmd_plot(args) -> None:
         label=f"auction announce window ({args.announce_window_sec:g}s)",
     )
     ax_rtt.set_ylabel("GRANT round-trip time (ms)")
-    ax_rtt.set_title("LoRa GRANT/ACK round-trip latency vs. distance")
+    ax_rtt.set_title(f"LoRa GRANT/ACK link quality vs. {x_col}")
     ax_rtt.legend()
     ax_rtt.grid(True, alpha=0.3)
 
-    fail_pct = [
-        100.0 * outcomes_by_distance[d][0] / outcomes_by_distance[d][1]
-        for d in distances
-    ]
-    span = (max(distances) - min(distances)) if len(distances) > 1 else 1.0
-    ax_loss.bar(distances, fail_pct, width=max(1.0, span / 40), color="tab:orange")
+    fail_pct = [100.0 * outcomes_by_x[x][0] / outcomes_by_x[x][1] for x in xs]
+    span = (max(xs) - min(xs)) if len(xs) > 1 else 1.0
+    ax_loss.bar(xs, fail_pct, width=max(1.0, span / 40), color="tab:orange")
     ax_loss.set_ylabel("failed (%)\n(retry budget exhausted)")
-    ax_loss.set_xlabel("distance (m)")
     ax_loss.grid(True, alpha=0.3)
+
+    retry_plotted = [(x, m) for x, m in zip(xs, mean_attempts) if m is not None]
+    if retry_plotted:
+        ax_retry.plot(
+            *zip(*retry_plotted),
+            color="tab:green",
+            marker="o",
+            label="mean retransmits per GRANT",
+        )
+        ax_retry.legend()
+    ax_retry.set_ylabel("mean retransmits\nper GRANT")
+    ax_retry.set_xlabel(x_col)
+    ax_retry.grid(True, alpha=0.3)
 
     fig.tight_layout()
     out = args.out or os.path.splitext(args.csv)[0] + ".png"
@@ -458,6 +517,18 @@ def main() -> None:
         type=float,
         default=DEFAULT_ANNOUNCE_WINDOW_SEC,
         help="reference line: the auction's announce window",
+    )
+    plot_p.add_argument(
+        "--x",
+        choices=["distance_m", "checkpoint"],
+        default="distance_m",
+        help=(
+            "Bucket samples by paced-off distance (default) or by the plain "
+            "checkpoint counter (bumped by every Enter, numeric or blank) -- "
+            "use checkpoint when you marked positions in the field without "
+            "knowing the actual distance, and map checkpoint -> distance "
+            "afterwards."
+        ),
     )
 
     args = parser.parse_args()
