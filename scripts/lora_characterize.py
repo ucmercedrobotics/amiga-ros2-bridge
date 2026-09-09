@@ -9,16 +9,19 @@ anything else is already running; there is nothing else to launch first,
 which is also why device selection lives here now: pass the radio's serial
 port and this robot's fleet ID directly.
 
+On Mac:
+    apt install socat
+    socat pty,raw,echo=0,link=/tmp/lora,mode=666 tcp:host.docker.internal:9001 &
+
+
 Two machines, two radios, one script, role picked at the command line::
 
     # fixed end -- e.g. staying at the aisle head
     python3 scripts/lora_characterize.py responder \\
-        --serial-port /dev/ttyUSB0 --node-id 2
+        --serial-port /dev/ttyACM0 --node-id 2
 
     # end that walks away
-    python3 scripts/lora_characterize.py initiator \\
-        --serial-port /dev/ttyUSB0 --node-id 1 --peer-id 2 \\
-        --csv /tmp/lora_walk.csv
+    python3 scripts/lora_characterize.py initiator --serial-port /tmp/lora --node-id 1 --peer-id 2 --csv /tmp/lora_walk.csv
 
 Why GRANT/ACK and not HEARTBEAT: HEARTBEAT is broadcast and never
 acknowledged (see amiga_ros2_comms/codec/messages.py and
@@ -90,6 +93,7 @@ def _bridge_params(args) -> dict:
         "serial_port": args.serial_port,
         "baud": args.baud,
         "max_payload_bytes": args.max_payload_bytes,
+        "rx_link_stats": args.rx_link_stats,
         # We print our own combined status line (see _status_line); the
         # node's built-in one logs at DEBUG, which is invisible by default.
         "stats_period_sec": 0.0,
@@ -134,7 +138,11 @@ def _status_line(bridge, reliability) -> str:
     return (
         f"port_open={b.get('port_open')} rx_frames={r.get('rx_frames')} "
         f"tx_delivered={r.get('tx_delivered')} tx_failed={r.get('tx_failed')} "
-        f"tx_retransmits={r.get('tx_retransmits')} rx_acks={r.get('rx_acks')}"
+        f"tx_retransmits={r.get('tx_retransmits')} rx_acks={r.get('rx_acks')} "
+        f"tx_acks={r.get('tx_acks')} bridge_tx_frames={b.get('tx_frames')} "
+        f"bridge_tx_write_errors={b.get('tx_write_errors')} "
+        f"rx_malformed={r.get('rx_malformed')} rx_unknown_type={r.get('rx_unknown_type')} "
+        f"rx_reserved_type={r.get('rx_reserved_type')} rx_self={r.get('rx_self')}"
     )
 
 
@@ -387,6 +395,18 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--max-payload-bytes", type=int, default=200)
+    p.add_argument(
+        "--rx-link-stats",
+        choices=["none", "header"],
+        default="header",
+        help=(
+            "Whether the attached firmware prepends a 3-byte rssi/snr header "
+            "to every inbound frame -- see "
+            "amiga_ros2_comms/docs/lora_frame_contract.md ('mandatory'). Real "
+            "firmware sends one; a bare pty loopback with no firmware needs "
+            "'none'."
+        ),
+    )
     p.add_argument(
         "--spreading-factor",
         type=int,
