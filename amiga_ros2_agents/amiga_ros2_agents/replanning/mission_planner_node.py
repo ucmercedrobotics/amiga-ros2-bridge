@@ -303,6 +303,9 @@ class MissionPlannerNode(Node):
         if status == "SUCCESS":
             self._on_leaf_success(event)
             return
+        if status == "DETECTION":
+            self._on_detection(event)
+            return
         if status != "FAILURE":
             return
 
@@ -321,6 +324,27 @@ class MissionPlannerNode(Node):
         Thread(
             target=self._repair_if_routed, args=(event, log_context), daemon=True
         ).start()
+
+    def _on_detection(self, event: Dict) -> None:
+        """An opportunistic sighting, not a failure -- no triage verdict to
+        wait for, since there is nothing to repair or hand off. Goes straight
+        to the same planning session a failure would, with the event's own
+        "status": "DETECTION" and "reason" text (see the prompt's "Failure
+        event" section, which just dumps the event verbatim) telling the
+        model this is a sighting to weigh, not a fault to fix.
+        """
+        if self._mission_aborted:
+            return
+        detection_sec = event.get("timestamp_ms", 0) / 1000.0
+        with self._lock:
+            log_context = [
+                e
+                for e in self.log_buffer
+                if detection_sec - FAILURE_CONTEXT_SEC
+                <= e["stamp"]
+                <= detection_sec + FAILURE_CONTEXT_SEC
+            ]
+        Thread(target=self._run_planner, args=(event, log_context), daemon=True).start()
 
     def _on_fault_route(self, msg: String):
         """Triage's verdict on a fault. Wakes whoever is waiting for it."""
