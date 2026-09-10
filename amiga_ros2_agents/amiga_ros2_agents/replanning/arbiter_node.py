@@ -472,7 +472,7 @@ class ArbiterNode(Node):
         # already correct, so it is the whole answer: no edit, no appendix,
         # nothing dropped.
         if any(t.task_id == task_id for t in mission_tasks.tasks_in(active)):
-            return active, "", []
+            return active, []
 
         task = mission_tasks.MissionTask(
             task_id=task_id,
