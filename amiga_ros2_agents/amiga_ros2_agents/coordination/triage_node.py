@@ -7,7 +7,7 @@ The behaviour tree is the catalyst. A node fails, `/bt/status_change` fires, and
 something has to decide what happens to that work. This node decides, and it
 decides *first* -- before the plan is edited, not after the editing has run out.
 
-Three jobs.
+Three jobs, and one body of evidence all three read from.
 
 **Routing is a judgement, and it comes first.** "Can this robot plan its way
 out of this?" used to be answered by a counter: the mission planner replanned
@@ -37,12 +37,28 @@ anything outside of. The model chooses *among decisions the state machine
 already knows how to execute*, so every path below it stays deterministic and
 testable with this node swapped for a stub.
 
-    /bt/status_change ─┐            ┌──▶ /mission/fault_route (topic)
-    /rosout ───────────┤            │
-    /world_state ──────┼──▶ [context buffers]
-    /mission/xml ──────┤            │
-    /mission/abort ────┤            ├──▶ /coordination/interpret_anomaly (srv)
-    /mission/planner_status ────────┴──▶ /coordination/infeasible (topic)
+**The evidence is latched when the fault arrives, not when a prompt is built.**
+`_capture` takes the log slice, the world-state frame current at that instant
+and one call to the camera, and both decisions read that snapshot. The logs were
+always fault-centred; the other two were not, and the interpretation call
+arrives minutes later -- once local recovery has run out -- so a world frame or
+a picture from *then* described a different moment than the fault they were
+offered as evidence of. Latching also means one camera call per fault rather
+than one per decision.
+
+The camera only ever describes. Whether anything is in the way, whether a path
+is passable, what the robot should do: all of that is this node's model to
+decide, from the description plus everything else it holds. Off unless
+`use_vlm` is set, and absent, slow or broken it costs a couple of seconds and
+the verdict comes out as it always did.
+
+    /bt/status_change ─┐              ┌──▶ /mission/fault_route (topic)
+    /rosout ───────────┤              │
+    /world_state ──────┼──▶ [evidence]├──▶ /coordination/interpret_anomaly (srv)
+    /mission/xml ──────┤       ▲      │
+    /mission/abort ────┤       │      └──▶ /coordination/infeasible (topic)
+    /mission/planner_status ───┤
+                               └── /vlm/ask (srv) — what the camera sees
 
 Prompts live in prompts/triage/.
 """
@@ -52,7 +68,7 @@ import re
 import time
 from collections import deque
 from threading import Lock, Thread
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from amiga_interfaces.srv import InterpretAnomaly
 from amiga_ros2_comms.codec import (
@@ -77,6 +93,7 @@ from ..mission import mission_tasks
 from ..mission.mission_tasks import MissionTask
 from ..runtime import llm, prompts, spin
 from ..runtime.status import StatusPublisher
+from . import vlm_client
 
 # ---------------------------------------------------------------------------
 # Context-window limits
@@ -100,6 +117,10 @@ VALID_DISPOSITIONS = ("drop", "hold", "request_human")
 # The routing verdict. Two values because there are exactly two things that can
 # happen to a fault: this robot's planner has another go, or the fleet is told.
 VALID_ROUTES = ("repair", "escalate")
+
+#: What the routing prompt calls the camera when nothing says otherwise. The
+#: front Oak-D, which is what every demo but the blinded-detector one shows.
+DEFAULT_CAMERA_DESCRIPTION = "the front camera"
 
 #: Where the verdict goes. The planner blocks on this before it opens a
 #: planning session, so the name is part of the contract between the two nodes.
@@ -145,10 +166,33 @@ class TriageNode(Node):
         super().__init__("triage")
         self._lock = Lock()
 
-        self.log_buffer: List[Dict] = []
+        #: Whether to ask the camera what it sees before deciding. Off by
+        #: default: it needs a VLM endpoint and the amiga_vlm stack built, and
+        #: neither is required for anything else this node does.
+        self.declare_parameter("use_vlm", False)
+        self.use_vlm = bool(
+            self.get_parameter("use_vlm").get_parameter_value().bool_value
+        )
+        self.declare_parameter("vlm_service", vlm_client.DEFAULT_SERVICE)
+        self.declare_parameter("vlm_timeout_sec", vlm_client.DEFAULT_TIMEOUT_SEC)
+        self.declare_parameter("describe_frame", False)
+        self.describe_frame = bool(
+            self.get_parameter("describe_frame").get_parameter_value().bool_value
+        )
+        self.declare_parameter("camera_description", DEFAULT_CAMERA_DESCRIPTION)
+        self.camera_description = str(
+            self.get_parameter("camera_description").get_parameter_value().string_value
+            or DEFAULT_CAMERA_DESCRIPTION
+        )
+
+        self.log_buffer: deque = deque()
         self.world_state_frames: deque = deque(maxlen=WORLD_STATE_FRAMES)
         self.attempts: deque = deque(maxlen=ATTEMPT_HISTORY)
         self.last_fault: Optional[Dict] = None
+        #: Evidence latched at the last fault -- logs, world frame, camera. The
+        #: interpretation path reads this rather than re-pulling, because by
+        #: then the fault is minutes old.
+        self.last_evidence: Optional[Dict] = None
         self.mission_xml: Optional[str] = None
         #: Routing verdicts, keyed by failing node name. One model call per
         #: node per mission: a permanently dead leaf re-ticks several times
@@ -163,10 +207,34 @@ class TriageNode(Node):
             "escalations": 0,
             "interpretations": 0,
             "refused": 0,
+            #: Frames described, not calls attempted. 0 while `vlm` reads
+            #: true is the difference between "switched off" and "switched on
+            #: and not answering"; the verdict looks the same either way.
+            "vlm_looks": 0,
             "last_route": None,
             "last_action": None,
             "last_error": None,
         }
+
+        # A model call blocks for seconds. A reentrant group plus the
+        # multithreaded executor in main() keeps the service call from stalling
+        # the subscriptions that feed it context, and vice versa.
+        group = ReentrantCallbackGroup()
+
+        #: The camera, if this robot has one. Same reentrant group as the two
+        #: blocking callbacks, so the executor can deliver the response while
+        #: one of them waits.
+        self.vlm = (
+            vlm_client.VlmClient(
+                self,
+                service_name=self.get_parameter("vlm_service").value,
+                timeout_sec=float(self.get_parameter("vlm_timeout_sec").value),
+                callback_group=group,
+            )
+            if self.use_vlm
+            else None
+        )
+        self._last_status["vlm"] = self.vlm is not None
 
         self.route_system_prompt = prompts.render(
             "triage/route_system.j2",
@@ -188,11 +256,6 @@ class TriageNode(Node):
             # what the model is asked for, not just what it is refused.
             note_max_bytes=NOTE_MAX_BYTES,
         )
-
-        # llm.complete() blocks for seconds. A reentrant group plus the
-        # multithreaded executor in main() keeps the service call from stalling
-        # the subscriptions that feed it context, and vice versa.
-        group = ReentrantCallbackGroup()
 
         self.create_subscription(
             String, "/bt/status_change", self._on_fault, LATCHED, callback_group=group
@@ -226,7 +289,8 @@ class TriageNode(Node):
         self.status.publish(self.get_status())
 
         self.get_logger().info(
-            f"TriageNode started — model={llm.MODEL}, serving "
+            f"TriageNode started — model={llm.MODEL}, "
+            f"vlm={self.vlm.service_name if self.vlm else 'off'}, serving "
             f"/coordination/interpret_anomaly"
         )
 
@@ -243,20 +307,62 @@ class TriageNode(Node):
     # ------------------------------------------------------------------
 
     def _on_log(self, msg: Log):
-        stamp = self._stamp_to_sec(msg.stamp)
+        """One /rosout line into the rolling window.
+
+        A deque pruned from the left, not a list rebuilt on every line. This
+        runs at whatever rate the whole stack logs -- Nav2 alone can produce
+        tens of lines a second under load -- and it holds the lock that a
+        diagnosis needs to read its evidence. Rebuilding the buffer per line
+        made that lock's hold time grow with the buffer.
+        """
+        entry = {
+            "stamp": self._stamp_to_sec(msg.stamp),
+            "level": LEVEL_MAP.get(msg.level, str(msg.level)),
+            "name": msg.name,
+            "msg": ANSI_ESCAPE.sub("", msg.msg),
+        }
+        now = self._stamp_to_sec(self.get_clock().now().to_msg())
         with self._lock:
-            self.log_buffer.append(
-                {
-                    "stamp": stamp,
-                    "level": LEVEL_MAP.get(msg.level, str(msg.level)),
-                    "name": msg.name,
-                    "msg": ANSI_ESCAPE.sub("", msg.msg),
-                }
-            )
-            now = self._stamp_to_sec(self.get_clock().now().to_msg())
-            self.log_buffer = [
-                e for e in self.log_buffer if now - e["stamp"] < LOG_WINDOW_SEC
-            ]
+            self.log_buffer.append(entry)
+            while (
+                self.log_buffer and now - self.log_buffer[0]["stamp"] >= LOG_WINDOW_SEC
+            ):
+                self.log_buffer.popleft()
+
+    # ------------------------------------------------------------------
+    # The camera
+    # ------------------------------------------------------------------
+
+    def _look(self) -> str:
+        """What the camera sees, for the prompt. Never raises.
+
+        Fetched on every fault rather than when the model asks for it: the
+        decision is made from all the evidence at once, and a model that has
+        to decide whether it wants a piece of evidence is making a judgement
+        before it has the thing it would judge with.
+
+        Returns "" when there is no camera, which the prompts render as no
+        section at all.
+        """
+        if self.vlm is None:
+            return ""
+
+        try:
+            answer = self.vlm.ask(vlm_client.describe_question(self.describe_frame))
+        except Exception as exc:  # noqa: BLE001 - a service, a socket, a model
+            self.get_logger().warn(f"the camera failed ({exc})")
+            return "(the camera did not answer — decide from the rest)"
+        if not answer:
+            self.get_logger().warn("the camera did not answer")
+            return "(the camera did not answer — decide from the rest)"
+
+        with self._lock:
+            self._last_status["vlm_looks"] += 1
+        self.get_logger().info(f"camera: {answer}")
+        # Capped here as well as in the client, the same way a note is refused
+        # at both ends: the client bounds what the service may return, this
+        # bounds what the prompt spends.
+        return answer[: vlm_client.MAX_ANSWER_CHARS]
 
     def _on_world_state(self, msg: String):
         with self._lock:
@@ -337,8 +443,9 @@ class TriageNode(Node):
         is exactly the behaviour this node replaced.
         """
         name = str(event.get("node") or "")
+        evidence = self._capture(event)
         try:
-            decision = self._decide_route(event)
+            decision = self._decide_route(evidence)
         except Exception as exc:  # noqa: BLE001 - a model, a parser, a timeout
             self.get_logger().warn(
                 f"routing {name!r} failed ({exc}) — defaulting to local repair"
@@ -380,23 +487,52 @@ class TriageNode(Node):
     def _publish_route(self, payload: Dict) -> None:
         self.route_pub.publish(String(data=json.dumps(payload)))
 
-    def _decide_route(self, event: Dict) -> Dict:
+    def _capture(self, event: Dict) -> Dict:
+        """Everything the decisions will reason from, taken at the fault.
+
+        The logs were already fault-centred; the world frame and the camera
+        were not -- both were read whenever a prompt happened to be built. For
+        routing that was milliseconds later and harmless. For interpretation it
+        is minutes: the coordinator only asks once local recovery has run out,
+        and by then "the latest world frame" and "what the camera sees" belong
+        to a different moment than the fault they are offered as evidence of.
+
+        Captured once, here, and reused by both decisions. That also means one
+        camera call per fault rather than one per decision.
+        """
         with self._lock:
+            logs = self._log_slice(event)
             world = self.world_state_frames[-1] if self.world_state_frames else ""
+            mission_xml = self.mission_xml
+        # Off the lock: this blocks on a service for up to vlm_timeout_sec, and
+        # _on_log takes the same lock on every line that arrives meanwhile.
+        evidence = {
+            "fault": event,
+            "logs": logs,
+            "world": world,
+            "mission_xml": mission_xml,
+            "visual": self._look(),
+            "at": time.time(),
+        }
+        with self._lock:
+            self.last_evidence = evidence
+        return evidence
+
+    def _decide_route(self, evidence: Dict) -> Dict:
+        event = evidence["fault"]
+        mission_xml = evidence["mission_xml"]
+        with self._lock:
             attempts = (
                 json.dumps(list(self.attempts), indent=2) if self.attempts else ""
             )
-            mission_xml = self.mission_xml
-            # Under the lock like every other reader of the buffer: _on_log
-            # rebuilds it on each line, and _assemble takes it for the same
-            # slice on the interpretation path.
-            logs = self._log_slice(event)
         task = self._task_for(event, mission_xml)
         prompt = prompts.render(
             "triage/route_user.j2",
             fault=json.dumps(event, indent=2),
-            log_context=logs or "(no log lines in the window)",
-            world_state=world or "(no world-state frame)",
+            log_context=evidence["logs"] or "(no log lines in the window)",
+            visual_context=evidence["visual"],
+            camera_description=self.camera_description,
+            world_state=evidence["world"] or "(no world-state frame)",
             local_attempts=attempts or "(none)",
             mission_xml=mission_xml or "(no plan received yet)",
             # What the fleet would be offered if this escalates. Naming it here
@@ -580,11 +716,12 @@ class TriageNode(Node):
             self._last_status["interpretations"] += 1
 
         try:
-            fault, logs, world, attempts = self._assemble(request)
+            fault, logs, world, attempts, visual = self._assemble(request)
             user_prompt = prompts.render(
                 "triage/user.j2",
                 fault=json.dumps(fault, indent=2) if fault else "(none reported)",
                 log_context=logs or "(no log lines in the window)",
+                visual_context=visual,
                 world_state=world or "(no world-state frame)",
                 local_attempts=attempts or "(none)",
                 task_id=int(request.task_id),
@@ -674,27 +811,45 @@ class TriageNode(Node):
             return "(not stated)"
 
     def _assemble(self, request):
-        """Prompt context: what the caller sent, else what we have been watching.
+        """Prompt context: what the caller sent, else the latched evidence.
 
         The coordinator knows about tasks, peers and batteries and nothing about
         behaviour trees or /rosout. Rather than make it carry evidence it cannot
         interpret, this node gathers that half itself and the request fields are
         overrides -- which is also what lets the service be driven by hand.
+
+        The evidence comes from `_capture`, taken when the leaf failed, not from
+        the buffers as they stand now. This call arrives once local recovery has
+        run out -- minutes after the fault -- and a world frame or a camera
+        image from *now* describes a different moment than the fault it is
+        offered as evidence of. Only if there is no latched evidence (a service
+        driven by hand, a fault this node never saw) does it fall back to
+        reading the buffers.
         """
         with self._lock:
+            latched = dict(self.last_evidence) if self.last_evidence else None
             fault = (
                 self._parse(request.fault_json, "request.fault_json")
                 if request.fault_json
                 else (dict(self.last_fault) if self.last_fault else None)
             )
-            world = request.world_state or (
-                self.world_state_frames[-1] if self.world_state_frames else ""
-            )
             attempts = request.local_attempts or (
                 json.dumps(list(self.attempts), indent=2) if self.attempts else ""
             )
-            logs = request.log_context or self._log_slice(fault)
-        return fault, logs, world, attempts
+            if latched is None:
+                world = request.world_state or (
+                    self.world_state_frames[-1] if self.world_state_frames else ""
+                )
+                logs = request.log_context or self._log_slice(fault)
+                visual = ""
+            else:
+                world = request.world_state or latched["world"]
+                logs = request.log_context or latched["logs"]
+                visual = latched["visual"]
+        if latched is None:
+            # No fault was ever captured, so nothing has looked yet.
+            visual = self._look()
+        return fault, logs, world, attempts, visual
 
     def _log_slice(self, fault: Optional[Dict]) -> str:
         """The /rosout lines around the fault, newest last.

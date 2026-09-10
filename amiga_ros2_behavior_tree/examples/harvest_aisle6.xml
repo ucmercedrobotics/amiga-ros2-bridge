@@ -1,0 +1,21 @@
+<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">
+  <Mission>harvest trees 96 and 102 in aisle 6</Mission>
+  <BehaviorTree ID="HarvestAisle6">
+    <Sequence name="HarvestAisle6Mission">
+      <MoveToAisleHead name="EnterAisle6" action_name="move_to_aisle_head" id="6"/>
+      <RetryUntilSuccessful name="HarvestTree96WithRetry" num_attempts="3">
+        <Sequence name="HarvestTree96">
+          <MoveToTreeID name="ApproachTree96" action_name="follow_tree_id_waypoint" id="96" approach_tree="true"/>
+          <HarvestFruit name="HarvestFruitTree96" action_name="harvest_fruit"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <RetryUntilSuccessful name="HarvestTree102WithRetry" num_attempts="3">
+        <Sequence name="HarvestTree102">
+          <MoveToTreeID name="ApproachTree102" action_name="follow_tree_id_waypoint" id="102" approach_tree="true"/>
+          <HarvestFruit name="HarvestFruitTree102" action_name="harvest_fruit"/>
+        </Sequence>
+      </RetryUntilSuccessful>
+      <MoveToAisleHead name="ExitAisle6" action_name="move_to_aisle_head" id="6"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

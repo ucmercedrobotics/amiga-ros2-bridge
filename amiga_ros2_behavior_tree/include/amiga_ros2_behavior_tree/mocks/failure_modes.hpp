@@ -70,6 +70,20 @@ enum class FailureMode {
   // was nothing to sample. Nobody else would find leaves there either, which
   // makes this the arm's permanent failure.
   kNoLeaves,
+  // "Leaf segmentation returned no masks." -- the detector ran, saw, and found
+  // nothing it recognised. The third answer, and the only one the other two
+  // cannot express: the sensor is fine and the branch is not bare, but the
+  // conditions defeated the model -- low sun straight into the lens, the
+  // canopy backlit to silhouette. A different position or a later hour finds
+  // the leaves, so this belongs to the plan, not to the fleet and not to the
+  // scrap heap.
+  //
+  // The message deliberately reports the outcome and not a cause. The real
+  // node's own wording names the point cloud, and the reasoning model reads
+  // that as the depth sensor every time -- which is a diagnosis the code has
+  // not earned, since zero masks arise from an empty point cloud and from a
+  // blinded detector alike.
+  kNoMasks,
 };
 
 inline FailureMode failureModeFromString(const std::string &name) {
@@ -80,6 +94,7 @@ inline FailureMode failureModeFromString(const std::string &name) {
       {"nav_failed", FailureMode::kNavFailed},
       {"no_point_cloud", FailureMode::kNoPointCloud},
       {"no_leaves", FailureMode::kNoLeaves},
+      {"no_masks", FailureMode::kNoMasks},
   };
   auto it = kByName.find(name);
   // Defaults to the transient one. A test that misspells the mode gets a
@@ -101,6 +116,8 @@ inline const char *failureLog(FailureMode mode) {
       return "No point cloud available.";
     case FailureMode::kNoLeaves:
       return "No leaves detected in the point cloud.";
+    case FailureMode::kNoMasks:
+      return "Leaf segmentation returned no masks.";
     case FailureMode::kNavFailed:
     default:
       return "NavigateViaLidar action failed";
@@ -112,7 +129,8 @@ inline const char *failureLog(FailureMode mode) {
 // keeps severe lines when it has to truncate, so getting this wrong changes
 // what a model sees under load.
 inline bool logsAsWarning(FailureMode mode) {
-  return mode == FailureMode::kNoPointCloud || mode == FailureMode::kNoLeaves;
+  return mode == FailureMode::kNoPointCloud || mode == FailureMode::kNoLeaves ||
+         mode == FailureMode::kNoMasks;
 }
 
 // What the real node puts in Result.message for a failure. Empty where the
@@ -123,6 +141,8 @@ inline const char *failureResultMessage(FailureMode mode) {
       return "No point cloud received yet.";
     case FailureMode::kNoLeaves:
       return "No leaves detected in the point cloud.";
+    case FailureMode::kNoMasks:
+      return "Leaf segmentation returned no masks.";
     default:
       return "";
   }

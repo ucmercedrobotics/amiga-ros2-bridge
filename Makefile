@@ -12,6 +12,10 @@ LORA_ROBOTS?=robot1,robot2,robot3
 # meant to be overridden per robot.
 NODE_ID?=1
 PAYLOAD:=true
+
+AGENT_MODEL?=hosted_vllm/openai/gpt-oss-120b
+AGENT_API_BASE?=http://100.88.70.65:8000/v1
+VLM_URL?=http://100.88.70.65:8001/v1/chat/completions
 ARCH := $(shell uname -m)
 PLATFORM := linux/amd64
 ARCH_TAG:=amd64
@@ -70,7 +74,7 @@ repo-init:
 	pre-commit install
 
 shell:
-	CONTAINER_PS=$(shell docker ps -aq --filter ancestor=${IMAGE}:${IMAGE_TAG}) && \
+	CONTAINER_PS=$(shell docker ps -q --filter ancestor=${IMAGE}:${IMAGE_TAG} --filter status=running | head -n1) && \
 	docker exec -it $${CONTAINER_PS} bash
 
 manifest:
@@ -92,6 +96,7 @@ udev:
 
 bash: udev
 	docker run -it --rm \
+	--name=amiga-demo \
 	--net=host \
 	--privileged \
 	${CUDA_MOUNT} \
@@ -101,6 +106,9 @@ bash: udev
 	-v ~/.ssh:/root/.ssh:ro \
 	-v /dev/:/dev/ \
 	-e FASTDDS_DEFAULT_PROFILE_FILE=file:///${WORKSPACE}/dds/${MACHINE_NAME}.xml \
+	-e AGENT_MODEL=${AGENT_MODEL} \
+	-e AGENT_API_BASE=${AGENT_API_BASE} \
+	-e VLM_URL=${VLM_URL} \
 	${IMAGE}:${IMAGE_TAG} bash
 
 deps:
@@ -156,6 +164,24 @@ ci-lint:
 oakd:
 	ros2 launch amiga_ros2_oakd amiga_cameras.launch.py
 
+VLM_IMAGE_TOPIC ?= /oak0/rgb/image_raw
+# VLM_URL is defined once at the top of this file, with the other two model
+# endpoints. It used to be declared here as well, defaulting to localhost --
+# but a second `?=` on a variable the top already set is dead: the first
+# assignment wins and this one silently does nothing. Point it somewhere else
+# per invocation instead:
+#
+#     VLM_URL=http://localhost:8001/v1/chat/completions make vlm
+VLM_QUESTION ?= Describe what you see.
+vlm:
+	ros2 run amiga_vlm_bridge vlm_server --ros-args \
+		-p image_topic:=${VLM_IMAGE_TOPIC} \
+		-p vlm_url:=${VLM_URL} \
+		-p system_prompt:="You are a helpful assistant describing a farm robot's camera view."
+
+vlm-ask:
+	ros2 service call /vlm/ask amiga_vlm_interfaces/srv/VlmAsk "{question: '${VLM_QUESTION}'}"
+
 description:
 	ros2 launch amiga_ros2_description urdf.launch.py
 
@@ -168,7 +194,7 @@ mission-interface:
 amiga:
 	./scripts/bringup_amiga_tmux.sh
 
-ROBOT_COUNT ?= 1
+ROBOT_COUNT ?= 3
 # Spreading factor of the simulated radio, 6..12. Time on air doubles per step,
 # so this is the dial on how much coordination traffic the fleet can sustain.
 LORA_SF ?= 7
@@ -179,20 +205,21 @@ COORDINATION ?= true
 # amiga_ros2_agents/README.md. It also switches the coordinators over to asking
 # those agents instead of their local stubs.
 AGENTS ?= false
-# LTL=false drops the arbiter's formal gate. Plans are still checked for whether
-# they will RUN -- well-formed XML, the XSD, and the ontology's required
-# preconditions -- but not for whether they still satisfy the mission: no
-# formula, no SPIN, no viability budget, no edit-size or rate limit. For
-# bringing the coordination loop up end to end, where the question is whether a
-# task crosses robots and comes back as executable XML. Every accept is then
-# reported unverified, in the service response and in the arbiter's status.
-LTL ?= true
+# VLM=true gives each robot a vlm_server, so its triage agent can ask what the
+# camera sees. Needs AGENTS=true, since triage is the only caller, and a vision
+# model on VLM_URL -- a different model and endpoint from AGENT_API_BASE, which
+# stays pointed at the agents' reasoning model.
+VLM ?= false
+
+PERSON ?= 20
 sim:
 	ros2 launch amiga_ros2_gazebo sim_bringup.launch.py \
 		robot_count:=$(ROBOT_COUNT) \
 		launch_coordination:=$(COORDINATION) \
 		launch_agents:=$(AGENTS) \
-		ltl_verification:=$(LTL) \
+		launch_vlm:=$(VLM) \
+		vlm_url:=$(VLM_URL) \
+		spawn_person:=$(PERSON) \
 		lora_spreading_factor:=$(LORA_SF)
 
 # One command, one working demo: a simulated fleet, a real LLM behind both
@@ -212,6 +239,30 @@ sim:
 # Needs AGENT_MODEL / AGENT_API_BASE set first (amiga_ros2_agents/README.md).
 llm-demo:
 	./scripts/demo_llm_auction.sh
+
+vlm-demo:
+	./scripts/demo_vlm_human.sh
+
+truck-demo:
+	OBSTRUCTION=truck ./scripts/demo_vlm_human.sh
+
+harvest-demo:
+	MISSION=harvest OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
+blinded-demo:
+	BLINDED=1 OBSTRUCTION=none ./scripts/demo_vlm_human.sh
+
+missing-tree-demo:
+	./scripts/demo_missing_tree.sh
+
+stuck-robot-demo:
+	./scripts/demo_stuck_robot.sh
+
+opportunistic-tree-demo:
+	./scripts/demo_opportunistic_tree.sh
+
+vlm-demo-stop:
+	./scripts/demo_vlm_human.sh stop
 
 # Ends a run completely. `tmux kill-session` alone does not: ros_gz_sim's
 # `ign gazebo` server outlives the launch that started it, and the orphans

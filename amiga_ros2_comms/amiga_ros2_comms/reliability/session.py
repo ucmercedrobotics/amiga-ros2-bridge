@@ -630,6 +630,11 @@ class ReliabilitySession:
         """Resolve a caller's future. Must run with the lock released."""
         if not pending.future.set_running_or_notify_cancel():
             return
+        # Additive, not part of the Outcome contract: a caller that only reads
+        # .result() never notices this. It exists for callers -- currently
+        # only scripts/lora_characterize.py -- that want to know how many
+        # retransmits a specific send cost, not just whether it landed.
+        pending.future.attempts = pending.attempts
         try:
             pending.future.set_result(outcome)
         except Exception as exc:  # noqa: BLE001 - a caller's done-callback threw

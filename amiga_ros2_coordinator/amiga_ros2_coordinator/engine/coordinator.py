@@ -164,8 +164,11 @@ class CoordinatorParams:
     #: model call plus the backoff that follows it.
     note_window_multiplier: float = 9.0
     #: Longest a bidder sits on a bid it is having a note interpreted for, as a
-    #: multiple of ``bid_max_backoff_sec``.
-    note_backoff_multiplier: float = 10.0
+    #: multiple of ``bid_max_backoff_sec``. 18x the 2 s default is 36 s. Sized
+    #: from measurement, not taste: a 120B note interpretation was observed
+    #: taking 21-22 s against three robots sharing one endpoint, so the 10x
+    #: (20 s) this used to be put every honest answer past its own deadline.
+    note_backoff_multiplier: float = 18.0
 
     @property
     def note_announce_window_sec(self) -> float:
@@ -185,6 +188,12 @@ class CoordinatorParams:
     #: attempt is one full announce-and-grant cycle; a GRANT that fails to
     #: deliver consumes one.
     max_delegation_attempts: int = 2
+    #: Times HOLD or REQUEST_HUMAN may keep a task ours before it is forced to
+    #: DROP instead. Both dispositions exist to buy the local planner a fresh
+    #: attempt (see _rejoin_mission); this is the cap on how many fresh
+    #: attempts an unrepairable fault gets before "try again later" has to
+    #: stop meaning "try again forever."
+    max_local_holds: int = 2
     #: Shortest interval between re-announcements of the *same* task, so a
     #: mission node reporting the same failure in a loop cannot turn into an
     #: announce storm.
@@ -271,6 +280,11 @@ class OwnedTask:
     note: str = ""
     #: Full announce-and-grant cycles spent on this task.
     delegation_attempts: int = 0
+    #: Times HOLD or REQUEST_HUMAN has kept this task ours with no progress.
+    #: Each one buys the local planner a fresh retry budget (_rejoin_mission),
+    #: so left uncapped this is a live lock, not a wait -- the same fault,
+    #: found again on an identical plan, forever. See MAX_LOCAL_HOLDS.
+    holds: int = 0
     #: Set once a GRANT is in flight; cleared if it fails to deliver.
     granted_to: Optional[int] = None
     #: Bidders whose GRANT could not be delivered. Not offered it again.
@@ -921,6 +935,25 @@ class CoordinatorSession:
     ) -> None:
         """Delegation is over and the task is still ours. End it somewhere."""
         record.auction = None
+
+        if (
+            disposition is not LocalDisposition.DROP
+            and record.holds >= self.params.max_local_holds
+        ):
+            # HOLD and REQUEST_HUMAN both reset the local planner's retry
+            # budget (_rejoin_mission) and land back here when the identical
+            # fault recurs -- so left unchecked, "try again later" renews
+            # itself forever on a fault that was never going to resolve.
+            # max_local_holds is where the renewal stops and the task is
+            # finally let go, whichever disposition asked for one more try.
+            self._event(
+                "warn",
+                f"task {record.task.task_id} exceeded {self.params.max_local_holds} "
+                f"local holds with no progress -- dropping instead of "
+                f"{disposition.value}",
+            )
+            disposition = LocalDisposition.DROP
+
         if disposition is LocalDisposition.DROP:
             record.state = TaskState.RELINQUISHED
             record.settled_at = now
@@ -935,11 +968,13 @@ class CoordinatorSession:
             # reached an auction the helper does nothing, which is the case the
             # old "nothing has changed" comment described.)
             record.state = TaskState.OURS
+            record.holds += 1
             self._counters["tasks_held"] += 1
             self._event("info", f"task {record.task.task_id} held for a later attempt")
             self._rejoin_mission(record, "held after delegation failed")
         else:  # REQUEST_HUMAN
             record.state = TaskState.OURS
+            record.holds += 1
             self._counters["escalated_to_human"] += 1
             self._request_yield(f"task {record.task.task_id} needs an operator")
             # Back in the mission for the same reason: it is ours, nobody else
@@ -1422,14 +1457,21 @@ class CoordinatorSession:
         self._replan(MissionDelta(removed=[record.task], cause=cause))
 
     def _rejoin_mission(self, record: OwnedTask, cause: str) -> None:
-        """Put the task back into our own mission. Idempotent.
+        """Put the task back into our own mission, and say so either way.
 
         The counterpart of announcing. An auction that fails hands the task
         back, and the mission has to be told -- otherwise the robot has quietly
         lost the work it was holding.
+
+        Always replans now, even when the task never left (``record.in_mission``
+        was already true, the ordinary case for HOLD and REQUEST_HUMAN, which
+        never announce). The arbiter's own edit is idempotent when the task is
+        already there -- see arbiter_node.py's _apply_task_edit -- so this
+        costs nothing extra to send; what it buys is the planner's retry budget
+        resetting on the far side of _request_replan. Without it, a task told
+        to wait "for a later attempt" kept the exhausted budget that made the
+        attempt it just failed, and there was never a later one.
         """
-        if record.in_mission:
-            return
         record.in_mission = True
         self._replan(MissionDelta(added=[record.task], cause=cause))
 

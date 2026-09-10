@@ -47,36 +47,62 @@ class Orchard:
     in agreement with ``nav_ports`` about the other four.
     """
 
-    def __init__(self, aisle_by_tree: Optional[Dict[int, int]] = None):
-        self._aisle_by_tree = dict(aisle_by_tree or {})
+    def __init__(self, aisles_by_tree: Optional[Dict[int, tuple]] = None):
+        self._aisles_by_tree = {k: tuple(v) for k, v in (aisles_by_tree or {}).items()}
 
     def __bool__(self) -> bool:
         """False when nothing is known, so ``orchard or None`` reads naturally."""
-        return bool(self._aisle_by_tree)
+        return bool(self._aisles_by_tree)
 
     def __len__(self) -> int:
-        return len(self._aisle_by_tree)
+        return len(self._aisles_by_tree)
 
     def aisle_of(self, tree) -> Optional[int]:
         """The aisle tree ``tree`` is reached from, or None if unknown.
 
+        The nearer of the two lanes that flank the tree's row, which is the
+        suggestion a prerequisite chain wants: one route, and ``aisles_of`` for
+        the case where that one is unusable.
+
         Accepts the string form too, because that is what an XML attribute is
         and every caller here is holding one.
         """
+        sides = self.aisles_of(tree)
+        return sides[0] if sides else None
+
+    def aisles_of(self, tree) -> tuple:
+        """Every aisle tree ``tree`` can be worked from, lowest first.
+
+        A row sits *between* two lanes, so a tree has a row waypoint on each
+        side and either lane will reach it. Row r is worked from aisle r on one
+        side and aisle r+1 on the other -- checked against the waypoint
+        geometry for all 144 trees of the demo orchard, not assumed: each
+        waypoint lies on the entrance-to-entrance line of exactly one lane, and
+        those are the two.
+
+        The outermost rows have a lane on one side and open field on the other,
+        so they come back with one.
+
+        ``aisle_of`` still answers with a single aisle, because a prerequisite
+        chain only needs to *suggest* a route. This is for the case where the
+        suggestion is unusable -- a lane blocked by something that will not
+        move -- and the tree is still perfectly reachable from the other side.
+        """
         try:
-            return self._aisle_by_tree.get(int(tree))
+            return self._aisles_by_tree.get(int(tree), ())
         except (TypeError, ValueError):
-            return None
+            return ()
 
     def aisles(self) -> set:
-        """Every aisle id that has at least one tree in it.
+        """Every aisle a plan may name, i.e. every one that reaches some tree.
 
         For reciting the valid set to a planner, not for answering "is this
         aisle real" -- a real orchard's outermost column has no aisle at all,
         and that absence is exactly what makes this set worth stating rather
         than assumed.
+
         """
-        return set(self._aisle_by_tree.values())
+        return {a for sides in self._aisles_by_tree.values() for a in sides}
 
 
 def parse(payload) -> Orchard:
@@ -97,29 +123,62 @@ def parse(payload) -> Orchard:
     if field is None:
         return Orchard()
 
-    declared = _declared_aisles(data)
-    aisle_by_tree: Dict[int, int] = {}
+    return Orchard(_aisles_by_row(data, field, _declared_aisles(data)))
+
+
+def _aisles_by_row(data: dict, field: str, declared: set) -> Dict[int, tuple]:
+    """``tree_index -> (aisle, ...)``: both lanes that reach each tree.
+
+    ``MoveToAisleHead id=N`` reaches the lane the document indexes as N-1, so
+    the highest aisle a plan can name is one past the last lane the document
+    declares, and the lowest is 2. Row r's two sides are lanes r-1 and r, which
+    is aisles r and r+1 once that offset is applied; clipping to the range is
+    what leaves the field-edge rows with a single side.
+    """
+    if not declared:
+        return {}
+    highest = max(declared) + 1
+
+    out: Dict[int, tuple] = {}
     for tree in data.get("trees") or []:
         if not isinstance(tree, dict):
             continue
-        index, aisle = tree.get("tree_index"), tree.get(field)
-        if not isinstance(index, int) or not isinstance(aisle, int):
+        index, row = tree.get("tree_index"), tree.get(field)
+        if not isinstance(index, int) or not isinstance(row, int):
             continue
-        # An index the orchard does not list as an aisle is the outer column,
-        # which no MoveToAisleHead can name; see the module docstring.
-        if declared and aisle not in declared:
+        sides = tuple(a for a in (row, row + 1) if 2 <= a <= highest)
+        if sides:
+            out[index] = sides
+    return out
+
+
+def sides_for_trees(orchard: Orchard, tree_ids) -> Dict[int, tuple]:
+    """``tree_id -> every aisle it can be worked from``, for the trees asked.
+
+    The companion to ``facts_for_trees`` for a planner allowed to choose a
+    side. Falls back to the single default aisle where the document carried no
+    layout, so a prompt built on this is never emptier than one built on that.
+    """
+    out: Dict[int, tuple] = {}
+    for t in tree_ids:
+        try:
+            key = int(t)
+        except (TypeError, ValueError):
             continue
-        aisle_by_tree[index] = aisle
-    return Orchard(aisle_by_tree)
+        sides = orchard.aisles_of(key)
+        if not sides:
+            only = orchard.aisle_of(key)
+            sides = () if only is None else (only,)
+        out[key] = sides
+    return out
 
 
 def facts_for_trees(orchard: Orchard, tree_ids) -> Dict[int, Optional[int]]:
     """``tree_id -> aisle_of(tree_id)`` for exactly the trees asked about.
 
     Scoped rather than the whole map so a prompt pays only for the trees an
-    active mission actually references -- a replanner and, later, the LTL
-    arbiter both want this same slice, which is why it lives here rather than
-    inlined in either caller.
+    active mission actually references -- more than one caller wants this same
+    slice, which is why it lives here rather than inlined in either.
     """
     out: Dict[int, Optional[int]] = {}
     for t in tree_ids:

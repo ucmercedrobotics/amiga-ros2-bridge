@@ -372,7 +372,7 @@ class CoordinatorNode(Node):
         if not bool(self.get_parameter("verify_replans").value):
             self.get_logger().warn(
                 "verify_replans is false — mission changes will be accepted "
-                "without being checked against the mission's LTL specification"
+                "without being checked against the arbiter's gate"
             )
             return AcceptEverything()
 
@@ -408,10 +408,10 @@ class CoordinatorNode(Node):
             True,
             _describe(
                 "Send every mission change to the arbiter's "
-                "/mission/verify_replan to be re-verified against the mission's "
-                "LTL specification before it is committed. Turning this off "
-                "makes replan-and-verify a no-op that accepts everything, which "
-                "is a coordinator whose transfers nothing checks."
+                "/mission/verify_replan to be gated before it is committed. "
+                "Turning this off makes replan-and-verify a no-op that accepts "
+                "everything, which is a coordinator whose transfers nothing "
+                "checks."
             ),
         )
         self.declare_parameter(
@@ -614,11 +614,11 @@ class CoordinatorNode(Node):
         )
         self.declare_parameter(
             "note_timeout_sec",
-            15.0,
+            30.0,
             _describe(
                 "How long to wait for a revision. This has to stay under the "
                 "note-stretched bid backoff -- bid_max_backoff_sec x "
-                "note_backoff_multiplier, 20 s at the defaults -- because an "
+                "note_backoff_multiplier, 36 s at the defaults -- because an "
                 "answer that lands after the bid has gone out is counted "
                 "notes_too_late and changes nothing. Shorter than the triage "
                 "timeout for that reason, not because the model is faster."

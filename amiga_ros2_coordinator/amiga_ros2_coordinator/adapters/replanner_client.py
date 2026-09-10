@@ -21,9 +21,8 @@ Why this is asynchronous
 ``replan_and_verify`` is called from inside the coordinator's lock:
 ``_grant_delivered`` takes it, and ``_take_on`` runs under it. That lock is the
 one ``tick`` and ``on_message`` need, so blocking there stops heartbeats,
-auctions and bids for the duration. And the duration is not small -- ``spin
--search`` regenerates and compiles a C verifier on every run, about 1.4 s
-measured on this hardware, before any model call is counted.
+auctions and bids for the duration -- and this is a ROS service round trip to
+another process, which is never free to assume is fast.
 
 So the request is dispatched on a thread and this returns immediately. What that
 does *not* do is let an unverified plan reach the robot: the arbiter is the sole
@@ -47,8 +46,8 @@ from ..vocabulary.model import MissionDelta
 from ..ports.reasoning import ReplanResult
 
 #: Ceiling on one verification round trip. Off the critical path, so it can be
-#: generous: a formula that needs a cold model call is the slow case, and giving
-#: up early on it means handing back a task that was about to be cleared.
+#: generous: giving up early means handing back a task that was about to be
+#: cleared.
 DEFAULT_TIMEOUT_SEC = 90.0
 
 #: How long to wait for the arbiter to exist at all. Short: if the agent stack
@@ -201,12 +200,10 @@ class VerifyingReplanner:
         if response is None:
             return ReplanResult(False, None, "verification call failed")
 
-        detail = response.reason or ("verified" if response.verified else "no reason")
+        detail = response.reason or "no reason"
         if not response.accepted:
             return ReplanResult(False, None, f"rejected: {detail}")
-        return ReplanResult(
-            True, None, detail if response.verified else f"unverified: {detail}"
-        )
+        return ReplanResult(True, None, detail)
 
 
 def _subtree_of(task) -> str:

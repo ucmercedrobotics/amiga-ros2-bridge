@@ -11,6 +11,29 @@ evidence — read it for whether the same thing is failing the same way.
 {{ log_context }}
 ```
 
+{% if visual_context %}
+## What the camera can see
+
+What {{ camera_description }} showed when the step failed. It is the only evidence here
+that is not the robot's own account of itself, and it can settle what the logs
+cannot -- but only for a step the camera was actually looking at.
+
+Check that first. A camera has one fixed view, and the step that failed may
+have been checking a different direction entirely -- whatever the log lines
+say it was aimed at. When the camera and the step were pointed at the same
+place, the rule holds: the expected tree present on a step that failed anyway
+points at the hardware; an empty aisle, the wrong row, or nothing within
+reach points at the plan; a frame reported as blank, black or broken is
+itself a dead camera. When they were pointed at different places, the camera
+is describing somewhere else -- it says nothing about the step that failed,
+and is not evidence for or against the sensor that step depends on.
+
+It describes only what was visible. Where things were and how far is the
+robot's own measurement, in the log lines above.
+
+{{ visual_context }}
+
+{% endif %}
 ## World state
 
 {{ world_state }}

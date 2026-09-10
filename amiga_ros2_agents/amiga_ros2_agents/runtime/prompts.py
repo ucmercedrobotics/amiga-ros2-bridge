@@ -36,6 +36,6 @@ _env = Environment(
 def render(name: str, **variables) -> str:
     """Render a template by path relative to the prompt root.
 
-    >>> render("ltl_gen/system.j2", ap_vocabulary=["at_tree_1"])
+    >>> render("triage/system.j2")
     """
     return _env.get_template(name).render(**variables).strip()

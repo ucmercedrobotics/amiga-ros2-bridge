@@ -11,6 +11,7 @@
 
 #include "amiga_ros2_behavior_tree/actions/assert_true.hpp"
 #include "amiga_ros2_behavior_tree/actions/check_value.hpp"
+#include "amiga_ros2_behavior_tree/actions/wait.hpp"
 #include "amiga_ros2_behavior_tree/actions/detect_object.hpp"
 #include "amiga_ros2_behavior_tree/actions/approach_gps_waypoint.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_gps_location.hpp"
@@ -18,6 +19,7 @@
 #include "amiga_ros2_behavior_tree/actions/move_to_tree_id.hpp"
 #include "amiga_ros2_behavior_tree/actions/move_to_relative_location.hpp"
 #include "amiga_ros2_behavior_tree/actions/orient_robot_heading.hpp"
+#include "amiga_ros2_behavior_tree/actions/harvest_fruit.hpp"
 #include "amiga_ros2_behavior_tree/actions/sample_leaf.hpp"
 #include "amiga_ros2_behavior_tree/actions/follow_person.hpp"
 #include "amiga_ros2_behavior_tree/actions/arm_move_to.hpp"
@@ -68,11 +70,13 @@ int main(int argc, char **argv) {
                                                    ros_params);
   factory.registerNodeType<FollowPerson>("FollowPerson", ros_params);
   factory.registerNodeType<SampleLeaf>("SampleLeaf", ros_params);
+  factory.registerNodeType<HarvestFruit>("HarvestFruit", ros_params);
   factory.registerNodeType<MoveArmToPosition>("MoveArmToPosition", ros_params);
   factory.registerNodeType<DetectObject>("DetectObject");
   // conditional nodes
   factory.registerNodeType<AssertTrue>("AssertTrue");
   factory.registerNodeType<CheckValue>("CheckValue");
+  factory.registerNodeType<Wait>("Wait");
 
   std::string schema_path;
   try {

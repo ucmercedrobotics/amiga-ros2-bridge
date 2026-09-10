@@ -10,7 +10,7 @@ ARG MACHINE_NAME="agx"
 # any utilities you want
 RUN apt-get update && apt-get install -y git wget curl python3-full python3-pip vim net-tools netcat-traditional build-essential cmake \
     ros-${ROS_DISTRO}-foxglove-bridge ros-${ROS_DISTRO}-depthai-ros \
-    ros-${ROS_DISTRO}-behaviortree-cpp ros-${ROS_DISTRO}-generate-parameter-library \
+    ros-${ROS_DISTRO}-generate-parameter-library \
     ros-${ROS_DISTRO}-tf-transformations \
     ros-${ROS_DISTRO}-ros-gz ros-${ROS_DISTRO}-ign-ros2-control \
     ros-${ROS_DISTRO}-controller-manager ros-${ROS_DISTRO}-diff-drive-controller \
@@ -19,14 +19,7 @@ RUN apt-get update && apt-get install -y git wget curl python3-full python3-pip 
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-diagnostic-updater \
     tmux \
-    rhash librhash-dev \
-    byacc flex
-
-# The SPIN model checker, used by amiga_ros2_agents/verification/verify.py to re-verify a
-# replanned mission. Same script CI runs, so both environments get the same
-# checker; see the header there for why it is a source build.
-COPY scripts/ci/install_spin.sh /tmp/install_spin.sh
-RUN SKIP_APT=1 /tmp/install_spin.sh && rm /tmp/install_spin.sh
+    rhash librhash-dev
 
 # TODO: remove once you figure out why farm-ng isn't in /usr/local
 COPY requirements.txt /requirements.txt

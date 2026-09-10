@@ -23,6 +23,7 @@
   <depend>libxml2</depend>
   <!-- find_package()d by CMakeLists.txt but previously undeclared, so they
        were only ever satisfied by chance in the dev image. -->
+  <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>trajectory_msgs</depend>

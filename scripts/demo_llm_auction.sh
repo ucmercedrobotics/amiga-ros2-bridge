@@ -40,14 +40,20 @@
 # Two real LLM replans, on two different robots' XML, off one real fault.
 #
 # NOTE the arbiter must be able to ABORT for the loop above to terminate,
-# which is `objective_gating` (on by default) and NOT `ltl_verification`.
-# This runs with ltl_verification:=false -- no formula, no SPIN -- and the
-# objective/viability checks still on, which is what ends local recovery.
+# which is `objective_gating` (on by default) -- the check that ends local
+# recovery.
 #
 # Usage:
 #   export AGENT_MODEL=hosted_vllm/openai/gpt-oss-120b
 #   export AGENT_API_BASE=http://100.88.70.65:8000/v1
 #   make llm-demo
+#
+# The robots and Gazebo are simulated either way; the one thing this prompts
+# for interactively is what carries the auction traffic between them: the
+# sim's own virtual LoRa medium, or real LoRa radios over USB serial. Preset
+# to skip the prompt (required for non-interactive runs):
+#   LORA_MODE=sim
+#   LORA_MODE=hardware LORA_SERIAL_PORTS=/dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2
 #
 # Everything runs in one tmux session ("llm-demo"): a `sim` window, one `bt<i>`
 # window per robot, a `feed` window that seeds the missions once the ports are
@@ -72,12 +78,17 @@ LOG_DIR="/tmp/llm-demo-logs"
 
 # Real, checked-in two-frame (XML + orchard JSON) mission payloads, cycled
 # round-robin across the healthy robots so not everyone runs the identical
-# plan.
+# plan. One aisle per mission, same set demo_vlm_human.sh uses, and for the
+# same reason: sample_20_64/22_66/24_68 all opened with the SAME
+# <MoveToAisleHead id="2">, so every robot's first move sent all three into
+# aisle 2 together before they ever split off to their own trees -- a shared
+# bottleneck this demo never meant to test. These three missions don't share
+# an aisle or a tree with each other.
 EXAMPLES_DIR="amiga_ros2_behavior_tree/examples"
 MISSION_BINS=(
-    "${EXAMPLES_DIR}/sample_20_64.bin"
-    "${EXAMPLES_DIR}/sample_22_66.bin"
-    "${EXAMPLES_DIR}/sample_24_68.bin"
+    "${EXAMPLES_DIR}/sample_aisle6.bin"
+    "${EXAMPLES_DIR}/sample_aisle4.bin"
+    "${EXAMPLES_DIR}/sample_aisle2.bin"
 )
 
 # Which robot (1-based) gets the broken arm, and how it breaks. Everything
@@ -220,6 +231,48 @@ if pgrep -f "$GZ_PATTERN" >/dev/null 2>&1; then
     teardown
 fi
 
+# The robots and Gazebo are simulated either way -- this only chooses what
+# carries the auction traffic between them: sim_bringup.launch.py's own
+# virtual LoRa medium (a pty per robot, no hardware needed), or real LoRa
+# radios plugged in over USB serial. Preset LORA_MODE to skip the prompt --
+# required for a non-interactive run, since there is no terminal to prompt on.
+# Asked here rather than up front: an attach to an already-running session
+# (above) never launches anything, so it has no LoRa mode to ask about.
+LORA_MODE="${LORA_MODE:-}"
+if [ -z "$LORA_MODE" ]; then
+    if [ -t 0 ]; then
+        echo "Radio medium for this run:"
+        echo "  1) Simulated LoRa (virtual medium, no hardware needed) [default]"
+        echo "  2) Real LoRa hardware over serial"
+        read -r -p "Choose [1/2]: " lora_choice
+        case "$lora_choice" in
+            2) LORA_MODE="hardware" ;;
+            *) LORA_MODE="sim" ;;
+        esac
+    else
+        LORA_MODE="sim"
+    fi
+fi
+
+LORA_LAUNCH_ARGS="lora_hardware:=false"
+if [ "$LORA_MODE" = "hardware" ]; then
+    LORA_SERIAL_PORTS="${LORA_SERIAL_PORTS:-}"
+    if [ -z "$LORA_SERIAL_PORTS" ]; then
+        if [ -t 0 ]; then
+            read -r -p "Serial ports, one per robot, comma-separated (e.g. /dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2): " LORA_SERIAL_PORTS
+        fi
+        if [ -z "$LORA_SERIAL_PORTS" ]; then
+            echo "LORA_MODE=hardware needs LORA_SERIAL_PORTS: one serial device" >&2
+            echo "per robot, comma-separated (e.g. /dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2)." >&2
+            exit 1
+        fi
+    fi
+    LORA_LAUNCH_ARGS="lora_hardware:=true lora_serial_ports:=${LORA_SERIAL_PORTS}"
+    echo "LoRa medium: REAL hardware over serial ($LORA_SERIAL_PORTS)"
+else
+    echo "LoRa medium: simulated (virtual pty medium, no hardware)"
+fi
+
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_DIR"/*.log
 
@@ -247,7 +300,7 @@ tmux set -g mouse on
 tmux set -g history-limit 500000
 tmux new-window -t "$SESSION" -n sim
 tmux send-keys -t "$SESSION:sim" \
-    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true ltl_verification:=false objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
+    "ros2 launch amiga_ros2_gazebo sim_bringup.launch.py robot_count:=${ROBOT_COUNT} robot_name_prefix:=${ROBOT_PREFIX} mission_port_base:=${BASE_PORT} headless:=${HEADLESS} launch_bt:=false launch_coordination:=true launch_agents:=true objective_gating:=true broken_sampler_robot:=${FAIL_ROBOT} broken_sampler_mode:=${SAMPLER_FAILURE_MODE} ${LORA_LAUNCH_ARGS} 2>&1 | tee ${LOG_DIR}/sim.log" C-m
 
 for i in $(seq 1 "$ROBOT_COUNT"); do
     ns="$(namespace_for "$i")"
@@ -258,6 +311,15 @@ for i in $(seq 1 "$ROBOT_COUNT"); do
     tmux send-keys -t "$SESSION:bt${i}" \
         "ros2 launch amiga_ros2_behavior_tree bt.launch.py ${ns_arg} port:=${port} 2>&1 | tee ${LOG_DIR}/bt${i}.log" C-m
 done
+
+# The decision story off /rosout, everything else dropped -- same pane the
+# other demos give this a window for. Started here rather than left out: this
+# demo's whole point is a fault crossing between robots, and that crossing is
+# exactly what the story pane narrates (routed, escalated, announced,
+# transferred, absorbed).
+tmux new-window -t "$SESSION" -n agents
+tmux send-keys -t "$SESSION:agents" \
+    "python3 ${PROJECT_PATH}/scripts/watch_agents.py 2>&1 | tee ${LOG_DIR}/agents.log" C-m
 
 # Three tiled windows, one pane per robot each:
 #   watch        every LLM repair attempt (the loser's local loop, then the
@@ -384,7 +446,7 @@ for i in \$(seq 1 ${ROBOT_COUNT}); do
 done
 echo
 echo 'all missions fed.'
-echo 'watch: bt<i> for BT execution, watch/infeasible/mission-xml for the LLM+auction pipeline'
+echo 'watch: bt<i> for BT execution, agents for the decision story, watch/infeasible/mission-xml for the LLM+auction pipeline'
 echo 'logs: $LOG_DIR/*_mission_xml.log'
 "
 tmux send-keys -t "$SESSION:feed" "$feed_cmd" C-m

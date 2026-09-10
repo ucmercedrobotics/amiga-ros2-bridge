@@ -20,7 +20,6 @@ from lxml import etree
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from amiga_ros2_agents.mission import mission_tasks, ontology, orchard  # noqa: E402
-from amiga_ros2_agents.verification import promela  # noqa: E402
 from amiga_ros2_comms.codec import Capability, Target, cap_mask  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -74,21 +73,23 @@ def test_rebuilt_task_validates_against_the_schema(schema):
     assert schema.validate(etree.fromstring(merged.encode())), schema.error_log
 
 
-def test_rebuilt_task_establishes_its_propositions():
-    """The point of rebuilding it: the mission's formula can see the work.
+def test_rebuilt_task_actually_samples_the_tree():
+    """The point of rebuilding it: the tree gets approached and sampled, not
+    just referenced.
 
     A subtree that navigated to the tree without ``approach_tree="true"`` would
-    satisfy the schema and quietly establish nothing, so the absorbing robot's
-    mission would fail verification with no visible cause.
+    satisfy the schema and quietly sample nowhere, so an absorbed task would
+    leave the tree unsampled with no visible cause -- the same rule the
+    arbiter's precondition check enforces, read here off the same ontology.
     """
     xml = mission_tasks.synthesize(announced(tree=35, caps=SAMPLING), SCHEMA).xml
-    wrapped = (
-        '<root BTCPP_format="4" schema_location="s.xsd"><Mission>m</Mission>'
-        f'<BehaviorTree ID="T">{xml}</BehaviorTree></root>'
-    )
-    model = promela.compile_mission(wrapped, SCHEMA)
-    assert "at_tree_35" in model.defined_aps
-    assert "sampled_tree_35" in model.defined_aps
+    doc = etree.fromstring(xml.encode())
+    assert ontology.violations(doc) == []
+
+    state = ontology.State()
+    for element in ontology.actions_in(doc):
+        _, state = ontology.advance(state, element)
+    assert ontology.Fact(ontology.SAMPLED_TREE, "35") in state.facts
 
 
 def test_a_rebuilt_task_reads_back_as_the_task_it_was(schema):
@@ -261,6 +262,64 @@ def test_an_unrebuildable_step_is_dropped_and_named_rather_than_refused():
     assert rebuilt.dropped == ["FollowPerson"]
     assert "FollowPerson" not in rebuilt.xml
     assert 'id="35"' in rebuilt.xml
+
+
+def test_a_won_harvest_still_harvests(schema):
+    """The work has to travel with the task, not just the drive to the tree.
+
+    Regression, and the expensive kind: HarvestFruit was added to the schema,
+    the codec, the ontology and the executor, but not to ``synthesize``. A won
+    harvest rebuilt as an aisle move and an approach with *nothing at the end*
+    -- valid XML, a clean graft, and a robot that drove to the tree and did
+    nothing. The tree was never harvested, so the announcer re-delegated it,
+    and the same empty task went round the fleet until it ran out of peers.
+
+    ``dropped`` is the tell: it said ``['HarvestFruit']`` on every absorb.
+    """
+    task = announced(caps=(Capability.MOVE_TO_TREE_ID, Capability.HARVEST_FRUIT))
+    rebuilt = mission_tasks.synthesize(task, SCHEMA)
+
+    assert rebuilt is not None
+    assert rebuilt.dropped == [], "the harvest is rebuildable, so nothing is dropped"
+
+    doc = etree.fromstring(rebuilt.xml.encode())
+    harvests = doc.findall(".//HarvestFruit")
+    assert len(harvests) == 1, "a won harvest must still contain the harvest"
+    assert harvests[0].get("action_name") == "harvest_fruit"
+    assert schema.validate(
+        _grafted(rebuilt.xml)
+    ), "and the plan it is grafted into still has to validate"
+
+    # It binds to the tree it was announced for, the same way a sample does --
+    # without that, the completed-objectives ledger never sees it finish.
+    assert ontology.objective_trees(doc, None) == {harvests[0].get("name"): "35"}
+
+
+def test_a_won_sample_is_unchanged_by_the_harvest_table(schema):
+    """The table replaced a hardcoded branch; SampleLeaf must be untouched.
+
+    Pinned because the leaf *names* are load-bearing: /bt/status_change reports
+    a name, and the ledger resolves it back to a tree id.
+    """
+    rebuilt = mission_tasks.synthesize(announced(caps=SAMPLING), SCHEMA)
+    assert rebuilt is not None
+    assert rebuilt.dropped == []
+    doc = etree.fromstring(rebuilt.xml.encode())
+    samples = doc.findall(".//SampleLeaf")
+    assert len(samples) == 1
+    assert samples[0].get("name") == "task_7_sample_35"
+    assert samples[0].get("action_name") == "segment_leaves"
+
+
+def _grafted(fragment: str):
+    """``fragment`` inside the smallest plan the schema will accept."""
+    root = etree.fromstring(
+        b'<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">'
+        b'<Mission>m</Mission><BehaviorTree ID="M"><Sequence/>'
+        b"</BehaviorTree></root>"
+    )
+    root.find(".//Sequence").append(etree.fromstring(fragment.encode()))
+    return root
 
 
 def _orchard():

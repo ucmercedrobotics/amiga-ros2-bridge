@@ -1,9 +1,10 @@
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
 )
@@ -41,12 +42,20 @@ ALL_CAPABILITIES = [
     "OrientRobotHeading",
     "FollowPerson",
     "SampleLeaf",
+    "HarvestFruit",
     "MoveArmToPosition",
+    "Wait",
 ]
 
 
 def coordination_nodes(
-    ns, node_id, device, spreading_factor, battery_percent=100, use_agents=False
+    ns,
+    node_id,
+    device,
+    spreading_factor,
+    battery_percent=100,
+    use_agents=False,
+    rx_link_stats="none",
 ):
     """This robot's radio bridge, its mission bridge and its coordinator.
 
@@ -70,7 +79,20 @@ def coordination_nodes(
             name="lora_bridge",
             namespace=ns,
             output="screen",
-            parameters=[{"use_sim_time": True, "serial_port": device}],
+            parameters=[
+                {
+                    "use_sim_time": True,
+                    "serial_port": device,
+                    # "header" only over real hardware: this radio firmware
+                    # prepends a 3-byte RSSI/SNR header the bridge must strip
+                    # before decoding, or every inbound frame lands shifted by
+                    # 3 bytes and fails to decode as any known message type --
+                    # which looks exactly like no peers ever heartbeating. The
+                    # simulated virtual medium never adds that header, so the
+                    # sim path stays "none".
+                    "rx_link_stats": rx_link_stats,
+                }
+            ],
         ),
         # Answers the coordinator's mission questions off /mission/xml, and
         # turns a won task into a candidate for the arbiter. Without it the
@@ -166,11 +188,16 @@ def launch_setup(context, *args, **kwargs):
     launch_coordination = (
         LaunchConfiguration("launch_coordination").perform(context).lower() == "true"
     )
-    ltl_verification = LaunchConfiguration("ltl_verification").perform(context).lower()
     objective_gating = LaunchConfiguration("objective_gating").perform(context).lower()
     launch_agents = (
         LaunchConfiguration("launch_agents").perform(context).lower() == "true"
     )
+    launch_vlm = LaunchConfiguration("launch_vlm").perform(context).lower()
+    vlm_url = LaunchConfiguration("vlm_url").perform(context)
+    vlm_image_topic = LaunchConfiguration("vlm_image_topic").perform(context)
+    vlm_static_image = LaunchConfiguration("vlm_static_image").perform(context)
+    camera_description = LaunchConfiguration("camera_description").perform(context)
+    describe_frame = LaunchConfiguration("describe_frame").perform(context)
     # 0 (default) means nobody: an ordinary sim run has no broken arm. Set it
     # to a robot index to give exactly that robot a camera fault, which is the
     # kind of failure a peer can take over -- unlike a missing tree, which no
@@ -178,11 +205,44 @@ def launch_setup(context, *args, **kwargs):
     broken_sampler_robot = int(
         LaunchConfiguration("broken_sampler_robot").perform(context)
     )
+    # 0 (default) means an empty orchard. A tree index puts a standing person
+    # on that tree's row waypoint -- the pose Nav2 aims at before handing over
+    # to the lidar approach, and the only spot in the aisle where one body is
+    # enough to abort a goal rather than be driven around.
+    spawn_person = int(LaunchConfiguration("spawn_person").perform(context))
+    spawn_truck = int(LaunchConfiguration("spawn_truck").perform(context))
+    remove_tree = int(LaunchConfiguration("remove_tree").perform(context))
+    planner_host = LaunchConfiguration("planner_host").perform(context)
     broken_sampler_mode = LaunchConfiguration("broken_sampler_mode").perform(context)
     symlink_dir = LaunchConfiguration("lora_symlink_dir").perform(context)
     spreading_factor = int(
         LaunchConfiguration("lora_spreading_factor").perform(context)
     )
+    # Same Gazebo sim either way -- this only swaps what carries lora/tx and
+    # lora/rx between robots. false (default): the virtual medium below models
+    # the shared channel and each bridge opens a pty it creates. true: no
+    # virtual medium is started at all, and each robot's bridge opens a real
+    # serial port to a real radio instead.
+    lora_hardware = (
+        LaunchConfiguration("lora_hardware").perform(context).lower() == "true"
+    )
+    lora_serial_ports = [
+        p.strip()
+        for p in LaunchConfiguration("lora_serial_ports").perform(context).split(",")
+        if p.strip()
+    ]
+    # 0 (default): this robot's coordinator/LoRa identity is its position in
+    # THIS launch's own loop (1..robot_count), exactly as before. Non-zero
+    # overrides it -- the one thing a single-robot launch (robot_count:=1)
+    # cannot express on its own, since its loop index is always 1 regardless
+    # of which robot it actually is. Needed when each robot in the fleet is
+    # its own Gazebo instance on its own machine, talking over real LoRa
+    # hardware: every machine runs robot_count:=1, so without this override
+    # they would all claim node_id 1 -- and two robots sharing a node_id have
+    # each other's real transmissions silently discarded as self-echoes by
+    # the reliability layer (see reliability/session.py's rx_self handling),
+    # which looks exactly like the radios not working when they actually are.
+    node_id_override = int(LaunchConfiguration("node_id").perform(context))
     # One entry per robot, short list padded with 100. Batteries are the
     # cheapest way to make a fleet asymmetric: they enter default_fitness as a
     # penalty below 50%, so `batteries:=100,20,100` makes robot 2 bid badly on
@@ -219,7 +279,11 @@ def launch_setup(context, *args, **kwargs):
     # Started once, not per robot: it *is* the shared channel, and modelling
     # contention between robots is most of its point. bridges:=false because
     # each robot's bridge is started below, in that robot's own namespace.
-    if launch_coordination:
+    #
+    # Skipped entirely in lora_hardware mode: real radios are their own shared
+    # channel, so there is nothing here to simulate, and each robot's bridge
+    # below opens a real serial port instead of a pty this would create.
+    if launch_coordination and not lora_hardware:
         actions.append(
             _include(
                 "amiga_ros2_comms",
@@ -232,10 +296,17 @@ def launch_setup(context, *args, **kwargs):
         )
 
     for i in range(1, robot_count + 1):
+        # This robot's identity for anything that must agree with its peers
+        # (LoRa node_id, which robot broken_sampler_robot names) rather than
+        # with this launch's own internal loop -- see node_id_override above.
+        robot_id = node_id_override if node_id_override else i
         # robot1 is unnamespaced only when it's the sole robot — see module
         # docstring. Namespace only, not spawn name (that's gazebo.launch.py's
         # own robot1_name arg, not threaded through here, same as before this
-        # file generalized to N robots).
+        # file generalized to N robots). Deliberately keyed on i, not
+        # robot_id: this is purely a local ROS-graph concern, and a
+        # node_id_override run is still, locally, the sole robot in its own
+        # Gazebo instance.
         ns = "" if (i == 1 and robot_count == 1) else f"{name_prefix}{i}"
         # Matches the frame_prefix given to robot_state_publisher in
         # urdf.launch.py — needed anywhere a node's frame-name parameter
@@ -328,8 +399,12 @@ def launch_setup(context, *args, **kwargs):
                     robot_name=ns,
                     # Empty for every robot except broken_sampler_robot, so at
                     # most one robot's arm is faulty and the rest of the fleet
-                    # can still take the work it sheds.
-                    sampler_fail_goals=("[0]" if i == broken_sampler_robot else "[]"),
+                    # can still take the work it sheds. robot_id, not i: which
+                    # robot this names is a fleet-wide fact, not a position in
+                    # this launch's own loop -- see node_id_override above.
+                    sampler_fail_goals=(
+                        "[0]" if robot_id == broken_sampler_robot else "[]"
+                    ),
                     sampler_failure_mode=broken_sampler_mode,
                 )
             )
@@ -395,9 +470,9 @@ def launch_setup(context, *args, **kwargs):
                     output="screen",
                     parameters=[
                         {
-                            "safety_distance": 1.5,
+                            "safety_distance": 2.5,
                             "lidar_topic": qualify_ros(ns, "ouster/points"),
-                            "azimuth_tolerance": 0.5,
+                            "azimuth_tolerance": 0.4,
                             "min_object_height": 0.1,
                             "max_object_height": 1.5,
                             "min_object_distance": 1.0,
@@ -424,21 +499,41 @@ def launch_setup(context, *args, **kwargs):
                     "bt.launch.py",
                     namespace=ns,
                     port=str(mission_port_base + i - 1),
+                    planner_host=planner_host,
                 )
             )
 
         # ── Robot-to-robot coordination ────────────────────────────────────
-        # The device name is always amiga<i>, independent of ns -- robot1's
-        # namespace is "" and cannot name a pty. node_id is i, and it is the
-        # one value here with no safe default.
+        # In sim mode the device name is always amiga<i>, independent of ns --
+        # robot1's namespace is "" and cannot name a pty (this is a local pty
+        # path, so it is keyed on the local loop index i like ns is, not on
+        # robot_id). In hardware mode there is no naming convention to fall
+        # back on -- a real radio's device path has no relationship to the
+        # robot index -- so it must be supplied explicitly, one per robot, in
+        # lora_serial_ports (also local: each machine only ever lists its own
+        # robots' ports). node_id is robot_id, since that is the one value
+        # here that must agree with what every OTHER robot in the fleet
+        # thinks this robot's id is -- see node_id_override above.
         if launch_coordination:
+            if lora_hardware:
+                if i - 1 >= len(lora_serial_ports):
+                    raise RuntimeError(
+                        f"lora_hardware:=true but lora_serial_ports only lists "
+                        f"{len(lora_serial_ports)} port(s) for {robot_count} "
+                        f"robot(s) -- give one serial device per robot, e.g. "
+                        f"lora_serial_ports:=/dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2."
+                    )
+                device = lora_serial_ports[i - 1]
+            else:
+                device = f"{symlink_dir}/{name_prefix}{i}"
             actions += coordination_nodes(
                 ns=ns,
-                node_id=i,
-                device=f"{symlink_dir}/{name_prefix}{i}",
+                node_id=robot_id,
+                device=device,
                 spreading_factor=spreading_factor,
                 battery_percent=batteries[i - 1],
                 use_agents=launch_agents,
+                rx_link_stats="header" if lora_hardware else "none",
             )
 
         # ── This robot's own LLM agents ────────────────────────────────────
@@ -459,10 +554,99 @@ def launch_setup(context, *args, **kwargs):
                     use_sim_time="true",
                     launch_mission_bridge="false",
                     battery_percent=str(batteries[i - 1]),
-                    ltl_verification=ltl_verification,
                     objective_gating=objective_gating,
+                    launch_vlm=launch_vlm,
+                    vlm_url=vlm_url,
+                    # Relative, and the same for every robot: the namespace is
+                    # what makes robot 2 look through robot 2's camera. This is
+                    # the topic sim_hardware_shims republishes the Gazebo front
+                    # camera on, so it is the same name the real Oak-D driver
+                    # publishes and nothing below the shim layer changes.
+                    #
+                    # Both scoped to the broken robot, for the same reason
+                    # sampler_fail_goals is: the fault belongs to one robot, so
+                    # the evidence for it has to as well. A fleet-wide static
+                    # image would answer every OTHER robot's camera questions
+                    # with a photograph of a fault they do not have -- and a
+                    # healthy robot reasoning from a picture of somebody else's
+                    # glare is the same failure as a robot reading its own arm
+                    # as an obstruction.
+                    vlm_image_topic=(
+                        vlm_image_topic
+                        if robot_id == broken_sampler_robot or not vlm_static_image
+                        else "oak0/rgb/image_raw"
+                    ),
+                    vlm_static_image=(
+                        vlm_static_image if robot_id == broken_sampler_robot else ""
+                    ),
+                    # Follows the topic: the robots still on the front camera
+                    # must keep the front camera's sentence, or their routing
+                    # prompt describes a device they are not looking through.
+                    camera_description=(
+                        camera_description
+                        if robot_id == broken_sampler_robot or not vlm_static_image
+                        else "the front camera"
+                    ),
+                    describe_frame=(
+                        describe_frame
+                        if robot_id == broken_sampler_robot or not vlm_static_image
+                        else "false"
+                    ),
                 )
             )
+
+    if spawn_person:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_person.py",
+                    ),
+                    "--tree",
+                    str(spawn_person),
+                ],
+                output="screen",
+            )
+        )
+
+    if spawn_truck:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "spawn_truck.py",
+                    ),
+                    "--tree",
+                    str(spawn_truck),
+                    "--entrance",
+                    "--span",
+                ],
+                output="screen",
+            )
+        )
+
+    if remove_tree:
+        actions.append(
+            ExecuteProcess(
+                cmd=[
+                    os.path.join(
+                        get_package_prefix("amiga_ros2_gazebo"),
+                        "lib",
+                        "amiga_ros2_gazebo",
+                        "remove_tree.py",
+                    ),
+                    "--tree",
+                    str(remove_tree),
+                ],
+                output="screen",
+            )
+        )
 
     return actions
 
@@ -504,6 +688,16 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("launch_bt", default_value="true"),
             DeclareLaunchArgument(
+                "planner_host",
+                default_value="",
+                description="Fleet planner to register and heartbeat with. "
+                "Empty (the default here) disables discovery, because a sim is "
+                "driven by netcat straight into each robot's mission port and "
+                "has no planner to answer -- bt.launch.py's own default points "
+                "at the real fleet host, which on a dev box just refuses every "
+                "5s per robot. Set it to that host to opt back in.",
+            ),
+            DeclareLaunchArgument(
                 "broken_sampler_robot",
                 default_value="0",
                 description="Give this robot (1-based) a failing leaf sampler; "
@@ -515,9 +709,16 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "broken_sampler_mode",
                 default_value="no_point_cloud",
-                description="How that robot's sampler fails. no_point_cloud is "
-                "a fault in that robot (a peer with a working camera is the "
-                "right answer); no_leaves is permanent for everyone.",
+                description="How that robot's sampler fails, and each mode has "
+                "a different right answer. no_point_cloud is a fault in that "
+                "robot, so a peer with a working camera should take the work; "
+                "no_leaves is permanent for everyone, so it should be dropped; "
+                "no_masks is neither -- the sensor works and the branch is not "
+                "bare, the detector was simply defeated by the conditions, so "
+                "a different position or moment is what fixes it. That third "
+                "one needs the camera to show the conditions: pair it with "
+                "vlm_static_image, because Gazebo will not render a sun-blinded "
+                "frame.",
             ),
             DeclareLaunchArgument(
                 "launch_coordination",
@@ -540,10 +741,119 @@ def generate_launch_description():
                 "waiting 45 s on a service nobody serves.",
             ),
             DeclareLaunchArgument(
+                "spawn_truck",
+                default_value="0",
+                description="Tree index whose lane to park a pickup across, or "
+                "0 for none. Placed at the mouth of that lane, so the row "
+                "cannot be entered at all -- unlike the person, who blocks one "
+                "goal pose and leaves the lane open either side. A different "
+                "fault to reason about, which is the reason for having both.",
+            ),
+            DeclareLaunchArgument(
+                "spawn_person",
+                default_value="0",
+                description="Tree index to put a standing person in front of, "
+                "or 0 for none. The person lands on that tree's row waypoint, "
+                "which makes MoveToTreeID abort for real instead of routing "
+                "around -- the fault the triage agent and the VLM read.",
+            ),
+            DeclareLaunchArgument(
+                "remove_tree",
+                default_value="0",
+                description="Tree index to delete from the running world, or "
+                "0 for none. GetTreeInfo keeps answering for it -- this only "
+                "removes the Gazebo model, not the orchard map entry -- so a "
+                "robot sent there finds a real, physical absence at a "
+                "position its own map still calls a tree: a stale map, not a "
+                "scripted fault.",
+            ),
+            DeclareLaunchArgument(
+                "launch_vlm",
+                default_value="false",
+                description="Give each robot a vlm_server, so every failure "
+                "carries a description of what that robot's camera saw into "
+                "its triage decisions. Needs launch_agents too -- triage is "
+                "what asks -- and a vision model on vlm_url: a separate model "
+                "and endpoint from the one the agents reason with. Off by "
+                "default.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_image_topic",
+                # The front camera, which is what the obstruction demos want:
+                # a person or a vehicle in the aisle is in front of the rover,
+                # not in front of the arm. A fault in the ARM's own seeing
+                # wants the other one -- /camera/color/image_raw, the wrist
+                # RealSense the leaf segmenter reads -- because comparing a
+                # front-camera view against an arm-camera failure is comparing
+                # two different devices, and the honest conclusion from that is
+                # the one the reasoning model kept drawing: the arm's sensor
+                # must be dead.
+                default_value="oak0/rgb/image_raw",
+                description="Which camera the vlm_server describes. The front "
+                "Oak-D by default; use camera/color/image_raw for faults in "
+                "what the arm itself can see.",
+            ),
+            DeclareLaunchArgument(
+                "describe_frame",
+                default_value="false",
+                description="Camera reports the state of the image as well as "
+                "its contents. Off by default -- it also makes the robot's own "
+                "arm much more likely to be described.",
+            ),
+            DeclareLaunchArgument(
+                "camera_description",
+                default_value="the front camera",
+                description="How the routing prompt names the camera. Must "
+                "agree with vlm_image_topic.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_static_image",
+                default_value="",
+                description="Answer every camera question from this file "
+                "instead of the live topic. For faults the simulator cannot "
+                "stage -- Gazebo will not blow out a frame with low sun, so a "
+                "blinded detector has no picture to be diagnosed from. Empty "
+                "(default) uses the camera.",
+            ),
+            DeclareLaunchArgument(
+                "vlm_url",
+                default_value="http://localhost:8001/v1/chat/completions",
+                description="OpenAI-compatible endpoint accepting image content "
+                "parts. One endpoint serves the whole simulated fleet.",
+            ),
+            DeclareLaunchArgument(
                 "lora_symlink_dir",
                 default_value="/tmp/amiga_lora_sim",
                 description="Where the virtual radio's per-robot ptys are "
-                "symlinked. Robot i's bridge opens <dir>/<prefix><i>.",
+                "symlinked. Robot i's bridge opens <dir>/<prefix><i>. Ignored "
+                "when lora_hardware:=true.",
+            ),
+            DeclareLaunchArgument(
+                "lora_hardware",
+                default_value="false",
+                description="false (default): every robot's lora_bridge talks "
+                "to the virtual medium below. true: the virtual medium is not "
+                "started, and each robot's bridge opens a real serial port "
+                "from lora_serial_ports instead -- the robots themselves stay "
+                "simulated in Gazebo either way, only the radio link is real.",
+            ),
+            DeclareLaunchArgument(
+                "lora_serial_ports",
+                default_value="",
+                description="Comma-separated serial device per robot, e.g. "
+                "/dev/ttyUSB0,/dev/ttyUSB1,/dev/ttyUSB2. Required, one entry "
+                "per robot, when lora_hardware:=true; ignored otherwise.",
+            ),
+            DeclareLaunchArgument(
+                "node_id",
+                default_value="0",
+                description="0 (default): this launch's robots get node_id "
+                "1..robot_count, their position in its own loop. Non-zero "
+                "overrides it for a robot_count:=1 launch -- one physical "
+                "robot per machine, each its own Gazebo instance and real "
+                "LoRa radio, needs a node_id that means the same robot on "
+                "every machine, which its always-1 loop position cannot "
+                "express on its own.",
             ),
             DeclareLaunchArgument(
                 "batteries",
@@ -554,25 +864,14 @@ def generate_launch_description():
                 "to make a fleet bid asymmetrically without moving anyone.",
             ),
             DeclareLaunchArgument(
-                "ltl_verification",
-                default_value="true",
-                description="False drops the arbiter's formal gate: no formula "
-                "is generated and SPIN never runs. Plans are still checked for "
-                "whether they RUN (XSD + the ontology's required "
-                "preconditions) and for whether they still contain the "
-                "mission's work (see objective_gating). For bringing the "
-                "coordination loop up end to end; every accept is then "
-                "reported unverified.",
-            ),
-            DeclareLaunchArgument(
                 "objective_gating",
                 default_value="true",
                 description="The arbiter's objective-preservation and "
                 "viability checks, and with them its ability to ABORT. "
                 "/mission/abort is what ends the local repair loop and hands "
-                "the fault to the coordinator, so a fleet run needs this on "
-                "regardless of ltl_verification. False makes the local loop "
-                "endless and nothing is ever auctioned.",
+                "the fault to the coordinator, so a fleet run needs this on. "
+                "False makes the local loop endless and nothing is ever "
+                "auctioned.",
             ),
             DeclareLaunchArgument(
                 "lora_spreading_factor",

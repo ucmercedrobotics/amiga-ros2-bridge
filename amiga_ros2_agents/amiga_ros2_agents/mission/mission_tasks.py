@@ -860,7 +860,13 @@ REBUILDABLE = frozenset(
         Capability.MOVE_TO_AISLE_HEAD,
         Capability.MOVE_TO_TREE_ID,
         Capability.SAMPLE_LEAF,
+        Capability.HARVEST_FRUIT,
     }
+)
+
+WORK_AT_TREE = (
+    (Capability.SAMPLE_LEAF, "SampleLeaf", "sample", "segment_leaves"),
+    (Capability.HARVEST_FRUIT, "HarvestFruit", "harvest", "harvest_fruit"),
 )
 
 
@@ -882,8 +888,8 @@ def action_grammar(xsd_path: str) -> "List[dict]":
     two-element list -- ``MoveToTreeID`` and ``SampleLeaf``. ``MoveToAisleHead``
     was not in it, so the replanner could not emit an aisle move even when the
     plan it was editing was full of them, and every replan quietly flattened the
-    prerequisite chain. That is exactly the drift ``promela.action_pool``'s
-    docstring was written about, in a second place.
+    prerequisite chain. That is exactly the drift ``action_names`` above exists
+    to prevent, in a second place.
 
     Read out of the schema for the same reason ``action_names`` is: a list that
     cannot drift cannot describe a grammar the validator will then reject.
@@ -990,10 +996,11 @@ def synthesize(task: MissionTask, xsd_path: str, orchard=None) -> Optional[Rebui
     # absorbed into would then fail verification for a reason nobody could see.
     move.set("approach_tree", "true")
 
-    if Capability.SAMPLE_LEAF in caps:
-        sample = etree.SubElement(root, "SampleLeaf")
-        sample.set("name", f"{safe}_sample_{tree_id}")
-        sample.set("action_name", names.get("SampleLeaf", "segment_leaves"))
+    for capability, element, label, fallback in WORK_AT_TREE:
+        if capability in caps:
+            work = etree.SubElement(root, element)
+            work.set("name", f"{safe}_{label}_{tree_id}")
+            work.set("action_name", names.get(element, fallback))
 
     dropped = [XML_ELEMENT[cap] for cap in sorted(caps - REBUILDABLE)]
     # The aisle move was asked for and could not be placed: an unknown aisle is

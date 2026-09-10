@@ -19,7 +19,7 @@ translate the wire's strings back into it and raise on everything else.
 
 **The deadline is the design constraint here, not a safety margin.** Reading a
 note makes the auction deliberative: the bid backoff stretches by
-``note_backoff_multiplier`` (10x, so 20 s at the defaults) precisely to leave
+``note_backoff_multiplier`` (18x, so 36 s at the defaults) precisely to leave
 room for this call. An answer that arrives after the bid has gone out is not
 late, it is useless -- the coordinator counts it ``notes_too_late`` and bids on
 mechanics. So DEFAULT_TIMEOUT_SEC has to sit *under* the stretched backoff, and
@@ -44,9 +44,15 @@ from ..vocabulary.schema import (
 )
 
 #: Seconds to wait for a revision. Must stay below the note-stretched bid
-#: backoff -- see the module docstring. 15.0 against a 20 s backoff leaves the
-#: bid five seconds to be assembled and sent after the answer lands.
-DEFAULT_TIMEOUT_SEC = 15.0
+#: backoff -- see the module docstring. 30.0 against a 36 s backoff leaves the
+#: bid six seconds to be assembled and sent after the answer lands.
+#:
+#: 30 rather than the 15 this started at because 15 was set from the shape of
+#: the budget rather than from the model. Measured on a three-robot fleet
+#: sharing one gpt-oss-120b endpoint, both peers answered a note in 21-22 s --
+#: correctly, wanting to raise their bid for a human in the aisle -- and both
+#: answers were thrown away for arriving six seconds late.
+DEFAULT_TIMEOUT_SEC = 30.0
 
 #: The service name the note agent serves. Absolute, for the same reason the
 #: triage service is: one agent stack per robot, outside this node's namespace.

@@ -7,7 +7,8 @@ rospkg
 protobuf==5.29.5
 farm-ng-amiga
 utm
-litellm
+litellm==1.96.2
+requests
 python-dotenv
 jinja2
 lxml

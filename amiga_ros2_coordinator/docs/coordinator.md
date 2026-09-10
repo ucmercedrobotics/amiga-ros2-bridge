@@ -28,8 +28,8 @@ nodes reached through the ports in
 
 The test for whether a change belongs here: it is about *deciding* something.
 If it is about getting bytes there, it belongs one layer down. If it needs a
-language model or the LTL backend, it goes behind one of the two reasoning
-interfaces, not into the state machine.
+language model, it goes behind one of the two reasoning interfaces, not into
+the state machine.
 
 ## Watching a fleet do this
 
@@ -285,7 +285,7 @@ both now have a real agent behind them.
 
 `replan_and_verify(delta) -> ReplanResult` is a third port but not a reasoning
 point: `VerifyingReplanner` hands the delta to the arbiter, which applies the
-edit and runs it through the same LTL gate a local replan gets. See
+edit and runs it through the same gate a local replan gets. See
 [the wired ports](#the-wired-ports-coordinator_sim).
 
 The load-bearing constraint is the **closed union**: `interpret_anomaly`
@@ -439,7 +439,7 @@ and duplicate every send.
 | `triage_timeout_sec` | `45.0` | on a timeout the anomaly goes unanswered and the task stays put |
 | `use_note_agent` | `true` | ask the note agent what a peer's note means for our bid. `false` falls back to the injected interpreter, which defaults to changing nothing |
 | `note_service` | `/coordination/interpret_note` | the agent's service |
-| `note_timeout_sec` | `15.0` | **must stay under `bid_max_backoff_sec` × `note_backoff_multiplier`** (20 s at the defaults). An answer after that lands once the bid has gone and is counted `notes_too_late`; the node warns at startup if the two are set so that every answer would be. Shorter than the triage timeout for that reason, not because the model is faster |
+| `note_timeout_sec` | `30.0` | **must stay under `bid_max_backoff_sec` × `note_backoff_multiplier`** (36 s at the defaults). An answer after that lands once the bid has gone and is counted `notes_too_late`; the node warns at startup if the two are set so that every answer would be. Shorter than the triage timeout for that reason, not because the model is faster. Sized from a measured 21-22 s interpretation on a three-robot fleet sharing one endpoint |
 | `default_task_capabilities` | `[MoveToTreeID]` | assumed for a task the escalation names without describing. Only reached when the triage agent could not resolve the failing node to a subtree — an ordinary escalation carries the real action set |
 
 `node_id` and the retransmit settings belong to the in-process reliability node
@@ -539,15 +539,14 @@ suppression test measures.
   the arbiter's `/mission/verify_replan`; the arbiter applies the edit to the
   plan it holds and runs it through the same `_evaluate` a planner-authored
   candidate goes through. What is *not* resolved is that this is called from
-  inside the lock `tick` and `on_message` need, and one round trip costs a C
-  compile (`spin -search` regenerates and builds `pan`, ~1.4 s measured on the
-  Jetson) before any model call. So the request is dispatched on a thread and
-  the verdict arrives late, routed to the anomaly path — the same place the
-  inline rejection in `_take_on` goes, just later. Nothing unverified reaches
-  the robot regardless, because the arbiter is the sole writer of
-  `/mission/xml` and publishes only after the gate passes. Making the *coordinator*
-  wait for a verdict would need the lock split, which is a larger change than
-  the hook itself.
+  inside the lock `tick` and `on_message` need, and it is a ROS service round
+  trip to another process, which is never free to assume is fast. So the
+  request is dispatched on a thread and the verdict arrives late, routed to the
+  anomaly path — the same place the inline rejection in `_take_on` goes, just
+  later. Nothing unchecked reaches the robot regardless, because the arbiter is
+  the sole writer of `/mission/xml` and publishes only after the gate passes.
+  Making the *coordinator* wait for a verdict would need the lock split, which
+  is a larger change than the hook itself.
 - ~~**Real nav and mission adapters**~~ — written; see "The wired ports" above.
   `GpsNav`, `BehaviorTreeMission` and `mission_bridge` are behind
   `coordinator_sim`. What the decision came out as, since it was called out here
