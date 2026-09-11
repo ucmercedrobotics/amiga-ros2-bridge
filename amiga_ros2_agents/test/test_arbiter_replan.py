@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from amiga_interfaces.srv import VerifyReplan  # noqa: E402
 from amiga_ros2_agents.mission import orchard  # noqa: E402
 from amiga_ros2_agents.replanning.arbiter_node import ArbiterNode  # noqa: E402
+from amiga_ros2_agents.runtime import llm, policy  # noqa: E402
 from amiga_ros2_comms.codec import (  # noqa: E402
     Capability,
     TargetKind,
@@ -522,6 +523,51 @@ def test_arbiter_aborts_when_too_little_of_the_mission_survives():
         assert "no longer viable" in reason
     finally:
         node.destroy_node()
+
+
+def test_permanence_never_reaches_the_model_when_agent_permanence_is_unset(
+    monkeypatch,
+):
+    """The guard against the exact leak this seam was built to fix.
+
+    ``AGENT_POLICY`` governs five reasoning seams, all of which fire a model
+    call by default. Permanence is not a sixth: before this seam existed,
+    ``_check_objective_preserved`` answered Gate 1 with the keyword table for
+    every robot, in every configuration, and no value of ``AGENT_POLICY`` may
+    change that unless ``AGENT_PERMANENCE`` (a separate, narrower opt-in) is
+    itself set to ``"llm"``. This process's own environment has not set it --
+    see ``test_permanence_uses_model_is_false_by_default_regardless_of_agent_policy``
+    in ``test_policy.py`` for the same guarantee pinned at the policy layer --
+    so this test exercises the actual call site, ``_is_permanent_failure``,
+    under both arms of ``AGENT_POLICY`` and proves neither one ever dials out:
+    ``llm.complete`` is replaced with a function that fails the test outright
+    if it is ever invoked.
+    """
+    assert (
+        not policy.permanence_uses_model()
+    ), "this test assumes AGENT_PERMANENCE is unset in the test environment"
+
+    def must_not_be_called(system, user, **kw):
+        raise AssertionError(
+            "permanence must not call the model when AGENT_PERMANENCE is unset"
+        )
+
+    monkeypatch.setattr(llm, "complete", must_not_be_called)
+
+    for active in ("llm", "deterministic"):
+        monkeypatch.setattr(policy, "ACTIVE", active)
+        node = ArbiterNode()
+        try:
+            node._permanence_cache = {}
+            # A reason the keyword table recognises (`removed`) and one it
+            # does not, so both branches of policy.permanence run -- not just
+            # the call site's gate -- while llm.complete stays unreachable.
+            assert node._is_permanent_failure("tree removed from the orchard", ["60"])
+            assert not node._is_permanent_failure(
+                "the robot could not reach the target in time", ["60"]
+            )
+        finally:
+            node.destroy_node()
 
 
 def test_objective_gating_off_is_the_only_way_to_skip_the_objective_check():

@@ -44,11 +44,14 @@ the real triage agent lives in node.py, where the ROS dependency belongs.
 from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence, runtime_checkable
 
+from amiga_ros2_comms.codec import has_capabilities
+
 from ..vocabulary.model import MissionDelta
 from ..vocabulary.schema import (
     ActionSchema,
     AnomalyContext,
     BidRevision,
+    DropTask,
     KeepBid,
     LocalDisposition,
     NoteContext,
@@ -100,6 +103,107 @@ class AlwaysReDelegate:
             task=context.task,
             reason_code=context.reason_code,
             fallback=self.fallback,
+        )
+
+
+class CapabilityAwareInterpreter:
+    """The deterministic arm of the reasoning ablation: no model, one policy.
+
+    ``interpret_anomaly`` has exactly one production implementation that is
+    not a test stub -- ``TriageClient``, which asks a language model to read
+    the fault, the log window and the world state. Measuring what that model
+    buys means comparing it against the best decision procedure reachable
+    *without* one, on the same anomalies, and ``AlwaysReDelegate`` cannot be
+    that baseline: its own docstring says plainly that it is not a sensible
+    policy, chosen instead because re-delegation is the longest path through
+    this layer and therefore the stub that exercises the most machinery. This
+    class is what you would actually ship if there were no model on the other
+    end of the call -- not a strawman built to lose the comparison.
+
+    The policy reads exactly the structured fields ``AnomalyContext`` carries
+    and nothing else: is there a peer in ``context.peers`` that is idle right
+    now, and does its ``cap_mask`` cover every bit in
+    ``context.task.required_capabilities``? If such a peer exists, the task is
+    at least plausibly somebody else's to finish, so the answer is
+    ``ReDelegate`` -- let the auction find out for certain, with ``HOLD`` as
+    the fallback if the announce window closes with no bid. If no live peer is
+    both idle and fully capable, re-delegating would spend an announce window
+    to learn what this policy can already see from the registry, so the answer
+    is ``DropTask`` with disposition ``HOLD``: keep the task, do not announce
+    it, try again once the fleet looks different. Either way ``reason_code``
+    passes through from the context unchanged, because this policy is not
+    diagnosing the fault, only routing around it. A ``context.task`` of
+    ``None`` is refused the same way ``AlwaysReDelegate`` refuses it: raising
+    is "no interpretation available," which the coordinator treats as leaving
+    the task exactly where it was, the safe direction to fail in.
+
+    What this policy can never do, by construction, is return ``AddTask``. Not
+    because the case is rare, but because nothing it is allowed to read could
+    ever justify it. Synthesizing new work means having observed something
+    about the world that no field in ``AnomalyContext`` carries: a task
+    carries a capability mask and a location, a peer record carries a
+    capability mask, a battery level and whether it is idle, and none of that
+    is the sentence "there is a diseased tree in the next row that is in
+    nobody's mission." That sentence lives in the /rosout window, the
+    behaviour-tree fault and the world state -- exactly the evidence fields
+    ``TriageClient`` leaves empty on the wire and the triage agent reads for
+    itself. A policy that only sees typed fields has no representation for it
+    to synthesize an ``AddTask`` from, so it cannot express one, at any
+    confidence, ever.
+
+    That gap has two concrete failure modes worth naming rather than leaving
+    implicit, because an ablation is supposed to report them rather than paper
+    over them with a policy tuned to dodge its own weak spot:
+
+    (a) A fault that is fleet-wide rather than local -- the row itself is
+    impassable, the target no longer exists, whatever it is -- looks, from
+    this policy's vantage point, identical to a fault that is merely local. If
+    a capable peer happens to be idle, this policy re-delegates regardless,
+    because idleness and capability are all it is allowed to check. The
+    auction runs, the peer drives over, and the peer discovers the same
+    fleet-wide fact this robot already hit. That is an announce window and a
+    peer's trip spent to relearn something structured state already implied
+    and no typed field carried.
+
+    (b) A fault that reveals new work -- the obstacle blocking this task is
+    itself a task -- cannot become an ``AddTask`` no matter how obviously a
+    model reading the same fault would produce one, because, again, nothing
+    in ``AnomalyContext`` names the new work.
+
+    Both failures are failures of *information*, not of engineering: they are
+    not cases this policy reasons about incorrectly, they are cases where the
+    only evidence that would produce the right answer never reached it. That
+    is the honest way to say what a deterministic baseline costs, and it is
+    the reason this class exists in the ablation at all -- not to prove a
+    model is unnecessary, and not to prove it is, but to make what it actually
+    contributes measurable against the strongest policy reachable without one.
+    """
+
+    def __init__(self):
+        self.calls: "list[AnomalyContext]" = []
+
+    def interpret_anomaly(self, context: AnomalyContext) -> ActionSchema:
+        self.calls.append(context)
+        if context.task is None:
+            raise ValueError(
+                "CapabilityAwareInterpreter cannot interpret an anomaly with "
+                "no task attached; script a different action for this scenario"
+            )
+        task = context.task
+        for peer in context.peers:
+            if peer.idle and has_capabilities(
+                peer.cap_mask, task.required_capabilities
+            ):
+                return ReDelegate(
+                    task=task,
+                    reason_code=context.reason_code,
+                    fallback=LocalDisposition.HOLD,
+                    note="",
+                )
+        return DropTask(
+            task=task,
+            disposition=LocalDisposition.HOLD,
+            reason_code=context.reason_code,
         )
 
 

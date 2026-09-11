@@ -56,7 +56,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from ..mission import mission_tasks, ontology, orchard, xsd
-from ..runtime import llm, prompts, spin
+from ..runtime import llm, policy, prompts, spin
 from ..runtime.status import StatusPublisher
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,6 @@ MAX_CHANGED_LINE_RATIO = 0.5  # reject if > 50% of lines differ from active plan
 MIN_ACCEPT_INTERVAL_SEC = 5.0  # reject if last accepted plan was < N sec ago
 MAX_DROPPED_TREES = 0  # trees an edit may drop with no justification
 PERMANENT_DROP_ALLOWANCE = 1  # extra NEW drops allowed when the failure is permanent
-PERMANENT_KEYWORDS = ("permanent", "removed", "unavailable", "does not exist")
 
 DEFAULT_VIABILITY_BUDGET = 2  # fallback total-drop budget if the model call fails
 
@@ -140,6 +139,16 @@ class ArbiterNode(Node):
         self._executor_busy = False
         self.max_droppable: Optional[int] = None  # model-determined viability budget
         self._last_failure_reason: str = ""
+        # Permanence verdicts, keyed by fault reason text. The planner retries
+        # a rejection up to MAX_REJECTION_RETRIES times, so one fault reaches
+        # _check_objective_preserved several times over -- without this, each
+        # retry re-asks the model the identical question, paying for it again
+        # and, at temperature 0.2, sometimes getting a different answer than
+        # the retry before it, which would flip Gate 1 mid-session for no
+        # reason the mission gave it. Same shape as triage_node's self.routes:
+        # one verdict per distinct reason per mission, cleared with the rest
+        # of the mission's objective state in _on_mission below.
+        self._permanence_cache: Dict[str, bool] = {}
         self._last_accept_time = 0.0
         self._awaiting_retry = False  # True between a reject and next accept
         # Last plan we published. We also subscribe to /mission/xml (to see the
@@ -233,6 +242,7 @@ class ArbiterNode(Node):
                     return
                 self.original_objectives = self._objective_tree_ids(doc)
                 self.justified_drops = set()
+                self._permanence_cache = {}
                 mission_text = doc.findtext("Mission", default="")
                 trees = sorted(self.original_objectives)
                 self.get_logger().info(
@@ -788,23 +798,28 @@ class ArbiterNode(Node):
 
     def _compute_viability_budget(self, mission_text: str, trees: List):
         n_trees = len(trees)
-        try:
-            text = llm.complete(
-                prompts.render("arbiter/viability_system.j2"),
-                prompts.render(
-                    "arbiter/viability_user.j2",
-                    mission_text=mission_text,
-                    trees=trees,
-                    n_trees=n_trees,
-                ),
-            )
-            matches = re.findall(r"\d+", text)  # every integer in the reply
-            n = (
-                int(matches[-1]) if matches else DEFAULT_VIABILITY_BUDGET
-            )  # last = final answer
-        except Exception as exc:
-            n = DEFAULT_VIABILITY_BUDGET
-            self.get_logger().warn(f"Viability call failed ({exc}); default budget {n}")
+        if policy.deterministic():
+            n = policy.viability_budget(n_trees)
+        else:
+            try:
+                text = llm.complete(
+                    prompts.render("arbiter/viability_system.j2"),
+                    prompts.render(
+                        "arbiter/viability_user.j2",
+                        mission_text=mission_text,
+                        trees=trees,
+                        n_trees=n_trees,
+                    ),
+                )
+                matches = re.findall(r"\d+", text)  # every integer in the reply
+                n = (
+                    int(matches[-1]) if matches else DEFAULT_VIABILITY_BUDGET
+                )  # last = final answer
+            except Exception as exc:
+                n = DEFAULT_VIABILITY_BUDGET
+                self.get_logger().warn(
+                    f"Viability call failed ({exc}); default budget {n}"
+                )
 
         n = max(1, min(n, n_trees))  # clamp to a sane [1, n_trees]
 
@@ -818,6 +833,99 @@ class ArbiterNode(Node):
         self.get_logger().info(
             f"Model viability budget: up to {n} tree(s) may be skipped"
         )
+
+    # ------------------------------------------------------------------
+    # Permanence -- one call per Gate 1 check, replacing the keyword search
+    # ------------------------------------------------------------------
+
+    def _is_permanent_failure(self, reason: str, dropped_trees) -> bool:
+        """Gate 1's answer to "will this ever succeed if retried" -- the
+        ``permanence`` seam (``runtime/policy.py``), asked exactly where the
+        naked ``any(kw in reason for kw in PERMANENT_KEYWORDS)`` search this
+        replaces used to run.
+
+        Gated on ``policy.permanence_uses_model()``, not on
+        ``policy.deterministic()`` -- and that is the one thing about this
+        method that is not shaped like ``_compute_viability_budget`` right
+        above, deliberately. At the other five seams, including the viability
+        budget, ``AGENT_POLICY``'s default ("llm") reproduces behaviour this
+        fleet already had: a model call was already what happened there
+        before an ablation existed to measure it, so wiring the seam to
+        ``policy.deterministic()`` costs the shipped path nothing. Here, no
+        configuration of this fleet has ever made a model call before
+        deciding permanence -- ``_check_objective_preserved`` ran the keyword
+        table for every robot, unconditionally, for as long as this method
+        has existed at all. Reading ``policy.deterministic()`` here would
+        make ``AGENT_POLICY`` unset (its default) reach the model on a seam
+        that never had one, which is precisely the leak this docstring is
+        now here to keep from happening again: an ablation is licensed to
+        swap out reasoning the system already had, not to hand the shipped
+        path reasoning it never had, merely because the same env var also
+        happens to govern five other places that did. So permanence answers
+        to its own switch, ``AGENT_PERMANENCE``, and nothing else decides
+        whether this method opens a network connection.
+
+        With ``policy.permanence_uses_model()`` false -- ``AGENT_PERMANENCE``
+        unset or ``"keywords"``, the default under every value of
+        ``AGENT_POLICY`` -- this calls ``policy.permanence(reason)`` and
+        returns, the same keyword table the whole package ran inline before
+        this seam existed, and touches no network. Only when
+        ``AGENT_PERMANENCE=llm`` was set explicitly does this ask the model
+        the same question this reason has always been asked with a keyword
+        list, parsing a single PERMANENT/TRANSIENT word out of the reply. If
+        that call raises, or the reply contains neither word, this falls back
+        to ``policy.permanence(reason)`` too -- the same keyword table the
+        no-model arm runs, not a second, weaker policy invented for the
+        occasion -- and says so at ``warn``, because a study arm that goes
+        quiet about quietly becoming the other arm is a study arm that has
+        stopped measuring what it claims to.
+
+        Cached by ``reason`` in ``self._permanence_cache``. Gate 1 runs on
+        every candidate, and the planner retries a rejection up to
+        MAX_REJECTION_RETRIES times, so the same fault otherwise asks this
+        same question several times over -- paying for each retry and, at
+        temperature 0.2, occasionally getting PERMANENT on one retry and
+        TRANSIENT on the next, flipping the gate mid-session over nothing the
+        mission changed. A new ``reason`` string is a new fault and gets a
+        fresh verdict; the same one is judged once. The cache is checked and
+        written under ``self._lock``, but the call this method makes --
+        keyword table or model -- runs with the lock released, the same way
+        ``_compute_viability_budget`` and the triage client keep the network
+        (or, here, the pure-but-not-free policy lookup) off the lock.
+        """
+        with self._lock:
+            cached = self._permanence_cache.get(reason)
+        if cached is not None:
+            return cached
+
+        if policy.permanence_uses_model():
+            try:
+                text = llm.complete(
+                    prompts.render("arbiter/permanence_system.j2"),
+                    prompts.render(
+                        "arbiter/permanence_user.j2",
+                        reason=reason,
+                        dropped_trees=dropped_trees,
+                    ),
+                )
+                match = re.search(r"PERMANENT|TRANSIENT", text, re.IGNORECASE)
+                if match is None:
+                    raise ValueError(
+                        f"no PERMANENT/TRANSIENT verdict in reply: {text!r}"
+                    )
+                verdict = match.group(0).upper() == "PERMANENT"
+            except Exception as exc:
+                verdict = policy.permanence(reason)
+                self.get_logger().warn(
+                    f"Permanence call failed ({exc}); falling back to keyword "
+                    f"match ({verdict})"
+                )
+        else:
+            verdict = policy.permanence(reason)
+
+        with self._lock:
+            self._permanence_cache[reason] = verdict
+        return verdict
 
     # ------------------------------------------------------------------
     # Checks
@@ -965,7 +1073,7 @@ class ArbiterNode(Node):
 
         # Gate 1: each NEW drop must be justified — fixable → normal rejection
         allowed_new = MAX_DROPPED_TREES
-        if any(kw in reason for kw in PERMANENT_KEYWORDS):
+        if self._is_permanent_failure(reason, sorted(newly_dropped)):
             allowed_new = max(allowed_new, PERMANENT_DROP_ALLOWANCE)
         if len(newly_dropped) > allowed_new:
             return (

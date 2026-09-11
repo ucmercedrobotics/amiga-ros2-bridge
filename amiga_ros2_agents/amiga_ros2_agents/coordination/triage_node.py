@@ -91,7 +91,7 @@ from std_msgs.msg import String
 
 from ..mission import mission_tasks
 from ..mission.mission_tasks import MissionTask
-from ..runtime import llm, prompts, spin
+from ..runtime import llm, policy, prompts, spin
 from ..runtime.status import StatusPublisher
 from . import vlm_client
 
@@ -201,7 +201,7 @@ class TriageNode(Node):
         self.routes: Dict[str, Dict] = {}
         self._routing: set = set()
         self._last_status: Dict = {
-            "model": llm.MODEL,
+            "model": policy.label(),
             "faults_seen": 0,
             "routes": 0,
             "escalations": 0,
@@ -289,7 +289,7 @@ class TriageNode(Node):
         self.status.publish(self.get_status())
 
         self.get_logger().info(
-            f"TriageNode started — model={llm.MODEL}, "
+            f"TriageNode started — model={policy.label()}, "
             f"vlm={self.vlm.service_name if self.vlm else 'off'}, serving "
             f"/coordination/interpret_anomaly"
         )
@@ -521,11 +521,17 @@ class TriageNode(Node):
     def _decide_route(self, evidence: Dict) -> Dict:
         event = evidence["fault"]
         mission_xml = evidence["mission_xml"]
+        task = self._task_for(event, mission_xml)
+        if policy.deterministic():
+            with self._lock:
+                prior_routes = dict(self.routes)
+            return policy.route(
+                task=task, prior_routes=prior_routes, node=str(event.get("node") or "")
+            )
         with self._lock:
             attempts = (
                 json.dumps(list(self.attempts), indent=2) if self.attempts else ""
             )
-        task = self._task_for(event, mission_xml)
         prompt = prompts.render(
             "triage/route_user.j2",
             fault=json.dumps(event, indent=2),
@@ -716,30 +722,38 @@ class TriageNode(Node):
             self._last_status["interpretations"] += 1
 
         try:
-            fault, logs, world, attempts, visual = self._assemble(request)
-            user_prompt = prompts.render(
-                "triage/user.j2",
-                fault=json.dumps(fault, indent=2) if fault else "(none reported)",
-                log_context=logs or "(no log lines in the window)",
-                visual_context=visual,
-                world_state=world or "(no world-state frame)",
-                local_attempts=attempts or "(none)",
-                task_id=int(request.task_id),
-                # Element names rather than a mask, so the model reads the same
-                # words as the mission XML it is reasoning about. A number here
-                # would be a number it has to be told how to decode, in a
-                # prompt, every time.
-                required_actions=", ".join(
-                    mission_tasks.capability_names(int(request.required_capabilities))
+            if policy.deterministic():
+                decision = policy.interpret_anomaly(
+                    required_capabilities=int(request.required_capabilities),
+                    peers_json=request.peers_json or "[]",
                 )
-                or "(none stated)",
-                where=self._where(request),
-                priority=int(request.priority),
-                battery_percent=int(request.battery_percent),
-                peers=request.peers_json or "[]",
-            )
-            reply = llm.complete(self.system_prompt, user_prompt)
-            decision = self._parse_decision(reply)
+            else:
+                fault, logs, world, attempts, visual = self._assemble(request)
+                user_prompt = prompts.render(
+                    "triage/user.j2",
+                    fault=json.dumps(fault, indent=2) if fault else "(none reported)",
+                    log_context=logs or "(no log lines in the window)",
+                    visual_context=visual,
+                    world_state=world or "(no world-state frame)",
+                    local_attempts=attempts or "(none)",
+                    task_id=int(request.task_id),
+                    # Element names rather than a mask, so the model reads the
+                    # same words as the mission XML it is reasoning about. A
+                    # number here would be a number it has to be told how to
+                    # decode, in a prompt, every time.
+                    required_actions=", ".join(
+                        mission_tasks.capability_names(
+                            int(request.required_capabilities)
+                        )
+                    )
+                    or "(none stated)",
+                    where=self._where(request),
+                    priority=int(request.priority),
+                    battery_percent=int(request.battery_percent),
+                    peers=request.peers_json or "[]",
+                )
+                reply = llm.complete(self.system_prompt, user_prompt)
+                decision = self._parse_decision(reply)
         except Exception as exc:  # noqa: BLE001 - a model, a parser, a timeout
             self.get_logger().error(f"interpretation failed: {exc}")
             with self._lock:
@@ -785,7 +799,7 @@ class TriageNode(Node):
         )
         response.rationale = decision["rationale"]
         response.note = decision["note"]
-        response.model = llm.MODEL
+        response.model = policy.label()
 
         with self._lock:
             self._last_status["last_action"] = decision["action"]

@@ -2,7 +2,7 @@
 """
 Research harness for the mission-planner / arbiter replanning study.
 
-For every (model, scenario, rep) cell it:
+For every (arm, scenario, trial) cell it:
   1. launches a FRESH planner + arbiter process (clean memory => independent trial)
   2. waits until both agents latch a status snapshot (readiness, not a blind sleep)
   3. publishes the scenario mission XML, then the vague failure event
@@ -12,8 +12,47 @@ For every (model, scenario, rep) cell it:
 Raw node stdout/stderr for each trial is saved under runs/<run_id>/logs/ so
 prompts / token logs can be recovered later without re-running.
 
-Run INSIDE the container with ROS2 sourced (and vLLM already serving):
+The independent variable used to be called `--models`, because every arm was
+a model. It no longer is: `deterministic` is a third arm alongside `llm-local`
+and `llm-cloud`, and it sets no model variable at all -- see ARMS below.
+
+`--reps` later became `--seeds` on the theory that a shared seed would let
+both arms be paired trial-for-trial for McNemar's test (see
+`ablation-experiment-spec.md`). That pairing never happened: no call site in
+this harness reads the seed value at all, and R4 in the spec's Revisions
+section retires the idea. The `seed` field in each record (and the loop
+variable below) is nothing more than a trial index in this harness -- it
+selects which iteration of the outer loop a trial belongs to and has zero
+effect on execution, so it carries no variance-reducing or pairing promise
+and nobody should read one into it. It is kept, unrenamed, only because the
+record schema is shared verbatim with `fleet_harness.py` (see that file's
+docstring), where a same-named field genuinely does drive `Fleet(seed=...)`.
+
+The CLI flag is `--trials` -- what it actually controls is how many
+repetitions run per (arm, scenario) cell, which the LLM arms need because
+they are stochastic and the deterministic arm needs only for the
+nondeterminism check in `analyze.py` to have more than one data point.
+`--seeds` is kept as an accepted synonym so an existing invocation still
+works.
+
+Scenarios live in `registry.py`, not here, and are pre-registered: the
+`expected` hypothesis and the deterministic `scorer` that turns a decision
+into `correct` are committed before a single trial runs, so scoring cannot
+drift toward a result once results exist. See registry.py's module docstring.
+
+Run INSIDE the container with ROS2 sourced (and vLLM already serving, for the
+llm arms -- `deterministic` needs no model endpoint reachable at all):
+  python3 scripts/scenarios/research_harness.py --arms llm-local --scenarios all --trials 5
+
+The pre-ablation invocation still works exactly as it always did -- `--arms`
+defaults to `llm-local` (what used to be called `local`), so this bare form
+never runs the deterministic arm unless you ask for it with `--arms` or
+`--arms all`:
   python3 scripts/research_harness.py --models local --scenarios all --reps 5
+
+`--models`/`--reps` are deprecated synonyms for `--arms`/`--trials`, kept
+fully functional (see their `--help` text) so old invocations and scripts
+never broke when this axis was renamed.
 """
 
 import argparse
@@ -30,6 +69,8 @@ import rclpy
 from amiga_ros2_agents.runtime.status import STATUS_QOS
 from rclpy.node import Node
 from std_msgs.msg import String
+
+from registry import SINGLE_SCENARIOS, git_sha
 
 # ======================================================================
 # CONFIG — edit to match your machine, then leave alone per-run.
@@ -48,17 +89,30 @@ COMMON_ENV = {
     "ENV_FILE_PATH": os.environ.get("ENV_FILE_PATH", "/amiga-ros2-bridge/.env"),
 }
 
-# The independent variable. Each entry = env vars merged in to select that model.
-# Your nodes derive ACTIVE_MODEL from LOCAL_MODEL, so LOCAL_MODEL/LOCAL_API_BASE
-# is the lever. Add a row per model you benchmark.
-MODELS = {
-    "local": {
+# The independent variable. Each entry = env vars merged in to select that
+# arm. `AGENT_POLICY` is the lever `amiga_ros2_agents.runtime.policy` reads
+# once at import (see that module's docstring): "deterministic" routes every
+# one of the five reasoning seams through a closed-form rule over structured
+# state, and "llm" (the default if unset, but every row here sets it
+# explicitly so a results record is never ambiguous about which arm produced
+# it) leaves the model call in place, selected by LOCAL_MODEL/LOCAL_API_BASE
+# exactly as before this axis had a name change. `deterministic` sets no
+# model variable at all -- that absence is the point of the arm, not an
+# oversight, and `AGENT_POLICY=deterministic` end-to-end with no model
+# endpoint reachable is one of this study's own verification steps.
+ARMS = {
+    "deterministic": {
+        "AGENT_POLICY": "deterministic",
+    },
+    "llm-local": {
+        "AGENT_POLICY": "llm",
         "LOCAL_MODEL": "hosted_vllm/openai/gpt-oss-20b",
         "LOCAL_API_BASE": "http://localhost:8000/v1",
         "MODEL_TEMPERATURE": "0.2",
         "MODEL_MAX_TOKENS": "8192",
     },
-    "cloud": {
+    "llm-cloud": {
+        "AGENT_POLICY": "llm",
         "LOCAL_MODEL": "openai/gpt-5.6-sol",  # litellm routes plain "gpt-5.6-sol" to OpenAI
         "LOCAL_API_BASE": "",  # empty => `"" or None` => official OpenAI endpoint
         "MODEL_TEMPERATURE": "0.2",
@@ -71,72 +125,6 @@ POST_READY_WAIT_SEC = 3.0  # grace after readiness so pub/sub matching settles
 LAUNCH_TIMEOUT_SEC = 90  # max wait for both agents to report ready
 BUDGET_WAIT_SEC = 180  # max wait for the arbiter's viability budget (~2min LLM call)
 
-
-def _tree_steps(ids):
-    rows = []
-    for i in ids:
-        rows.append(
-            f'      <MoveToTreeID name="Visit_Tree_{i}" '
-            f'action_name="follow_tree_id_waypoint" id="{i}" approach_tree="true"/>'
-        )
-        rows.append(
-            f'      <SampleLeaf name="Sample_Leaves_Tree_{i}" '
-            f'action_name="segment_leaves"/>'
-        )
-    return "\n".join(rows)
-
-
-def _row_mission(mission_text, tree_ids):
-    return (
-        '<root BTCPP_format="4" schema_location="schemas/amiga_btcpp.xsd">\n'
-        f"  <Mission>{mission_text}</Mission>\n"
-        '  <BehaviorTree ID="Sample_Leaves_Row">\n'
-        "    <Sequence>\n"
-        f"{_tree_steps(tree_ids)}\n"
-        "    </Sequence>\n"
-        "  </BehaviorTree>\n"
-        "</root>"
-    )
-
-
-# Three scenarios. Reasons are deliberately vague (observation only, no menu of
-# actions) so the model must reason. `expected` documents the pre-registered
-# hypothesis for grading; the model never sees it.
-SCENARIOS = {
-    "missing_tree": {
-        "xml": _row_mission(
-            "sample leaves from every tree in the row, trees 1 through 10", range(1, 11)
-        ),
-        "failure": {
-            "node": "Visit_Tree_5",
-            "status": "FAILURE",
-            "reason": "no tree at the mapped location for tree 5; the spot is bare soil.",
-        },
-        "expected": "continue remaining trees; do NOT abort whole mission",
-    },
-    "stuck_robot": {
-        "xml": _row_mission("sample leaves from trees 1 through 10", range(1, 11)),
-        "failure": {
-            "node": "Visit_Tree_3",
-            "status": "FAILURE",
-            "reason": "the base is not moving; wheels are sunk in a dirt pit and no "
-            "forward or backward motion is happening.",
-        },
-        "expected": "recognize futility and ABORT",
-    },
-    "sick_tree": {
-        "xml": _row_mission(
-            "sample leaves from trees 1 through 10 in the current row", range(1, 11)
-        ),
-        "failure": {
-            "node": "Visit_Tree_4",
-            "status": "DETECTION",
-            "reason": "a tree in the adjacent row (id 54) shows heavy leaf necrosis and "
-            "possible blight; it is not in the current mission.",
-        },
-        "expected": "characterize decision: ignore / append / re-prioritize",
-    },
-}
 
 # ======================================================================
 # Harness internals — no need to edit below.
@@ -300,65 +288,140 @@ class Capture(Node):
         }
 
 
+# Pre-ablation `--models` names, mapped onto today's ARMS keys. `local` and
+# `cloud` never collide with a current ARMS key, so this mapping is safe to
+# apply unconditionally to whatever `--models` was given.
+OLD_MODEL_ALIASES = {"local": "llm-local", "cloud": "llm-cloud"}
+
+# What `--models all` meant before `deterministic` existed as a third arm:
+# just the two model arms, never the deterministic one. `--arms all` (the
+# current flag) deliberately means all three -- that's a new, opt-in
+# capability this study added, not something the deprecated spelling should
+# suddenly start doing.
+OLD_MODELS_ALL = "llm-local,llm-cloud"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--models", default="local", help="comma list of MODELS keys, or 'all'"
+    arms_group = ap.add_mutually_exclusive_group()
+    arms_group.add_argument(
+        "--arms",
+        default=None,
+        help="comma list of ARMS keys, or 'all' for every arm including "
+        "'deterministic' (default: llm-local, i.e. the pre-ablation default "
+        "arm, unchanged)",
+    )
+    arms_group.add_argument(
+        "--models",
+        default=None,
+        help="[deprecated synonym for --arms] comma list of the old model "
+        "names: 'local' (-> llm-local), 'cloud' (-> llm-cloud), or 'all' "
+        "(-> llm-local,llm-cloud -- matches the historic meaning of "
+        "`--models all`, which never included a deterministic arm)",
     )
     ap.add_argument(
-        "--scenarios", default="all", help="comma list of SCENARIOS keys, or 'all'"
+        "--scenarios",
+        default="all",
+        help="comma list of SINGLE_SCENARIOS keys, or 'all'",
     )
-    ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument(
+        "--trials",
+        "--seeds",
+        "--reps",
+        dest="trials",
+        type=int,
+        default=5,
+        help="repetitions per (arm, scenario); the LLM arms need these because "
+        "they are stochastic. `seed` in each record is a bare trial index "
+        "with no effect on execution (see the module docstring) -- "
+        "'--seeds' and '--reps' [deprecated synonym] are both accepted for "
+        "this flag, neither is a hint that it seeds anything here.",
+    )
     ap.add_argument("--outdir", default="runs")
     args = ap.parse_args()
 
-    models = list(MODELS) if args.models == "all" else args.models.split(",")
+    if args.models is not None:
+        arms_spec = (
+            OLD_MODELS_ALL
+            if args.models == "all"
+            else ",".join(
+                OLD_MODEL_ALIASES.get(tok, tok) for tok in args.models.split(",")
+            )
+        )
+    elif args.arms is not None:
+        arms_spec = args.arms
+    else:
+        arms_spec = "llm-local"  # the restored, pre-ablation default
+
+    arms = list(ARMS) if arms_spec == "all" else arms_spec.split(",")
     scenarios = (
-        list(SCENARIOS) if args.scenarios == "all" else args.scenarios.split(",")
+        list(SINGLE_SCENARIOS) if args.scenarios == "all" else args.scenarios.split(",")
     )
-    for k in models:
-        assert k in MODELS, f"unknown model {k}"
+    for k in arms:
+        assert k in ARMS, f"unknown arm {k}"
     for k in scenarios:
-        assert k in SCENARIOS, f"unknown scenario {k}"
+        assert k in SINGLE_SCENARIOS, f"unknown scenario {k}"
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    sha = git_sha()
     run_dir = Path(args.outdir) / run_id
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
     results_path = run_dir / "results.jsonl"
-    print(f"[harness] run_id={run_id}  -> {results_path}")
+    print(f"[harness] run_id={run_id} git_sha={sha}  -> {results_path}")
 
     rclpy.init()
     cap = Capture()
 
-    total = len(models) * len(scenarios) * args.reps
+    # Trial index outermost, arm innermost: this used to be justified as
+    # pairing both arms' trials at the same (scenario, seed) for McNemar's
+    # test, but that pairing was never real (see the module docstring / R4
+    # in ablation-experiment-spec.md) -- the ordering is kept anyway because
+    # it is still a reasonable way to interleave arms, not because anything
+    # downstream depends on it.
+    total = len(arms) * len(scenarios) * args.trials
     done = 0
     try:
-        for model in models:
+        for seed in range(args.trials):
             for scenario in scenarios:
-                sc = SCENARIOS[scenario]
-                for rep in range(args.reps):
+                sc = SINGLE_SCENARIOS[scenario]
+                for arm in arms:
                     done += 1
-                    tag = f"{model}__{scenario}__rep{rep}"
+                    tag = f"{arm}__{scenario}__seed{seed}"
                     print(f"[harness] ({done}/{total}) {tag} launching…", flush=True)
 
                     plog = run_dir / "logs" / f"{tag}.planner.log"
                     alog = run_dir / "logs" / f"{tag}.arbiter.log"
-                    pproc, pf = launch_node(PLANNER_CMD, MODELS[model], plog)
-                    aproc, af = launch_node(ARBITER_CMD, MODELS[model], alog)
+                    pproc, pf = launch_node(PLANNER_CMD, ARMS[arm], plog)
+                    aproc, af = launch_node(ARBITER_CMD, ARMS[arm], alog)
+
+                    policy_label = (
+                        "deterministic"
+                        if arm == "deterministic"
+                        else ARMS[arm].get("LOCAL_MODEL", arm)
+                    )
 
                     record = {
                         "run_id": run_id,
+                        "git_sha": sha,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "model": model,
-                        "model_env": MODELS[model],
+                        "harness": "single",
+                        "arm": arm,
                         "scenario": scenario,
-                        "rep": rep,
+                        # A bare trial index, kept under the name "seed" only
+                        # for schema parity with fleet_harness.py's records
+                        # (see this harness's own module docstring). Nothing
+                        # in this harness reads it back; it does not seed
+                        # anything and has no effect on the trial that
+                        # follows. Do not read variance into it.
+                        "seed": seed,
+                        "seed_affects_execution": False,
+                        "policy_label": policy_label,
                         "expected": sc["expected"],
-                        "failure_reason": sc["failure"]["reason"],
+                        "error": None,
                     }
                     try:
                         if not wait_for_agents(READY_AGENTS, LAUNCH_TIMEOUT_SEC):
-                            record["decision"] = "launch_failed"
+                            record["decision"] = None
                             record["error"] = "agents did not report ready"
                         else:
                             time.sleep(POST_READY_WAIT_SEC)
@@ -368,11 +431,29 @@ def main():
                         kill_node(pproc, pf)
                         time.sleep(8.0)  # let DDS discovery forget the dead nodes
 
+                    decision = record.get("decision")
+                    record["correct"] = (
+                        sc["scorer"](decision) if decision is not None else False
+                    )
+                    # Every seam's decision this trial, even though the arms
+                    # are all-or-nothing, so post-hoc attribution costs
+                    # nothing and needs no re-run. Only the two of the five
+                    # reasoning seams this harness's own processes (the
+                    # mission planner and the arbiter) touch are observable
+                    # here -- route (seam 1) and interpret_note (seam 3) are
+                    # triage_node's and note_node's, neither of which this
+                    # harness launches.
+                    record["seams"] = {
+                        "replan": decision,
+                        "viability_budget": record.get("viability_budget"),
+                    }
+
                     with open(results_path, "a") as fh:
                         fh.write(json.dumps(record) + "\n")
                     print(
-                        f"[harness]      -> {record.get('decision')} "
-                        f"(budget={record.get('viability_budget')}, "
+                        f"[harness]      -> {decision} "
+                        f"(correct={record['correct']}, "
+                        f"budget={record.get('viability_budget')}, "
                         f"{record.get('latency_sec','-')}s)",
                         flush=True,
                     )

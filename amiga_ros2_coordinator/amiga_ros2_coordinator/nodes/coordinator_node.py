@@ -211,7 +211,41 @@ class UnavailableMission:
 
 
 class CoordinatorNode(Node):
-    """Contract-net coordination, wired to a reliability layer and a robot."""
+    """Contract-net coordination, wired to a reliability layer and a robot.
+
+    ``rng`` is the source of randomness for bid-backoff jitter (see
+    ``bidding.make_backoff`` and ``CoordinatorSession``), threaded straight
+    through to the session with no ROS in between. ``None`` -- the default --
+    reproduces today's behaviour exactly: the session falls back to the
+    module-level ``random``, which is what production wants, since a fleet
+    of real robots has no use for reproducible jitter and every reason to
+    want the ordinary, unseeded kind.
+
+    What ``rng`` is *for* is a bench or a test that needs to draw the same
+    bid-backoff numbers twice: an ablation study comparing two reasoning
+    policies wants the auction mechanics -- who wins, who suppresses, when
+    each bid goes out -- held identical across runs so that whatever differs
+    in the outcome is attributable to the policy under test and not to which
+    way a coin landed on jitter. Handing the session a seeded
+    ``random.Random`` is what makes that possible; nothing else about this
+    class or the engine underneath it changes.
+
+    It is a constructor argument and not a ROS parameter for the reason the
+    parameter system cannot be argued around: a parameter is a value --
+    a bool, a float, a string, a list of those -- declared, gotten, and
+    logged as one, and there is no such thing as a float that behaves like a
+    ``random.Random`` instance. An RNG is an object with state and identity,
+    the same kind of thing a nav port or a mission port is, and those are
+    already constructor arguments for exactly that reason. Accepting it here
+    rather than reaching into the node after construction to swap it in is
+    also what keeps this package's central property true: the ports and
+    collaborators a running state machine holds are fixed at construction,
+    and nothing mutates them once ``tick`` and ``on_message`` are being
+    called from a timer. A caller that wants deterministic jitter decides
+    that before the session exists, hands it in here, and the session never
+    has a moment where its randomness source could be something other than
+    what it was built with.
+    """
 
     def __init__(
         self,
@@ -221,6 +255,7 @@ class CoordinatorNode(Node):
         interpreter=None,
         replanner=None,
         note_interpreter=None,
+        rng=None,
         **node_kwargs,
     ):
         # node_kwargs forwards the usual rclpy options. Production passes none;
@@ -232,12 +267,43 @@ class CoordinatorNode(Node):
         # implementations of the two reasoning points, and importing them at
         # the top would read like this node depends on them permanently. It
         # depends on the protocols; these are what is behind them today.
-        from ..ports.reasoning import AlwaysReDelegate, IgnoreNotes
+        from ..ports.reasoning import (
+            AlwaysReDelegate,
+            CapabilityAwareInterpreter,
+            IgnoreNotes,
+        )
 
         self._declare_parameters()
         node_id = int(reliability.node_id)
         params = self._validated_params()
         capabilities = self._validated_capabilities()
+
+        # The ablation switch. Read once, here, so that everything downstream
+        # -- which default interpreter is built, whether a triage client and a
+        # note client are constructed at all -- is a consequence of the same
+        # one decision rather than three parameters that could drift apart.
+        # An explicit interpreter or note_interpreter argument still wins
+        # below: a caller that constructed one already made this choice more
+        # specifically than a string can, which is what keeps the acceptance
+        # tests' scripted stubs unaffected by this parameter's default.
+        self._reasoning_policy = str(self.get_parameter("reasoning_policy").value)
+        if self._reasoning_policy not in ("llm", "deterministic"):
+            raise ValueError(
+                f"reasoning_policy={self._reasoning_policy!r} is not 'llm' or "
+                "'deterministic'"
+            )
+        if self._reasoning_policy == "deterministic":
+            default_interpreter = CapabilityAwareInterpreter()
+        else:
+            default_interpreter = AlwaysReDelegate()
+        # Logged only for a non-default policy, so a default ("llm") run's
+        # startup output is unchanged from before this parameter existed --
+        # every demo and prior experiment starts this node with no
+        # reasoning_policy override and must see exactly the same log lines.
+        # A study run that opts into "deterministic" still gets the
+        # unambiguous announcement this line exists for.
+        if self._reasoning_policy != "llm":
+            self.get_logger().info(f"reasoning_policy={self._reasoning_policy}")
 
         self._preemption = TopicPreemption(self)
         self._reliability = reliability
@@ -254,7 +320,7 @@ class CoordinatorNode(Node):
                 if mission is not None
                 else UnavailableMission(self.get_logger())
             ),
-            interpreter=interpreter if interpreter is not None else AlwaysReDelegate(),
+            interpreter=interpreter if interpreter is not None else default_interpreter,
             replanner=(
                 replanner if replanner is not None else self._default_replanner()
             ),
@@ -262,6 +328,7 @@ class CoordinatorNode(Node):
             preemption=self._preemption,
             params=params,
             clock=self._now,
+            rng=rng,
             on_event=self._log_event,
             note_interpreter=(
                 note_interpreter if note_interpreter is not None else IgnoreNotes()
@@ -286,6 +353,12 @@ class CoordinatorNode(Node):
             Bool, "~/preempt_ack", self._on_preempt_ack, 10
         )
 
+        # Both clients are gated on reasoning_policy == "llm" first: the
+        # deterministic arm must never construct either, not merely decline to
+        # use them, so that a run under that policy carries zero dependency on
+        # amiga_interfaces or a reachable agent. use_triage_agent and
+        # use_note_agent remain meaningful only inside the "llm" policy, for
+        # bench runs of that arm with no model endpoint.
         self._triage = (
             optional_client(
                 self,
@@ -293,7 +366,8 @@ class CoordinatorNode(Node):
                 timeout_sec=float(self.get_parameter("triage_timeout_sec").value),
                 callback_group=self._blocking_group,
             )
-            if bool(self.get_parameter("use_triage_agent").value)
+            if self._reasoning_policy == "llm"
+            and bool(self.get_parameter("use_triage_agent").value)
             else None
         )
         self._note_agent = (
@@ -303,7 +377,8 @@ class CoordinatorNode(Node):
                 timeout_sec=float(self.get_parameter("note_timeout_sec").value),
                 callback_group=self._blocking_group,
             )
-            if bool(self.get_parameter("use_note_agent").value)
+            if self._reasoning_policy == "llm"
+            and bool(self.get_parameter("use_note_agent").value)
             else None
         )
         # Warned rather than refused, because this is a relationship between a
@@ -577,12 +652,35 @@ class CoordinatorNode(Node):
             ),
         )
         self.declare_parameter(
+            "reasoning_policy",
+            "llm",
+            _describe(
+                "Which implementation answers interpret_anomaly: 'llm' is "
+                "today's behaviour, unchanged -- the triage agent when "
+                "amiga_interfaces is built, AlwaysReDelegate when it is not. "
+                "'deterministic' switches to CapabilityAwareInterpreter and "
+                "IgnoreNotes and never constructs a triage or note client at "
+                "all, regardless of use_triage_agent or use_note_agent. This "
+                "is the one parameter an ablation study flips between its two "
+                "arms -- everything else about the coordinator, the auction, "
+                "the backoff, the registry, stays identical on either side of "
+                "it, which is what makes a comparison of the two runs a "
+                "comparison of the reasoning layer and nothing else. An "
+                "interpreter or note_interpreter passed directly to "
+                "CoordinatorNode() wins over this parameter either way, "
+                "because a caller that constructed one already made this "
+                "decision more specifically than a string can."
+            ),
+        )
+        self.declare_parameter(
             "use_triage_agent",
             True,
             _describe(
                 "Ask the triage agent what to do about an anomaly. False falls "
                 "back to the local stub interpreter, which is for bench runs "
-                "with no model endpoint -- it is not a policy."
+                "with no model endpoint -- it is not a policy. Only consulted "
+                "when reasoning_policy is 'llm'; the 'deterministic' policy "
+                "never looks at this parameter."
             ),
         )
         self.declare_parameter(
@@ -604,7 +702,10 @@ class CoordinatorNode(Node):
             _describe(
                 "Ask the note agent what another robot's note means for our "
                 "bid. False falls back to the injected interpreter, which "
-                "defaults to recording notes and revising nothing."
+                "defaults to recording notes and revising nothing. Only "
+                "consulted when reasoning_policy is 'llm'; the 'deterministic' "
+                "policy never looks at this parameter and never constructs a "
+                "note client."
             ),
         )
         self.declare_parameter(

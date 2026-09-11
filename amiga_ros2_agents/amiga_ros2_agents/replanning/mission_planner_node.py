@@ -36,7 +36,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from ..mission import mission_tasks, ontology, orchard, xsd
-from ..runtime import llm, prompts, spin
+from ..runtime import llm, policy, prompts, spin
 from ..runtime.status import StatusPublisher
 
 # ---------------------------------------------------------------------------
@@ -920,21 +920,46 @@ class MissionPlannerNode(Node):
             **fields,
         )
 
-        self.get_logger().info(
-            f"  Calling model ({llm.MODEL}) — "
-            f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
-            f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
-            f"transferred_targets={sorted(str(t) for t in transferred)}"
-        )
-
-        # 7. Call LLM
-        try:
-            edited_xml = llm.complete(
-                self.system_prompt, prompt, max_tokens=PLANNER_MAX_TOKENS
+        # Default (llm) arm: byte-identical to the pre-ablation log line, since
+        # every demo and prior experiment greps/reads this exact wording.
+        # Deterministic arm: not "calling a model" at all, so it gets its own
+        # honest wording via policy.label() instead of reusing the llm phrasing.
+        if policy.deterministic():
+            self.get_logger().info(
+                f"  Deciding replan ({policy.label()}) — "
+                f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
+                f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
+                f"transferred_targets={sorted(str(t) for t in transferred)}"
             )
-        except Exception as exc:
-            self.get_logger().error(f"  LLM call failed: {exc}")
-            return
+        else:
+            self.get_logger().info(
+                f"  Calling model ({llm.MODEL}) — "
+                f"world_state={len(world_state)} frames, logs={len(log_context)} entries, "
+                f"completed_trees={sorted(completed)}, pruned={len(completed)}, "
+                f"transferred_targets={sorted(str(t) for t in transferred)}"
+            )
+
+        # 7. Call LLM, or its deterministic replacement. The prompt built
+        # above is unused in the deterministic arm -- see runtime/policy.py's
+        # module docstring for why an ablation policy reads only structured
+        # state -- but it costs a template render, not a model call, so
+        # leaving it in place here is what keeps this branch to a
+        # substitution rather than a second copy of steps 1-6.
+        if policy.deterministic():
+            edited_xml = policy.replan(
+                pruned_xml=pruned_xml,
+                failure_node=failure_node,
+                mission_tasks=mission_tasks,
+                ontology=ontology,
+            )
+        else:
+            try:
+                edited_xml = llm.complete(
+                    self.system_prompt, prompt, max_tokens=PLANNER_MAX_TOKENS
+                )
+            except Exception as exc:
+                self.get_logger().error(f"  LLM call failed: {exc}")
+                return
 
         edited_xml = llm.strip_code_fence(edited_xml)
 

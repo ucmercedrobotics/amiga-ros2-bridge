@@ -52,7 +52,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
 from ..mission import mission_tasks
-from ..runtime import llm, prompts, spin
+from ..runtime import llm, policy, prompts, spin
 from ..runtime.status import StatusPublisher
 
 #: The closed set, restated here as well as in the coordinator's schema.py for
@@ -69,7 +69,7 @@ class NoteNode(Node):
         super().__init__("note_agent")
         self._lock = Lock()
         self._status = {
-            "model": llm.MODEL,
+            "model": policy.label(),
             "notes_read": 0,
             "refused": 0,
             "last_revision": None,
@@ -97,7 +97,7 @@ class NoteNode(Node):
         self.status = StatusPublisher(self)
         self.status.publish(self.get_status())
         self.get_logger().info(
-            f"NoteNode started — model={llm.MODEL}, serving "
+            f"NoteNode started — model={policy.label()}, serving "
             f"/coordination/interpret_note"
         )
 
@@ -112,27 +112,33 @@ class NoteNode(Node):
             self._status["notes_read"] += 1
 
         try:
-            user_prompt = prompts.render(
-                "note/user.j2",
-                note_text=request.note_text or "(empty)",
-                announcer_id=int(request.announcer_id),
-                task_id=int(request.task_id),
-                # Element names, not a mask -- the same words the mission XML
-                # is written in, so the model is not asked to decode a number.
-                required_actions=", ".join(
-                    mission_tasks.capability_names(int(request.required_capabilities))
+            if policy.deterministic():
+                decision = policy.interpret_note()
+            else:
+                user_prompt = prompts.render(
+                    "note/user.j2",
+                    note_text=request.note_text or "(empty)",
+                    announcer_id=int(request.announcer_id),
+                    task_id=int(request.task_id),
+                    # Element names, not a mask -- the same words the mission
+                    # XML is written in, so the model is not asked to decode a
+                    # number.
+                    required_actions=", ".join(
+                        mission_tasks.capability_names(
+                            int(request.required_capabilities)
+                        )
+                    )
+                    or "(not stated)",
+                    where=self._where(request),
+                    priority=int(request.priority),
+                    bid_known=not bool(request.our_bid_unknown),
+                    our_cost=int(request.our_cost),
+                    our_eta_s=int(request.our_eta_s),
+                    our_feasible=bool(request.our_feasible),
+                    cost_max=COST_MAX,
                 )
-                or "(not stated)",
-                where=self._where(request),
-                priority=int(request.priority),
-                bid_known=not bool(request.our_bid_unknown),
-                our_cost=int(request.our_cost),
-                our_eta_s=int(request.our_eta_s),
-                our_feasible=bool(request.our_feasible),
-                cost_max=COST_MAX,
-            )
-            reply = llm.complete(self.system_prompt, user_prompt)
-            decision = self._parse_revision(reply)
+                reply = llm.complete(self.system_prompt, user_prompt)
+                decision = self._parse_revision(reply)
         except Exception as exc:  # noqa: BLE001 - a model, a parser, a timeout
             self.get_logger().error(f"note interpretation failed: {exc}")
             with self._lock:
@@ -150,7 +156,7 @@ class NoteNode(Node):
         response.cost_delta = decision["cost_delta"]
         response.reason = decision["reason"]
         response.rationale = decision["rationale"]
-        response.model = llm.MODEL
+        response.model = policy.label()
 
         with self._lock:
             self._status["last_revision"] = decision["revision"]
